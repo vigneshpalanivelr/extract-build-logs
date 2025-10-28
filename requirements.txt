@@ -1,8 +1,8 @@
 # GitLab Pipeline Log Extraction System - Python Dependencies
 
 # Web Framework
-Flask==3.0.0
-Werkzeug==3.0.1
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
 
 # HTTP Client for API calls
 requests==2.31.0
@@ -13,6 +13,7 @@ python-dotenv==1.0.0
 # Testing (optional but recommended)
 pytest==7.4.3
 pytest-cov==4.1.0
+httpx==0.26.0  # For testing FastAPI async endpoints
 
 # Code quality tools (optional)
 # Uncomment if you want to use these tools

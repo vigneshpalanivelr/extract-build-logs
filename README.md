@@ -38,7 +38,7 @@ graph TB
     end
 
     subgraph "Webhook Server (Port 8000)"
-        WH[Webhook Listener<br/>Flask Server]
+        WH[Webhook Listener<br/>FastAPI Server]
         VAL[Webhook Validator<br/>Secret Token Check]
         PARSE[Pipeline Extractor<br/>Event Parser]
     end
@@ -123,7 +123,8 @@ sequenceDiagram
 
 ## ✨ Features
 
-- **Webhook Server**: Flask-based server listening on configurable port (default: 8000)
+- **Modern Async Server**: FastAPI-based async server with automatic API documentation
+- **Interactive API Docs**: Automatic Swagger UI and ReDoc documentation at `/docs` and `/redoc`
 - **Event Processing**: Identifies and processes different pipeline types (main, child, merge request)
 - **Smart Filtering**: Only processes completed pipelines (success/failed)
 - **Log Extraction**: Fetches logs for all jobs in a pipeline via GitLab API
@@ -133,8 +134,9 @@ sequenceDiagram
   - Comprehensive error logging
 - **Structured Storage**: Organized directory structure with metadata files
 - **Security**: Optional webhook secret token validation
-- **Background Processing**: Non-blocking webhook responses with async job processing
+- **Background Processing**: Non-blocking webhook responses with FastAPI BackgroundTasks
 - **Health Monitoring**: Health check and statistics endpoints
+- **High Performance**: Async/await support for better concurrency
 
 ## 📁 Project Structure
 
@@ -143,7 +145,7 @@ extract-build-logs/
 │
 ├── src/                          # Main application code
 │   ├── __init__.py              # Package initialization
-│   ├── webhook_listener.py     # Flask server and main entry point
+│   ├── webhook_listener.py     # FastAPI server and main entry point
 │   ├── pipeline_extractor.py   # Pipeline event parsing and analysis
 │   ├── log_fetcher.py           # GitLab API client for log retrieval
 │   ├── storage_manager.py       # File system storage management
@@ -230,7 +232,7 @@ graph LR
 
 | File | Purpose | Key Responsibilities |
 |------|---------|---------------------|
-| `src/webhook_listener.py` | Main server entry point | - Flask web server<br>- Webhook endpoint handling<br>- Background job processing<br>- Health & stats endpoints |
+| `src/webhook_listener.py` | Main server entry point | - FastAPI async web server<br>- Webhook endpoint handling<br>- Background task processing<br>- Health & stats endpoints |
 | `src/pipeline_extractor.py` | Event parsing | - Parse webhook payloads<br>- Identify pipeline types<br>- Filter jobs to process<br>- Generate summaries |
 | `src/log_fetcher.py` | GitLab API client | - Fetch job logs<br>- Retrieve job/pipeline metadata<br>- Handle API authentication<br>- Manage API rate limits |
 | `src/storage_manager.py` | File system storage | - Create directory structures<br>- Save log files<br>- Manage metadata<br>- Storage statistics |
@@ -261,11 +263,11 @@ def init_app():
     Data Flow: Environment → ConfigLoader → Component Initialization
     """
 
-def webhook_handler():
+async def webhook_handler():
     """
     Process incoming webhook POST requests.
 
-    Input: Flask request with GitLab webhook payload
+    Input: FastAPI Request with GitLab webhook payload
     Output: JSON response (200/401/400/500)
 
     Data Flow:
@@ -655,11 +657,14 @@ See [config/webhook_setup.md](config/webhook_setup.md) for detailed instructions
 ### Start the Server
 
 ```bash
-# Basic start
+# Method 1: Using the main script (recommended)
 python src/webhook_listener.py
 
-# Or with python-dotenv
-python -m src.webhook_listener
+# Method 2: Using uvicorn directly (more control)
+uvicorn src.webhook_listener:app --host 0.0.0.0 --port 8000
+
+# Method 3: With auto-reload for development
+uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
 ```
 
 ### Verify Server is Running
@@ -670,6 +675,18 @@ curl http://localhost:8000/health
 
 # Expected response:
 # {"status":"healthy","service":"gitlab-log-extractor","version":"1.0.0"}
+```
+
+### Access API Documentation
+
+FastAPI automatically generates interactive API documentation:
+
+```bash
+# Swagger UI (interactive)
+http://localhost:8000/docs
+
+# ReDoc (alternative documentation)
+http://localhost:8000/redoc
 ```
 
 ### Monitor Logs

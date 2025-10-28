@@ -1,7 +1,7 @@
 """
 Webhook Listener Module
 
-This is the main application entry point. It runs a Flask web server that listens
+This is the main application entry point. It runs a FastAPI web server that listens
 for GitLab webhook events, processes them, fetches logs, and stores them.
 
 Data Flow:
@@ -9,7 +9,8 @@ Data Flow:
     PipelineExtractor → LogFetcher → StorageManager → Disk Storage
 
 Module Dependencies:
-    - flask: Web server framework
+    - fastapi: Web server framework
+    - uvicorn: ASGI server
     - logging: Application logging
     - config_loader: Configuration management
     - pipeline_extractor: Event parsing
@@ -18,19 +19,19 @@ Module Dependencies:
     - error_handler: Error handling and retries
 
 Server Architecture:
-    - Flask application listening on configured port (default: 8000)
+    - FastAPI application listening on configured port (default: 8000)
     - Single webhook endpoint: POST /webhook
     - Optional webhook secret validation
-    - Async processing support (optional)
+    - Background task processing
 """
 
 import logging
 import sys
 import hmac
-import hashlib
 from typing import Dict, Any, Optional
-from flask import Flask, request, jsonify
-import threading
+from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException
+from fastapi.responses import JSONResponse
+import uvicorn
 
 from config_loader import ConfigLoader, Config
 from pipeline_extractor import PipelineExtractor
@@ -50,8 +51,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Initialize Flask app
-app = Flask(__name__)
+# Initialize FastAPI app
+app = FastAPI(
+    title="GitLab Pipeline Log Extractor",
+    description="Webhook server for extracting GitLab pipeline logs",
+    version="1.0.0"
+)
 
 # Global configuration and components
 config: Optional[Config] = None
@@ -130,8 +135,8 @@ def validate_webhook_secret(payload: bytes, signature: Optional[str]) -> bool:
     return is_valid
 
 
-@app.route('/health', methods=['GET'])
-def health_check():
+@app.get('/health')
+async def health_check():
     """
     Health check endpoint.
 
@@ -145,15 +150,20 @@ def health_check():
             "version": "1.0.0"
         }
     """
-    return jsonify({
+    return {
         "status": "healthy",
         "service": "gitlab-log-extractor",
         "version": "1.0.0"
-    }), 200
+    }
 
 
-@app.route('/webhook', methods=['POST'])
-def webhook_handler():
+@app.post('/webhook')
+async def webhook_handler(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_gitlab_token: Optional[str] = Header(None, alias="X-Gitlab-Token"),
+    x_gitlab_event: Optional[str] = Header(None, alias="X-Gitlab-Event")
+):
     """
     Main webhook endpoint for receiving GitLab events.
 
@@ -161,7 +171,7 @@ def webhook_handler():
     1. Validates the webhook signature (if configured)
     2. Parses the pipeline event
     3. Determines if logs should be fetched
-    4. Fetches and stores logs (optionally in background)
+    4. Fetches and stores logs (in background)
 
     Request Headers:
         - X-Gitlab-Token: Webhook secret token
@@ -185,41 +195,43 @@ def webhook_handler():
             "project_id": 123
         }
     """
-    logger.info(f"Received webhook request from {request.remote_addr}")
+    client_host = request.client.host if request.client else "unknown"
+    logger.info(f"Received webhook request from {client_host}")
+
+    # Get request body
+    body = await request.body()
 
     # Validate webhook secret
-    signature = request.headers.get('X-Gitlab-Token')
-    if not validate_webhook_secret(request.data, signature):
+    if not validate_webhook_secret(body, x_gitlab_token):
         logger.warning("Webhook authentication failed")
-        return jsonify({
-            "status": "error",
-            "message": "Authentication failed"
-        }), 401
+        raise HTTPException(
+            status_code=401,
+            detail={"status": "error", "message": "Authentication failed"}
+        )
 
     # Check event type
-    event_type = request.headers.get('X-Gitlab-Event')
-    if event_type != 'Pipeline Hook':
-        logger.info(f"Ignoring non-pipeline event: {event_type}")
-        return jsonify({
+    if x_gitlab_event != 'Pipeline Hook':
+        logger.info(f"Ignoring non-pipeline event: {x_gitlab_event}")
+        return {
             "status": "ignored",
-            "message": f"Event type {event_type} is not processed"
-        }), 200
+            "message": f"Event type {x_gitlab_event} is not processed"
+        }
 
     # Parse JSON payload
     try:
-        payload = request.get_json()
+        payload = await request.json()
         if not payload:
             logger.error("Empty or invalid JSON payload")
-            return jsonify({
-                "status": "error",
-                "message": "Invalid JSON payload"
-            }), 400
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Invalid JSON payload"}
+            )
     except Exception as e:
         logger.error(f"Failed to parse JSON payload: {e}")
-        return jsonify({
-            "status": "error",
-            "message": "Failed to parse JSON"
-        }), 400
+        raise HTTPException(
+            status_code=400,
+            detail={"status": "error", "message": "Failed to parse JSON"}
+        )
 
     # Extract pipeline information
     try:
@@ -233,36 +245,33 @@ def webhook_handler():
 
         # Check if pipeline should be processed
         if not pipeline_extractor.should_process_pipeline(pipeline_info):
-            return jsonify({
+            return {
                 "status": "skipped",
                 "message": "Pipeline not ready for processing",
                 "pipeline_id": pipeline_info['pipeline_id'],
                 "status_reason": pipeline_info['status']
-            }), 200
+            }
 
-        # Process pipeline (in background thread to avoid blocking webhook response)
-        thread = threading.Thread(
-            target=process_pipeline_event,
-            args=(pipeline_info,),
-            daemon=True
-        )
-        thread.start()
+        # Process pipeline in background to avoid blocking webhook response
+        background_tasks.add_task(process_pipeline_event, pipeline_info)
 
         logger.info(f"Pipeline {pipeline_info['pipeline_id']} queued for processing")
 
-        return jsonify({
+        return {
             "status": "success",
             "message": "Pipeline logs queued for extraction",
             "pipeline_id": pipeline_info['pipeline_id'],
             "project_id": pipeline_info['project_id']
-        }), 200
+        }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to process webhook: {e}", exc_info=True)
-        return jsonify({
-            "status": "error",
-            "message": f"Processing failed: {str(e)}"
-        }), 500
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": f"Processing failed: {str(e)}"}
+        )
 
 
 def process_pipeline_event(pipeline_info: Dict[str, Any]):
@@ -356,8 +365,8 @@ def process_pipeline_event(pipeline_info: Dict[str, Any]):
         logger.error(f"Unexpected error processing pipeline {pipeline_id}: {e}", exc_info=True)
 
 
-@app.route('/stats', methods=['GET'])
-def stats():
+@app.get('/stats')
+async def stats():
     """
     Get storage statistics.
 
@@ -374,48 +383,65 @@ def stats():
     """
     try:
         storage_stats = storage_manager.get_storage_stats()
-        return jsonify(storage_stats), 200
+        return storage_stats
     except Exception as e:
         logger.error(f"Failed to get storage stats: {e}")
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": str(e)}
+        )
+
+
+@app.on_event("startup")
+async def startup_event():
+    """
+    FastAPI startup event handler.
+
+    Initializes application components when the server starts.
+    """
+    init_app()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """
+    FastAPI shutdown event handler.
+
+    Performs cleanup when the server stops.
+    """
+    if log_fetcher:
+        log_fetcher.close()
+    logger.info("Application shutdown complete")
 
 
 def main():
     """
     Main entry point for the application.
 
-    Initializes the application and starts the Flask server.
+    Initializes the application and starts the FastAPI server with uvicorn.
     """
     logger.info("=" * 60)
     logger.info("GitLab Pipeline Log Extraction System")
     logger.info("=" * 60)
 
-    # Initialize application
+    # Initialize application (will also be called by startup event)
     init_app()
 
-    # Start Flask server
+    # Start FastAPI server with uvicorn
     logger.info(f"Starting webhook server on port {config.webhook_port}...")
     logger.info("Press Ctrl+C to stop")
 
     try:
-        app.run(
+        uvicorn.run(
+            app,
             host='0.0.0.0',
             port=config.webhook_port,
-            debug=False,  # Set to True for development
-            threaded=True
+            log_level=config.log_level.lower()
         )
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:
         logger.error(f"Server error: {e}", exc_info=True)
-    finally:
-        # Cleanup
-        if log_fetcher:
-            log_fetcher.close()
-        logger.info("Application shutdown complete")
 
 
 if __name__ == "__main__":
