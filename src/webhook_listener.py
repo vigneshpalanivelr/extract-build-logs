@@ -29,8 +29,9 @@ import logging
 import sys
 import hmac
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse
+from datetime import datetime
+from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
+from fastapi.responses import JSONResponse, FileResponse
 import uvicorn
 
 from config_loader import ConfigLoader, Config
@@ -38,6 +39,7 @@ from pipeline_extractor import PipelineExtractor
 from log_fetcher import LogFetcher
 from storage_manager import StorageManager
 from error_handler import RetryExhaustedError
+from monitoring import PipelineMonitor, RequestStatus
 
 # Configure logging
 logging.basicConfig(
@@ -63,6 +65,7 @@ config: Optional[Config] = None
 log_fetcher: Optional[LogFetcher] = None
 storage_manager: Optional[StorageManager] = None
 pipeline_extractor: Optional[PipelineExtractor] = None
+monitor: Optional[PipelineMonitor] = None
 
 
 def init_app():
@@ -74,10 +77,11 @@ def init_app():
     - Pipeline extractor
     - Log fetcher
     - Storage manager
+    - Pipeline monitor
 
     Should be called before starting the server.
     """
-    global config, log_fetcher, storage_manager, pipeline_extractor
+    global config, log_fetcher, storage_manager, pipeline_extractor, monitor
 
     logger.info("Initializing GitLab Pipeline Log Extractor...")
 
@@ -97,6 +101,7 @@ def init_app():
         pipeline_extractor = PipelineExtractor()
         log_fetcher = LogFetcher(config)
         storage_manager = StorageManager(config.log_output_dir)
+        monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
 
         logger.info("All components initialized successfully")
 
@@ -212,6 +217,12 @@ async def webhook_handler(
     # Check event type
     if x_gitlab_event != 'Pipeline Hook':
         logger.info(f"Ignoring non-pipeline event: {x_gitlab_event}")
+        # Track ignored request
+        monitor.track_request(
+            status=RequestStatus.IGNORED,
+            event_type=x_gitlab_event,
+            client_ip=client_host
+        )
         return {
             "status": "ignored",
             "message": f"Event type {x_gitlab_event} is not processed"
@@ -245,6 +256,13 @@ async def webhook_handler(
 
         # Check if pipeline should be processed
         if not pipeline_extractor.should_process_pipeline(pipeline_info):
+            # Track skipped request
+            monitor.track_request(
+                pipeline_info=pipeline_info,
+                status=RequestStatus.SKIPPED,
+                event_type=x_gitlab_event,
+                client_ip=client_host
+            )
             return {
                 "status": "skipped",
                 "message": "Pipeline not ready for processing",
@@ -252,8 +270,16 @@ async def webhook_handler(
                 "status_reason": pipeline_info['status']
             }
 
+        # Track queued request
+        request_id = monitor.track_request(
+            pipeline_info=pipeline_info,
+            status=RequestStatus.QUEUED,
+            event_type=x_gitlab_event,
+            client_ip=client_host
+        )
+
         # Process pipeline in background to avoid blocking webhook response
-        background_tasks.add_task(process_pipeline_event, pipeline_info)
+        background_tasks.add_task(process_pipeline_event, pipeline_info, request_id)
 
         logger.info(f"Pipeline {pipeline_info['pipeline_id']} queued for processing")
 
@@ -261,7 +287,8 @@ async def webhook_handler(
             "status": "success",
             "message": "Pipeline logs queued for extraction",
             "pipeline_id": pipeline_info['pipeline_id'],
-            "project_id": pipeline_info['project_id']
+            "project_id": pipeline_info['project_id'],
+            "request_id": request_id
         }
 
     except HTTPException:
@@ -274,7 +301,7 @@ async def webhook_handler(
         )
 
 
-def process_pipeline_event(pipeline_info: Dict[str, Any]):
+def process_pipeline_event(pipeline_info: Dict[str, Any], request_id: int):
     """
     Process a pipeline event: fetch and store logs.
 
@@ -282,20 +309,28 @@ def process_pipeline_event(pipeline_info: Dict[str, Any]):
     1. Fetches all jobs for the pipeline
     2. Retrieves logs for each job
     3. Stores logs with metadata
+    4. Updates monitoring status
 
-    Runs in a background thread to avoid blocking webhook responses.
+    Runs in a background task to avoid blocking webhook responses.
 
     Args:
         pipeline_info (Dict[str, Any]): Extracted pipeline information
+        request_id (int): Monitoring request ID for tracking
 
     Error Handling:
         - Logs errors but continues processing remaining jobs
         - Uses retry logic for transient failures
+        - Updates monitoring status on completion/failure
     """
     pipeline_id = pipeline_info['pipeline_id']
     project_id = pipeline_info['project_id']
 
-    logger.info(f"Starting log extraction for pipeline {pipeline_id}")
+    logger.info(f"Starting log extraction for pipeline {pipeline_id} (request #{request_id})")
+
+    start_time = datetime.utcnow()
+
+    # Update status to processing
+    monitor.update_request(request_id, RequestStatus.PROCESSING)
 
     try:
         # Save pipeline metadata
@@ -359,10 +394,38 @@ def process_pipeline_event(pipeline_info: Dict[str, Any]):
         summary = pipeline_extractor.get_pipeline_summary(pipeline_info)
         logger.info(f"Pipeline summary:\n{summary}")
 
+        # Update monitoring with success
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        monitor.update_request(
+            request_id=request_id,
+            status=RequestStatus.COMPLETED,
+            processing_time=processing_time,
+            success_count=success_count,
+            error_count=error_count
+        )
+
     except RetryExhaustedError as e:
-        logger.error(f"Failed to process pipeline {pipeline_id} after retries: {e}")
+        error_msg = f"Failed to process pipeline {pipeline_id} after retries: {e}"
+        logger.error(error_msg)
+        # Update monitoring with failure
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        monitor.update_request(
+            request_id=request_id,
+            status=RequestStatus.FAILED,
+            processing_time=processing_time,
+            error_message=str(e)
+        )
     except Exception as e:
-        logger.error(f"Unexpected error processing pipeline {pipeline_id}: {e}", exc_info=True)
+        error_msg = f"Unexpected error processing pipeline {pipeline_id}: {e}"
+        logger.error(error_msg, exc_info=True)
+        # Update monitoring with failure
+        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        monitor.update_request(
+            request_id=request_id,
+            status=RequestStatus.FAILED,
+            processing_time=processing_time,
+            error_message=str(e)
+        )
 
 
 @app.get('/stats')
@@ -392,6 +455,130 @@ async def stats():
         )
 
 
+@app.get('/monitor/summary')
+async def monitor_summary(hours: int = Query(24, description="Number of hours to include")):
+    """
+    Get monitoring summary statistics.
+
+    Args:
+        hours (int): Number of hours to include in summary (default: 24)
+
+    Returns:
+        JSON response with monitoring statistics
+
+    Example Response:
+        {
+            "time_period_hours": 24,
+            "total_requests": 150,
+            "by_status": {
+                "completed": 120,
+                "failed": 10,
+                "skipped": 15,
+                "processing": 5
+            },
+            "by_type": {
+                "main": 100,
+                "child": 30,
+                "merge_request": 20
+            },
+            "success_rate": 92.3,
+            "avg_processing_time_seconds": 12.5,
+            "total_jobs_processed": 450
+        }
+    """
+    try:
+        summary = monitor.get_summary(hours=hours)
+        return summary
+    except Exception as e:
+        logger.error(f"Failed to get monitor summary: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": str(e)}
+        )
+
+
+@app.get('/monitor/recent')
+async def monitor_recent(limit: int = Query(50, description="Maximum number of requests")):
+    """
+    Get recent pipeline requests.
+
+    Args:
+        limit (int): Maximum number of requests to return (default: 50)
+
+    Returns:
+        JSON response with recent requests
+    """
+    try:
+        requests = monitor.get_recent_requests(limit=limit)
+        return {"requests": requests, "count": len(requests)}
+    except Exception as e:
+        logger.error(f"Failed to get recent requests: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": str(e)}
+        )
+
+
+@app.get('/monitor/pipeline/{pipeline_id}')
+async def monitor_pipeline(pipeline_id: int):
+    """
+    Get all requests for a specific pipeline.
+
+    Args:
+        pipeline_id (int): Pipeline ID
+
+    Returns:
+        JSON response with pipeline requests
+    """
+    try:
+        requests = monitor.get_pipeline_requests(pipeline_id)
+        return {"pipeline_id": pipeline_id, "requests": requests, "count": len(requests)}
+    except Exception as e:
+        logger.error(f"Failed to get pipeline requests: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": str(e)}
+        )
+
+
+@app.get('/monitor/export/csv')
+async def monitor_export_csv(
+    hours: Optional[int] = Query(None, description="Only export last N hours (None = all)")
+):
+    """
+    Export monitoring data to CSV file.
+
+    Args:
+        hours (Optional[int]): Only export requests from last N hours (None = all)
+
+    Returns:
+        CSV file download
+    """
+    try:
+        import tempfile
+        import os
+
+        # Create temporary CSV file
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
+        temp_file.close()
+
+        # Export to CSV
+        monitor.export_to_csv(temp_file.name, hours=hours)
+
+        # Return file
+        return FileResponse(
+            path=temp_file.name,
+            media_type='text/csv',
+            filename=f"pipeline_monitoring_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+    except Exception as e:
+        logger.error(f"Failed to export CSV: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": str(e)}
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
     """
@@ -411,6 +598,8 @@ async def shutdown_event():
     """
     if log_fetcher:
         log_fetcher.close()
+    if monitor:
+        monitor.close()
     logger.info("Application shutdown complete")
 
 

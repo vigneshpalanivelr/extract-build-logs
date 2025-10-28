@@ -13,6 +13,7 @@ A production-ready webhook server that automatically extracts and stores GitLab 
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Monitoring & Tracking](#monitoring--tracking)
 - [API Documentation](#api-documentation)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -704,6 +705,57 @@ watch -n 5 'ls -lah logs/'
 ```bash
 curl http://localhost:8000/stats
 ```
+
+## 📊 Monitoring & Tracking
+
+The system automatically tracks **every webhook request** and processing status. See [MONITORING.md](MONITORING.md) for complete documentation.
+
+### Quick Start
+
+```bash
+# View monitoring dashboard
+python monitor_dashboard.py
+
+# Show recent 100 requests
+python monitor_dashboard.py --recent 100
+
+# Export to CSV
+python monitor_dashboard.py --export pipeline_data.csv
+```
+
+### What is Tracked
+
+- ✅ Total requests received
+- ✅ Processing status (queued, processing, completed, failed, skipped)
+- ✅ Success/failure rates
+- ✅ Processing times
+- ✅ Job counts per pipeline
+- ✅ Error messages
+- ✅ Pipeline types
+
+### Monitoring API Endpoints
+
+```bash
+# Get summary statistics
+curl http://localhost:8000/monitor/summary?hours=24
+
+# Get recent requests
+curl http://localhost:8000/monitor/recent?limit=50
+
+# Get specific pipeline details
+curl http://localhost:8000/monitor/pipeline/12345
+
+# Download CSV export
+curl -O http://localhost:8000/monitor/export/csv?hours=24
+```
+
+### Database Location
+
+All monitoring data is stored in: `logs/monitoring.db`
+
+You can query it directly with SQL or use the provided CLI dashboard.
+
+**For complete documentation, examples, and SQL queries, see [MONITORING.md](MONITORING.md)**
 
 ## 📡 API Documentation
 
