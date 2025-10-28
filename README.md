@@ -6,17 +6,46 @@ A production-ready webhook server that automatically extracts and stores GitLab 
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+  - [System Architecture Diagram](#system-architecture-diagram)
+  - [Data Flow Diagram](#data-flow-diagram)
 - [Features](#features)
 - [Project Structure](#project-structure)
+  - [Directory Structure After Processing](#directory-structure-after-processing)
 - [Module Documentation](#module-documentation)
+  - [Module Connection Diagram](#module-connection-diagram)
+  - [Files & Folder Structure](#files--folder-structure)
+  - [Module Functions & Data Flow](#module-functions--data-flow)
 - [Data Flow](#data-flow)
+  - [Complete Event Processing Flow](#complete-event-processing-flow)
+  - [Data Transformations](#data-transformations)
 - [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Step-by-Step Setup](#step-by-step-setup)
 - [Configuration](#configuration)
+  - [Environment Variables](#environment-variables)
+  - [GitLab Webhook Setup](#gitlab-webhook-setup)
 - [Usage](#usage)
+  - [Start the Server](#start-the-server)
+  - [Verify Server is Running](#verify-server-is-running)
+  - [Access API Documentation](#access-api-documentation)
+  - [Monitor Logs](#monitor-logs)
+  - [View Storage Statistics](#view-storage-statistics)
 - [Monitoring & Tracking](#monitoring--tracking)
+  - [Quick Start](#quick-start-1)
+  - [What is Tracked](#what-is-tracked)
+  - [Monitoring API Endpoints](#monitoring-api-endpoints)
+  - [Database Location](#database-location)
 - [API Documentation](#api-documentation)
+  - [Webhook Events](#webhook-events)
+  - [Health & Stats Endpoints](#health--stats-endpoints)
 - [Testing](#testing)
+  - [Run All Tests](#run-all-tests)
+  - [Manual Testing](#manual-testing-1)
 - [Troubleshooting](#troubleshooting)
+  - [Common Problems](#common-problems)
+  - [Getting Help](#getting-help)
+- [Development](#development)
+- [Contributing](#contributing)
 
 ## 🎯 Overview
 
@@ -708,7 +737,7 @@ curl http://localhost:8000/stats
 
 ## 📊 Monitoring & Tracking
 
-The system automatically tracks **every webhook request** and processing status. See [MONITORING.md](MONITORING.md) for complete documentation.
+The system automatically tracks **every webhook request** and processing status. See [OPERATIONS.md](OPERATIONS.md) (Part 2: Monitoring & Tracking) for complete documentation.
 
 ### Quick Start
 
@@ -755,7 +784,7 @@ All monitoring data is stored in: `logs/monitoring.db`
 
 You can query it directly with SQL or use the provided CLI dashboard.
 
-**For complete documentation, examples, and SQL queries, see [MONITORING.md](MONITORING.md)**
+**For complete debugging, monitoring documentation, and examples, see [OPERATIONS.md](OPERATIONS.md)**
 
 ## 📡 API Documentation
 

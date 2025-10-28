@@ -2,6 +2,29 @@
 
 This guide explains how to configure GitLab webhooks to send pipeline events to your log extraction server.
 
+## Table of Contents
+
+- [Prerequisites](#prerequisites)
+- [Setup Steps](#setup-steps)
+  - [1. Navigate to Webhook Settings](#1-navigate-to-webhook-settings)
+  - [2. Configure Webhook URL](#2-configure-webhook-url)
+  - [3. Set Secret Token](#3-set-secret-token-recommended)
+  - [4. Select Trigger Events](#4-select-trigger-events)
+  - [5. Configure SSL Verification](#5-configure-ssl-verification)
+  - [6. Test the Webhook](#6-test-the-webhook)
+  - [7. Verify Event Reception](#7-verify-event-reception)
+- [Webhook Payload Example](#webhook-payload-example)
+- [Troubleshooting](#troubleshooting)
+  - [Webhook Returns 401 Unauthorized](#webhook-returns-401-unauthorized)
+  - [Webhook Returns 500 Internal Server Error](#webhook-returns-500-internal-server-error)
+  - [No Logs Are Saved](#no-logs-are-saved)
+  - [Connection Refused](#connection-refused)
+- [Security Best Practices](#security-best-practices)
+- [Testing with curl](#testing-with-curl)
+- [Next Steps](#next-steps)
+
+---
+
 ## Prerequisites
 
 - Access to GitLab project settings (Maintainer or Owner role)
