@@ -21,6 +21,10 @@ A production-ready webhook server that automatically extracts and stores GitLab 
 - [Installation](#installation)
   - [Prerequisites](#prerequisites)
   - [Step-by-Step Setup](#step-by-step-setup)
+- [Docker Deployment](#docker-deployment)
+  - [Quick Start with Docker](#quick-start-with-docker)
+  - [Docker Commands](#docker-commands)
+  - [Docker Monitoring](#docker-monitoring)
 - [Configuration](#configuration)
   - [Environment Variables](#environment-variables)
   - [GitLab Webhook Setup](#gitlab-webhook-setup)
@@ -649,6 +653,123 @@ nano .env  # or your preferred editor
 1. Go to GitLab → Profile → Access Tokens
 2. Create a new token with `api` scope
 3. Copy the token and add it to `.env`
+
+---
+
+## 🐳 Docker Deployment
+
+**Recommended for production deployments.** Docker provides isolated environment, easy deployment, and automatic restarts.
+
+### Quick Start with Docker
+
+**Prerequisites:**
+```bash
+# Check Docker is installed
+docker --version
+
+# Create .env file with your credentials
+cp .env.example .env
+nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
+```
+
+**Build and Run:**
+```bash
+# Build Docker image
+./manage-container.sh build
+
+# Start container
+./manage-container.sh start
+
+# Verify it's running
+./manage-container.sh status
+```
+
+**Your webhook is now available at:** `http://your-server:8000/webhook`
+
+### Docker Commands
+
+**Container Lifecycle:**
+```bash
+# Build/rebuild image
+./manage-container.sh build
+
+# Start container (creates if doesn't exist)
+./manage-container.sh start
+
+# Stop container
+./manage-container.sh stop
+
+# Restart container
+./manage-container.sh restart
+
+# Remove container (keeps logs)
+./manage-container.sh remove
+```
+
+**Monitoring:**
+```bash
+# View status and resource usage
+./manage-container.sh status
+
+# View live logs
+./manage-container.sh logs
+
+# View monitoring dashboard
+./manage-container.sh monitor
+
+# Export monitoring data
+./manage-container.sh export data.csv
+```
+
+**Maintenance:**
+```bash
+# Open shell in container
+./manage-container.sh shell
+
+# Test webhook endpoint
+./manage-container.sh test
+
+# View all commands
+./manage-container.sh help
+```
+
+### Docker Monitoring
+
+**Check Health:**
+```bash
+curl http://localhost:8000/health
+# {"status":"healthy","service":"gitlab-log-extractor","version":"1.0.0"}
+```
+
+**View Statistics:**
+```bash
+# Container resource usage
+./manage-container.sh status
+
+# Monitoring dashboard
+./manage-container.sh monitor --hours 24
+
+# API endpoints (same as non-Docker)
+curl http://localhost:8000/monitor/summary
+```
+
+**Data Persistence:**
+- Logs are stored in `./logs/` on the host
+- Monitoring database: `./logs/monitoring.db`
+- Configuration: `.env` file (mounted read-only)
+- **Data persists** even when container is removed
+
+**Benefits:**
+- ✅ Isolated environment
+- ✅ Automatic restart on failure
+- ✅ No Python virtual environment needed
+- ✅ Easy updates (rebuild + restart)
+- ✅ Resource limits enforced
+- ✅ Consistent across environments
+
+**For detailed Docker operations, see:** [OPERATIONS.md - Docker Operations](OPERATIONS.md#docker-operations)
+
+---
 
 ## ⚙️ Configuration
 

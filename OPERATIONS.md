@@ -16,6 +16,12 @@ Complete guide for debugging, monitoring, and operating the GitLab Pipeline Log 
   - [Method 2: Using Uvicorn Directly](#method-2-using-uvicorn-directly)
   - [Method 3: Background Process](#method-3-background-process)
   - [Method 4: Systemd Service](#method-4-using-systemd-linux-production)
+  - [Method 5: Docker Deployment](#method-5-docker-deployment-recommended-for-production)
+- [Docker Operations](#docker-operations)
+  - [Quick Start with Docker](#quick-start-with-docker)
+  - [Container Management](#container-management)
+  - [Monitoring in Docker](#monitoring-in-docker)
+  - [Troubleshooting Docker](#troubleshooting-docker)
 - [Testing](#testing)
   - [Run Unit Tests](#run-unit-tests)
   - [Test Individual Modules](#test-individual-modules)
@@ -285,6 +291,361 @@ sudo systemctl status gitlab-log-extractor
 # View logs
 sudo journalctl -u gitlab-log-extractor -f
 ```
+
+### Method 5: Docker Deployment (Recommended for Production)
+
+```bash
+# 1. Build the Docker image
+./manage-container.sh build
+
+# 2. Start the container
+./manage-container.sh start
+
+# 3. Check status
+./manage-container.sh status
+
+# 4. View logs
+./manage-container.sh logs
+
+# Container will automatically:
+# - Restart on failure
+# - Persist logs to ./logs directory
+# - Use configuration from .env file
+```
+
+**What happens behind the scenes:**
+- Container runs on port 8000
+- Logs directory is mounted as volume (persistent storage)
+- .env file is mounted read-only for configuration
+- Health checks run every 30 seconds
+- Automatic restart on failure
+
+**Benefits:**
+- Isolated environment
+- Easy deployment and rollback
+- Consistent across environments
+- No Python virtual environment needed on host
+- Resource limits enforced
+
+---
+
+## Docker Operations
+
+### Quick Start with Docker
+
+**Prerequisites:**
+```bash
+# Check Docker is installed
+docker --version
+
+# Create .env file if not exists
+cp .env.example .env
+nano .env  # Edit with your settings
+```
+
+**Build and Run:**
+```bash
+# Build image
+./manage-container.sh build
+
+# Start container
+./manage-container.sh start
+
+# Verify it's running
+./manage-container.sh status
+```
+
+**Expected Output:**
+```
+[INFO] Building Docker image: gitlab-pipeline-extractor
+[SUCCESS] Image built successfully!
+[INFO] Starting new container: gitlab-pipeline-extractor
+[SUCCESS] Container started successfully!
+[INFO] Webhook endpoint: http://localhost:8000/webhook
+[INFO] Health check: http://localhost:8000/health
+[INFO] API docs: http://localhost:8000/docs
+```
+
+### Container Management
+
+**All commands use the management script:**
+
+```bash
+# Build/Rebuild image
+./manage-container.sh build
+
+# Start container (creates if needed)
+./manage-container.sh start
+
+# Stop container
+./manage-container.sh stop
+
+# Restart container
+./manage-container.sh restart
+
+# View container status and resource usage
+./manage-container.sh status
+
+# View live logs (Ctrl+C to exit)
+./manage-container.sh logs
+
+# Open shell inside container
+./manage-container.sh shell
+
+# Remove container (keeps logs)
+./manage-container.sh remove
+
+# Remove container and image (keeps logs)
+./manage-container.sh cleanup
+
+# View help
+./manage-container.sh help
+```
+
+**Container Status Example:**
+```bash
+$ ./manage-container.sh status
+
+[INFO] Container status:
+[SUCCESS] Container is RUNNING
+
+CONTAINER ID   STATUS          PORTS
+abc123def456   Up 2 hours      0.0.0.0:8000->8000/tcp
+
+[INFO] Health status: healthy
+
+[INFO] Resource usage:
+CONTAINER                      CPU %     MEM USAGE / LIMIT     NET I/O
+gitlab-pipeline-extractor      0.50%     125MiB / 1GiB         1.5kB / 2.3kB
+```
+
+### Monitoring in Docker
+
+**View Monitoring Dashboard:**
+```bash
+# 24-hour summary (default)
+./manage-container.sh monitor
+
+# Custom time range
+./manage-container.sh monitor --hours 48
+
+# Recent requests
+./manage-container.sh monitor --recent 100
+
+# Specific pipeline
+./manage-container.sh monitor --pipeline 12345
+```
+
+**Export Monitoring Data:**
+```bash
+# Export to CSV
+./manage-container.sh export monitoring_data.csv
+
+# Or use default filename (monitoring_export.csv)
+./manage-container.sh export
+```
+
+**Access API Endpoints:**
+```bash
+# Health check
+curl http://localhost:8000/health
+
+# Monitoring summary
+curl http://localhost:8000/monitor/summary?hours=24
+
+# Recent requests
+curl http://localhost:8000/monitor/recent?limit=50
+
+# Export CSV
+curl http://localhost:8000/monitor/export/csv -o data.csv
+```
+
+**Direct Database Access:**
+```bash
+# Enter container shell
+./manage-container.sh shell
+
+# Inside container
+sqlite3 /app/logs/monitoring.db
+
+# Run queries
+SELECT COUNT(*) FROM requests;
+SELECT status, COUNT(*) FROM requests GROUP BY status;
+```
+
+### Testing in Docker
+
+**Send Test Webhook:**
+```bash
+# Send sample webhook payload
+./manage-container.sh test
+
+# Expected output:
+# [INFO] Testing webhook endpoint with sample payload...
+# {"status":"queued","message":"Pipeline event queued for processing","request_id":1}
+# [SUCCESS] Test webhook sent!
+# [INFO] Check logs with: ./manage-container.sh logs
+```
+
+**Manual Testing:**
+```bash
+# Test health endpoint
+curl http://localhost:8000/health
+
+# Test with custom payload
+curl -X POST http://localhost:8000/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Gitlab-Event: Pipeline Hook" \
+  -d @test_payload.json
+```
+
+### Troubleshooting Docker
+
+**Container won't start:**
+```bash
+# Check if .env file exists
+ls -la .env
+
+# Verify image exists
+docker images | grep gitlab-pipeline-extractor
+
+# Check Docker logs
+docker logs gitlab-pipeline-extractor
+
+# Remove and recreate
+./manage-container.sh remove
+./manage-container.sh start
+```
+
+**Port already in use:**
+```bash
+# Find process using port 8000
+sudo lsof -i :8000
+# or
+sudo netstat -tulpn | grep 8000
+
+# Kill the process
+sudo kill <PID>
+
+# Or change port in .env
+echo "WEBHOOK_PORT=8001" >> .env
+
+# Restart container
+./manage-container.sh restart
+```
+
+**Container unhealthy:**
+```bash
+# Check health status
+docker inspect --format='{{.State.Health.Status}}' gitlab-pipeline-extractor
+
+# View health check logs
+docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' gitlab-pipeline-extractor
+
+# Check application logs
+./manage-container.sh logs
+
+# Restart container
+./manage-container.sh restart
+```
+
+**Permission issues with logs directory:**
+```bash
+# Check directory permissions
+ls -ld ./logs
+
+# Fix permissions (container runs as UID 1000)
+sudo chown -R 1000:1000 ./logs
+
+# Or make it world-writable (less secure)
+chmod 777 ./logs
+
+# Restart container
+./manage-container.sh restart
+```
+
+**Logs not persisting:**
+```bash
+# Verify volume mount
+docker inspect gitlab-pipeline-extractor | grep -A 10 Mounts
+
+# Check if logs directory exists on host
+ls -la ./logs
+
+# Verify files are created
+./manage-container.sh shell
+ls -la /app/logs
+```
+
+**GitLab connection issues:**
+```bash
+# Check .env configuration
+cat .env
+
+# Test from inside container
+./manage-container.sh shell
+curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" $GITLAB_URL/api/v4/projects
+
+# Verify network connectivity
+docker exec gitlab-pipeline-extractor curl -I https://gitlab.com
+```
+
+**Update after code changes:**
+```bash
+# Rebuild image
+./manage-container.sh build
+
+# Restart with new image
+./manage-container.sh restart
+
+# Verify new version
+./manage-container.sh logs
+```
+
+**View resource usage over time:**
+```bash
+# Real-time stats
+docker stats gitlab-pipeline-extractor
+
+# Or use management script
+./manage-container.sh status
+```
+
+**Backup and restore:**
+```bash
+# Backup logs and database
+tar -czf backup_$(date +%Y%m%d).tar.gz ./logs
+
+# Restore
+tar -xzf backup_20240101.tar.gz
+
+# Restart container to use restored data
+./manage-container.sh restart
+```
+
+**Container Lifecycle:**
+```
+1. Build:   ./manage-container.sh build
+            ↓
+2. Start:   ./manage-container.sh start
+            ↓
+3. Monitor: ./manage-container.sh status / logs
+            ↓
+4. Update:  Code changes → build → restart
+            ↓
+5. Stop:    ./manage-container.sh stop (when needed)
+```
+
+**Production Checklist:**
+- [ ] .env file created with correct credentials
+- [ ] WEBHOOK_SECRET set for security
+- [ ] Logs directory has correct permissions (UID 1000)
+- [ ] Port 8000 is accessible from GitLab
+- [ ] Firewall allows incoming connections
+- [ ] Monitoring dashboard accessible
+- [ ] Backup strategy in place
+- [ ] Health checks passing
+- [ ] Container restart policy verified
 
 ---
 

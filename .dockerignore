@@ -1,0 +1,72 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Environment files
+.env
+
+# Python cache and bytecode
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+*.cover
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation (except README)
+*.md
+!README.md
+
+# Logs directory (will be mounted as volume)
+logs/
+*.log
+
+# Package management
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Temporary files
+*.tmp
+.cache/
+
+# Database files (will be in mounted volume)
+*.db
+*.sqlite
+*.sqlite3
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Container management script (not needed in image)
+manage-container.sh
+Dockerfile
+.dockerignore
