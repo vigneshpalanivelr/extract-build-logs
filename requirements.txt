@@ -1,0 +1,21 @@
+# GitLab Pipeline Log Extraction System - Python Dependencies
+
+# Web Framework
+Flask==3.0.0
+Werkzeug==3.0.1
+
+# HTTP Client for API calls
+requests==2.31.0
+
+# Environment variable management
+python-dotenv==1.0.0
+
+# Testing (optional but recommended)
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Code quality tools (optional)
+# Uncomment if you want to use these tools
+# flake8==6.1.0
+# black==23.12.1
+# mypy==1.7.1
