@@ -223,111 +223,234 @@ async def webhook_handler(
             "status": "success",
             "message": "Pipeline logs queued for extraction",
             "pipeline_id": 12345,
-            "project_id": 123
+            "project_id": 123,
+            "request_id": "a1b2c3d4"
         }
     """
+    # Generate unique request ID for tracking
+    req_id = str(uuid.uuid4())[:8]
+    set_request_id(req_id)
+
+    # Start timing
+    start_time = time.time()
+
+    # Get client info
     client_host = request.client.host if request.client else "unknown"
-    logger.info(f"Received webhook request from {client_host}")
 
-    # Get request body
-    body = await request.body()
+    # Log webhook received
+    logger.info("Webhook received", extra={
+        'event_type': x_gitlab_event or 'unknown',
+        'source_ip': client_host
+    })
 
-    # Validate webhook secret
-    if not validate_webhook_secret(body, x_gitlab_token):
-        logger.warning("Webhook authentication failed")
-        raise HTTPException(
-            status_code=401,
-            detail={"status": "error", "message": "Authentication failed"}
-        )
+    # Access log
+    access_logger.info("Webhook request", extra={
+        'source_ip': client_host,
+        'event_type': x_gitlab_event or 'unknown',
+        'path': str(request.url.path)
+    })
 
-    # Check event type
-    if x_gitlab_event != 'Pipeline Hook':
-        logger.info(f"Ignoring non-pipeline event: {x_gitlab_event}")
-        # Track ignored request
-        monitor.track_request(
-            status=RequestStatus.IGNORED,
-            event_type=x_gitlab_event,
-            client_ip=client_host
-        )
-        return {
-            "status": "ignored",
-            "message": f"Event type {x_gitlab_event} is not processed"
-        }
-
-    # Parse JSON payload
     try:
-        payload = await request.json()
-        if not payload:
-            logger.error("Empty or invalid JSON payload")
+        # Get request body
+        body = await request.body()
+        logger.debug(f"Request body size: {len(body)} bytes")
+
+        # Validate webhook secret
+        if not validate_webhook_secret(body, x_gitlab_token):
+            logger.warning("Webhook authentication failed", extra={
+                'source_ip': client_host,
+                'reason': 'invalid_token'
+            })
+            access_logger.warning("Authentication failed", extra={
+                'source_ip': client_host,
+                'event_type': x_gitlab_event or 'unknown'
+            })
             raise HTTPException(
-                status_code=400,
-                detail={"status": "error", "message": "Invalid JSON payload"}
+                status_code=401,
+                detail={"status": "error", "message": "Authentication failed"}
             )
-    except Exception as e:
-        logger.error(f"Failed to parse JSON payload: {e}")
-        raise HTTPException(
-            status_code=400,
-            detail={"status": "error", "message": "Failed to parse JSON"}
-        )
 
-    # Extract pipeline information
-    try:
-        pipeline_info = pipeline_extractor.extract_pipeline_info(payload)
+        logger.debug("Webhook authentication successful")
 
-        logger.info(
-            f"Processing pipeline {pipeline_info['pipeline_id']} "
-            f"for project {pipeline_info['project_id']} "
-            f"(status: {pipeline_info['status']}, type: {pipeline_info['pipeline_type']})"
-        )
-
-        # Check if pipeline should be processed
-        if not pipeline_extractor.should_process_pipeline(pipeline_info):
-            # Track skipped request
+        # Check event type
+        if x_gitlab_event != 'Pipeline Hook':
+            logger.info(f"Ignoring non-pipeline event", extra={
+                'event_type': x_gitlab_event,
+                'source_ip': client_host
+            })
+            # Track ignored request
             monitor.track_request(
-                pipeline_info=pipeline_info,
-                status=RequestStatus.SKIPPED,
+                status=RequestStatus.IGNORED,
                 event_type=x_gitlab_event,
                 client_ip=client_host
             )
+
+            duration_ms = int((time.time() - start_time) * 1000)
+            access_logger.info("Request ignored", extra={
+                'event_type': x_gitlab_event,
+                'source_ip': client_host,
+                'duration_ms': duration_ms
+            })
+
             return {
-                "status": "skipped",
-                "message": "Pipeline not ready for processing",
-                "pipeline_id": pipeline_info['pipeline_id'],
-                "status_reason": pipeline_info['status']
+                "status": "ignored",
+                "message": f"Event type {x_gitlab_event} is not processed",
+                "request_id": req_id
             }
 
-        # Track queued request
-        request_id = monitor.track_request(
-            pipeline_info=pipeline_info,
-            status=RequestStatus.QUEUED,
-            event_type=x_gitlab_event,
-            client_ip=client_host
-        )
+        # Parse JSON payload
+        try:
+            payload = await request.json()
+            if not payload:
+                logger.error("Empty or invalid JSON payload")
+                raise HTTPException(
+                    status_code=400,
+                    detail={"status": "error", "message": "Invalid JSON payload"}
+                )
+            logger.debug("JSON payload parsed successfully")
+        except Exception as e:
+            logger.error(f"Failed to parse JSON payload", extra={
+                'error_type': type(e).__name__,
+                'error': str(e)
+            })
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Failed to parse JSON"}
+            )
 
-        # Process pipeline in background to avoid blocking webhook response
-        background_tasks.add_task(process_pipeline_event, pipeline_info, request_id)
+        # Extract pipeline information
+        try:
+            pipeline_info = pipeline_extractor.extract_pipeline_info(payload)
 
-        logger.info(f"Pipeline {pipeline_info['pipeline_id']} queued for processing")
+            logger.info("Pipeline info extracted", extra={
+                'pipeline_id': pipeline_info['pipeline_id'],
+                'project_id': pipeline_info['project_id'],
+                'status': pipeline_info['status'],
+                'pipeline_type': pipeline_info['pipeline_type']
+            })
 
-        return {
-            "status": "success",
-            "message": "Pipeline logs queued for extraction",
-            "pipeline_id": pipeline_info['pipeline_id'],
-            "project_id": pipeline_info['project_id'],
-            "request_id": request_id
-        }
+            logger.debug("Pipeline details", extra={
+                'pipeline_id': pipeline_info['pipeline_id'],
+                'project_id': pipeline_info['project_id'],
+                'ref': pipeline_info.get('ref', 'unknown'),
+                'source': pipeline_info.get('source', 'unknown'),
+                'job_count': len(pipeline_info.get('builds', []))
+            })
+
+            # Check if pipeline should be processed
+            if not pipeline_extractor.should_process_pipeline(pipeline_info):
+                logger.info("Pipeline skipped - not ready for processing", extra={
+                    'pipeline_id': pipeline_info['pipeline_id'],
+                    'status': pipeline_info['status']
+                })
+
+                # Track skipped request
+                monitor.track_request(
+                    pipeline_info=pipeline_info,
+                    status=RequestStatus.SKIPPED,
+                    event_type=x_gitlab_event,
+                    client_ip=client_host
+                )
+
+                duration_ms = int((time.time() - start_time) * 1000)
+                access_logger.info("Pipeline skipped", extra={
+                    'pipeline_id': pipeline_info['pipeline_id'],
+                    'project_id': pipeline_info['project_id'],
+                    'status': pipeline_info['status'],
+                    'duration_ms': duration_ms
+                })
+
+                return {
+                    "status": "skipped",
+                    "message": "Pipeline not ready for processing",
+                    "pipeline_id": pipeline_info['pipeline_id'],
+                    "status_reason": pipeline_info['status'],
+                    "request_id": req_id
+                }
+
+            # Track queued request
+            db_request_id = monitor.track_request(
+                pipeline_info=pipeline_info,
+                status=RequestStatus.QUEUED,
+                event_type=x_gitlab_event,
+                client_ip=client_host
+            )
+
+            logger.info("Pipeline queued for processing", extra={
+                'pipeline_id': pipeline_info['pipeline_id'],
+                'project_id': pipeline_info['project_id'],
+                'job_count': len(pipeline_info.get('builds', []))
+            })
+
+            # Process pipeline in background to avoid blocking webhook response
+            background_tasks.add_task(process_pipeline_event, pipeline_info, db_request_id, req_id)
+
+            # Log response time
+            duration_ms = int((time.time() - start_time) * 1000)
+
+            access_logger.info("Pipeline queued", extra={
+                'pipeline_id': pipeline_info['pipeline_id'],
+                'project_id': pipeline_info['project_id'],
+                'event_type': x_gitlab_event,
+                'source_ip': client_host,
+                'duration_ms': duration_ms
+            })
+
+            perf_logger.info("Webhook processed", extra={
+                'pipeline_id': pipeline_info['pipeline_id'],
+                'duration_ms': duration_ms,
+                'operation': 'webhook_handler'
+            })
+
+            return {
+                "status": "success",
+                "message": "Pipeline logs queued for extraction",
+                "pipeline_id": pipeline_info['pipeline_id'],
+                "project_id": pipeline_info['project_id'],
+                "request_id": req_id,
+                "db_request_id": db_request_id
+            }
+
+        except Exception as e:
+            logger.error("Failed to extract pipeline info", extra={
+                'error_type': type(e).__name__,
+                'error': str(e)
+            }, exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail={"status": "error", "message": f"Failed to extract pipeline info: {str(e)}"}
+            )
 
     except HTTPException:
+        # Re-raise HTTP exceptions
+        duration_ms = int((time.time() - start_time) * 1000)
+        logger.debug(f"Request failed with HTTP exception", extra={'duration_ms': duration_ms})
         raise
     except Exception as e:
-        logger.error(f"Failed to process webhook: {e}", exc_info=True)
+        duration_ms = int((time.time() - start_time) * 1000)
+        logger.error("Failed to process webhook", extra={
+            'error_type': type(e).__name__,
+            'error': str(e),
+            'duration_ms': duration_ms
+        }, exc_info=True)
+
+        access_logger.error("Webhook processing failed", extra={
+            'source_ip': client_host,
+            'event_type': x_gitlab_event or 'unknown',
+            'duration_ms': duration_ms,
+            'error_type': type(e).__name__
+        })
+
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": f"Processing failed: {str(e)}"}
         )
+    finally:
+        # Clear request ID from context
+        clear_request_id()
 
 
-def process_pipeline_event(pipeline_info: Dict[str, Any], request_id: int):
+def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, req_id: str):
     """
     Process a pipeline event: fetch and store logs.
 
@@ -341,25 +464,39 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], request_id: int):
 
     Args:
         pipeline_info (Dict[str, Any]): Extracted pipeline information
-        request_id (int): Monitoring request ID for tracking
+        db_request_id (int): Monitoring database request ID for tracking
+        req_id (str): Request correlation ID for logging
 
     Error Handling:
         - Logs errors but continues processing remaining jobs
         - Uses retry logic for transient failures
         - Updates monitoring status on completion/failure
     """
+    # Set request ID in context for all logs in this background task
+    set_request_id(req_id)
+
     pipeline_id = pipeline_info['pipeline_id']
     project_id = pipeline_info['project_id']
 
-    logger.info(f"Starting log extraction for pipeline {pipeline_id} (request #{request_id})")
+    logger.info("Starting pipeline log extraction", extra={
+        'pipeline_id': pipeline_id,
+        'project_id': project_id,
+        'db_request_id': db_request_id
+    })
 
-    start_time = datetime.utcnow()
+    start_time = time.time()
 
     # Update status to processing
-    monitor.update_request(request_id, RequestStatus.PROCESSING)
+    monitor.update_request(db_request_id, RequestStatus.PROCESSING)
+    logger.debug("Request status updated to PROCESSING")
 
     try:
         # Save pipeline metadata
+        logger.debug("Saving pipeline metadata", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id
+        })
+
         storage_manager.save_pipeline_metadata(
             project_id=project_id,
             pipeline_id=pipeline_id,
@@ -376,18 +513,42 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], request_id: int):
                 "stages": pipeline_info['stages']
             }
         )
+        logger.debug("Pipeline metadata saved successfully")
 
         # Fetch all logs for the pipeline
+        logger.info("Fetching pipeline logs", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id
+        })
+
+        fetch_start = time.time()
         all_logs = log_fetcher.fetch_all_logs_for_pipeline(project_id, pipeline_id)
+        fetch_duration_ms = int((time.time() - fetch_start) * 1000)
+
+        job_count = len(all_logs)
+        logger.info("Pipeline logs fetched", extra={
+            'pipeline_id': pipeline_id,
+            'job_count': job_count,
+            'duration_ms': fetch_duration_ms
+        })
 
         # Save each job log
         success_count = 0
         error_count = 0
+        save_start = time.time()
 
         for job_id, job_data in all_logs.items():
             try:
                 job_details = job_data['details']
                 log_content = job_data['log']
+                log_size = len(log_content)
+
+                logger.debug("Saving job log", extra={
+                    'pipeline_id': pipeline_id,
+                    'job_id': job_id,
+                    'job_name': job_details['name'],
+                    'log_size_bytes': log_size
+                })
 
                 storage_manager.save_log(
                     project_id=project_id,
@@ -406,52 +567,115 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], request_id: int):
                     }
                 )
                 success_count += 1
+                logger.debug("Job log saved successfully", extra={
+                    'job_id': job_id,
+                    'job_name': job_details['name']
+                })
 
             except Exception as e:
-                logger.error(f"Failed to save log for job {job_id}: {e}")
                 error_count += 1
+                logger.error("Failed to save job log", extra={
+                    'pipeline_id': pipeline_id,
+                    'job_id': job_id,
+                    'error_type': type(e).__name__,
+                    'error': str(e)
+                })
 
-        logger.info(
-            f"Completed processing pipeline {pipeline_id}: "
-            f"{success_count} jobs saved, {error_count} errors"
-        )
+        save_duration_ms = int((time.time() - save_start) * 1000)
+        total_duration_ms = int((time.time() - start_time) * 1000)
+
+        logger.info("Pipeline processing completed", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id,
+            'success_count': success_count,
+            'error_count': error_count,
+            'total_jobs': job_count
+        })
 
         # Log summary
         summary = pipeline_extractor.get_pipeline_summary(pipeline_info)
-        logger.info(f"Pipeline summary:\n{summary}")
+        logger.debug(f"Pipeline summary: {summary}")
+
+        # Performance metrics
+        perf_logger.info("Pipeline processing metrics", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id,
+            'total_duration_ms': total_duration_ms,
+            'fetch_duration_ms': fetch_duration_ms,
+            'save_duration_ms': save_duration_ms,
+            'job_count': job_count,
+            'success_count': success_count,
+            'error_count': error_count,
+            'operation': 'pipeline_processing'
+        })
 
         # Update monitoring with success
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        processing_time = total_duration_ms / 1000.0
         monitor.update_request(
-            request_id=request_id,
+            request_id=db_request_id,
             status=RequestStatus.COMPLETED,
             processing_time=processing_time,
             success_count=success_count,
             error_count=error_count
         )
+        logger.debug("Monitoring status updated to COMPLETED")
 
     except RetryExhaustedError as e:
-        error_msg = f"Failed to process pipeline {pipeline_id} after retries: {e}"
-        logger.error(error_msg)
+        total_duration_ms = int((time.time() - start_time) * 1000)
+        logger.error("Pipeline processing failed after retries", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id,
+            'error_type': 'RetryExhaustedError',
+            'error': str(e),
+            'duration_ms': total_duration_ms
+        })
+
         # Update monitoring with failure
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        processing_time = total_duration_ms / 1000.0
         monitor.update_request(
-            request_id=request_id,
+            request_id=db_request_id,
             status=RequestStatus.FAILED,
             processing_time=processing_time,
             error_message=str(e)
         )
+
+        perf_logger.info("Pipeline processing failed", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id,
+            'duration_ms': total_duration_ms,
+            'error_type': 'RetryExhaustedError',
+            'operation': 'pipeline_processing'
+        })
+
     except Exception as e:
-        error_msg = f"Unexpected error processing pipeline {pipeline_id}: {e}"
-        logger.error(error_msg, exc_info=True)
+        total_duration_ms = int((time.time() - start_time) * 1000)
+        logger.error("Unexpected error processing pipeline", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id,
+            'error_type': type(e).__name__,
+            'error': str(e),
+            'duration_ms': total_duration_ms
+        }, exc_info=True)
+
         # Update monitoring with failure
-        processing_time = (datetime.utcnow() - start_time).total_seconds()
+        processing_time = total_duration_ms / 1000.0
         monitor.update_request(
-            request_id=request_id,
+            request_id=db_request_id,
             status=RequestStatus.FAILED,
             processing_time=processing_time,
             error_message=str(e)
         )
+
+        perf_logger.info("Pipeline processing failed", extra={
+            'pipeline_id': pipeline_id,
+            'project_id': project_id,
+            'duration_ms': total_duration_ms,
+            'error_type': type(e).__name__,
+            'operation': 'pipeline_processing'
+        })
+    finally:
+        # Clear request ID from context
+        clear_request_id()
 
 
 @app.get('/stats')
