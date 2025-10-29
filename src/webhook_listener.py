@@ -28,6 +28,8 @@ Server Architecture:
 import logging
 import sys
 import hmac
+import uuid
+import time
 from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
@@ -40,18 +42,20 @@ from .log_fetcher import LogFetcher
 from .storage_manager import StorageManager
 from .error_handler import RetryExhaustedError
 from .monitoring import PipelineMonitor, RequestStatus
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('webhook_server.log')
-    ]
+from .logging_config import (
+    setup_logging,
+    get_logger,
+    get_access_logger,
+    get_performance_logger,
+    set_request_id,
+    clear_request_id,
+    mask_token
 )
 
-logger = logging.getLogger(__name__)
+# Logging will be configured in init_app()
+logger = get_logger(__name__)
+access_logger = get_access_logger()
+perf_logger = get_performance_logger()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -73,6 +77,7 @@ def init_app():
     Initialize application components.
 
     This function loads configuration and initializes all required components:
+    - Logging configuration
     - Configuration loader
     - Pipeline extractor
     - Log fetcher
@@ -83,30 +88,51 @@ def init_app():
     """
     global config, log_fetcher, storage_manager, pipeline_extractor, monitor
 
-    logger.info("Initializing GitLab Pipeline Log Extractor...")
-
     try:
-        # Load configuration
+        # Load configuration first
         config = ConfigLoader.load()
         ConfigLoader.validate(config)
-        logger.info(f"Configuration loaded successfully")
-        logger.info(f"GitLab URL: {config.gitlab_url}")
-        logger.info(f"Webhook Port: {config.webhook_port}")
-        logger.info(f"Log Output Directory: {config.log_output_dir}")
 
-        # Set logging level from config
-        logging.getLogger().setLevel(config.log_level)
+        # Initialize logging with configuration
+        setup_logging(log_dir=config.log_output_dir, log_level=config.log_level)
+
+        logger.info("=" * 70)
+        logger.info("GitLab Pipeline Log Extractor - Initializing")
+        logger.info("=" * 70)
+
+        logger.info("Configuration loaded successfully", extra={
+            'operation': 'config_load'
+        })
+        logger.debug(f"GitLab URL: {config.gitlab_url}")
+        logger.debug(f"Webhook Port: {config.webhook_port}")
+        logger.debug(f"Log Output Directory: {config.log_output_dir}")
+        logger.debug(f"Log Level: {config.log_level}")
+        logger.debug(f"Retry Attempts: {config.retry_attempts}")
+
+        # Mask token in logs
+        masked_token = mask_token(config.gitlab_token)
+        logger.debug(f"GitLab Token: {masked_token}")
 
         # Initialize components
+        logger.info("Initializing components...")
+
         pipeline_extractor = PipelineExtractor()
+        logger.debug("Pipeline extractor initialized")
+
         log_fetcher = LogFetcher(config)
+        logger.debug("Log fetcher initialized")
+
         storage_manager = StorageManager(config.log_output_dir)
+        logger.debug("Storage manager initialized")
+
         monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
+        logger.debug("Pipeline monitor initialized")
 
         logger.info("All components initialized successfully")
+        logger.info("=" * 70)
 
     except Exception as e:
-        logger.error(f"Failed to initialize application: {e}")
+        logger.critical(f"Failed to initialize application: {e}", exc_info=True)
         sys.exit(1)
 
 
