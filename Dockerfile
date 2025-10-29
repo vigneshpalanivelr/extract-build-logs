@@ -21,6 +21,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY src/ ./src/
 COPY monitor_dashboard.py ./
+COPY docker-entrypoint.sh ./
+
+# Make entrypoint script executable
+RUN chmod +x docker-entrypoint.sh
 
 # Create non-root user for security
 RUN groupadd -r appuser && \
@@ -34,12 +38,13 @@ RUN mkdir -p /app/logs && \
 # Switch to non-root user
 USER appuser
 
-# Expose webhook port
+# Expose webhook port (default 8000, can be changed via WEBHOOK_PORT env var)
 EXPOSE 8000
 
-# Health check
+# Health check (uses default port 8000, override via WEBHOOK_PORT if needed)
+# Note: Docker HEALTHCHECK doesn't support env vars, so using shell wrapper
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:${WEBHOOK_PORT:-8000}/health || exit 1
 
-# Start the FastAPI server
-CMD ["uvicorn", "src.webhook_listener:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start the FastAPI server with dynamic port from environment
+CMD ["./docker-entrypoint.sh"]

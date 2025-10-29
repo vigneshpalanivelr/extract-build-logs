@@ -8,9 +8,23 @@ set -e
 # Configuration
 IMAGE_NAME="gitlab-pipeline-extractor"
 CONTAINER_NAME="gitlab-pipeline-extractor"
-PORT="8000"
 LOGS_DIR="./logs"
 ENV_FILE=".env"
+
+# Function to get port from .env file
+get_port() {
+    if [ -f "$ENV_FILE" ]; then
+        # Extract WEBHOOK_PORT from .env, default to 8000 if not found
+        local port=$(grep -E "^WEBHOOK_PORT=" "$ENV_FILE" | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | tr -d "'")
+        if [ -n "$port" ]; then
+            echo "$port"
+        else
+            echo "8000"
+        fi
+    else
+        echo "8000"
+    fi
+}
 
 # Colors for output
 RED='\033[0;31m'
@@ -86,10 +100,14 @@ start() {
     # Create logs directory if it doesn't exist
     mkdir -p $LOGS_DIR
 
+    # Get port from .env file
+    local PORT=$(get_port)
+
     print_info "Starting new container: $CONTAINER_NAME"
+    print_info "Using port: $PORT (from $ENV_FILE)"
     docker run -d \
         --name $CONTAINER_NAME \
-        -p $PORT:8000 \
+        -p $PORT:$PORT \
         -v "$(pwd)/$LOGS_DIR:/app/logs" \
         -v "$(pwd)/$ENV_FILE:/app/.env:ro" \
         --restart unless-stopped \
@@ -241,6 +259,7 @@ export_data() {
         return 1
     fi
 
+    local PORT=$(get_port)
     EXPORT_FILE="${1:-monitoring_export.csv}"
     print_info "Exporting monitoring data to: $EXPORT_FILE"
 
@@ -256,7 +275,9 @@ test_webhook() {
         return 1
     fi
 
+    local PORT=$(get_port)
     print_info "Testing webhook endpoint with sample payload..."
+    print_info "Target: http://localhost:$PORT/webhook"
 
     # Sample GitLab pipeline webhook payload
     SAMPLE_PAYLOAD='{
@@ -345,11 +366,13 @@ Examples:
     ./manage-container.sh restart
     ./manage-container.sh cleanup
 
-Endpoints:
-    Webhook:    http://localhost:$PORT/webhook
-    Health:     http://localhost:$PORT/health
-    API Docs:   http://localhost:$PORT/docs
-    Monitoring: http://localhost:$PORT/monitor/summary
+Endpoints (port configured in .env):
+    Webhook:    http://localhost:<WEBHOOK_PORT>/webhook
+    Health:     http://localhost:<WEBHOOK_PORT>/health
+    API Docs:   http://localhost:<WEBHOOK_PORT>/docs
+    Monitoring: http://localhost:<WEBHOOK_PORT>/monitor/summary
+
+    Note: Port is read from WEBHOOK_PORT in .env file (default: 8000)
 
 Data Persistence:
     Logs and monitoring database are stored in: $LOGS_DIR/
