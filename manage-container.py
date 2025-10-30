@@ -36,6 +36,7 @@ import sys
 import os
 import json
 import argparse
+import socket
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import subprocess
@@ -93,6 +94,26 @@ def mask_value(value: Optional[str], show_chars: int = 8) -> str:
     if len(value) <= show_chars:
         return "****"
     return f"{value[:show_chars]}****"
+
+
+def get_host_ip() -> str:
+    """
+    Get the local IP address of the host machine.
+
+    Returns:
+        IP address as string, or '127.0.0.1' if unable to determine
+    """
+    try:
+        # Create a socket to determine the local IP
+        # This doesn't actually connect, just determines which interface would be used
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # Fallback to localhost if unable to determine IP
+        return '127.0.0.1'
 
 
 def load_config(env_file: Path = Path(ENV_FILE)) -> Optional[Dict[str, str]]:
@@ -440,21 +461,25 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         return False
 
 
-def show_endpoints(port: int) -> None:
+def show_endpoints(port: int, host: Optional[str] = None) -> None:
     """
     Display service endpoints.
 
     Args:
         port: Webhook port number
+        host: Host IP address (defaults to auto-detected IP)
     """
+    if host is None:
+        host = get_host_ip()
+
     endpoints_table = Table(show_header=True, header_style="bold cyan")
     endpoints_table.add_column("Endpoint", style="yellow")
     endpoints_table.add_column("URL", style="green")
 
-    endpoints_table.add_row("Webhook", f"http://localhost:{port}/webhook")
-    endpoints_table.add_row("Health Check", f"http://localhost:{port}/health")
-    endpoints_table.add_row("API Docs", f"http://localhost:{port}/docs")
-    endpoints_table.add_row("Monitoring", f"http://localhost:{port}/monitor/summary")
+    endpoints_table.add_row("Webhook", f"http://{host}:{port}/webhook")
+    endpoints_table.add_row("Health Check", f"http://{host}:{port}/health")
+    endpoints_table.add_row("API Docs", f"http://{host}:{port}/docs")
+    endpoints_table.add_row("Monitoring", f"http://{host}:{port}/monitor/summary")
 
     console.print(endpoints_table)
 
@@ -806,11 +831,12 @@ def export_monitoring_data(filename: str = "monitoring_export.csv") -> bool:
     """
     try:
         port = get_port_from_config()
+        host = get_host_ip()
 
         console.print(f"[blue]Exporting monitoring data to:[/blue] {filename}")
 
         import requests
-        response = requests.get(f"http://localhost:{port}/monitor/export/csv", timeout=30)
+        response = requests.get(f"http://{host}:{port}/monitor/export/csv", timeout=30)
         response.raise_for_status()
 
         with open(filename, 'w') as f:
@@ -837,9 +863,10 @@ def test_webhook() -> bool:
     """
     try:
         port = get_port_from_config()
+        host = get_host_ip()
 
         console.print("[blue]Testing webhook endpoint with sample payload...[/blue]")
-        console.print(f"[blue]Target:[/blue] http://localhost:{port}/webhook\n")
+        console.print(f"[blue]Target:[/blue] http://{host}:{port}/webhook\n")
 
         # Sample GitLab pipeline webhook payload
         sample_payload = {
@@ -874,7 +901,7 @@ def test_webhook() -> bool:
 
         import requests
         response = requests.post(
-            f"http://localhost:{port}/webhook",
+            f"http://{host}:{port}/webhook",
             json=sample_payload,
             headers={
                 "Content-Type": "application/json",
