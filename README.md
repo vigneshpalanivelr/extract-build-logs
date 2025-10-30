@@ -675,13 +675,13 @@ nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
 **Build and Run:**
 ```bash
 # Build Docker image
-./manage-container.sh build
+./manage-container.py build
 
 # Start container
-./manage-container.sh start
+./manage-container.py start
 
 # Verify it's running
-./manage-container.sh status
+./manage-container.py status
 ```
 
 **Your webhook is now available at:** `http://your-server:8000/webhook`
@@ -691,46 +691,46 @@ nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
 **Container Lifecycle:**
 ```bash
 # Build/rebuild image
-./manage-container.sh build
+./manage-container.py build
 
 # Start container (creates if doesn't exist)
-./manage-container.sh start
+./manage-container.py start
 
 # Stop container
-./manage-container.sh stop
+./manage-container.py stop
 
 # Restart container
-./manage-container.sh restart
+./manage-container.py restart
 
 # Remove container (keeps logs)
-./manage-container.sh remove
+./manage-container.py remove
 ```
 
 **Monitoring:**
 ```bash
 # View status and resource usage
-./manage-container.sh status
+./manage-container.py status
 
 # View live logs
-./manage-container.sh logs
+./manage-container.py logs
 
 # View monitoring dashboard
-./manage-container.sh monitor
+./manage-container.py monitor
 
 # Export monitoring data
-./manage-container.sh export data.csv
+./manage-container.py export data.csv
 ```
 
 **Maintenance:**
 ```bash
 # Open shell in container
-./manage-container.sh shell
+./manage-container.py shell
 
 # Test webhook endpoint
-./manage-container.sh test
+./manage-container.py test
 
 # View all commands
-./manage-container.sh help
+./manage-container.py --help
 ```
 
 ### Docker Monitoring
@@ -744,10 +744,10 @@ curl http://localhost:8000/health
 **View Statistics:**
 ```bash
 # Container resource usage
-./manage-container.sh status
+./manage-container.py status
 
 # Monitoring dashboard
-./manage-container.sh monitor --hours 24
+./manage-container.py monitor --hours 24
 
 # API endpoints (same as non-Docker)
 curl http://localhost:8000/monitor/summary

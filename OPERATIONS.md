@@ -307,16 +307,16 @@ sudo journalctl -u gitlab-log-extractor -f
 
 ```bash
 # 1. Build the Docker image
-./manage-container.sh build
+./manage-container.py build
 
 # 2. Start the container
-./manage-container.sh start
+./manage-container.py start
 
 # 3. Check status
-./manage-container.sh status
+./manage-container.py status
 
 # 4. View logs
-./manage-container.sh logs
+./manage-container.py logs
 
 # Container will automatically:
 # - Restart on failure
@@ -357,13 +357,13 @@ nano .env  # Edit with your settings
 **Build and Run:**
 ```bash
 # Build image
-./manage-container.sh build
+./manage-container.py build
 
 # Start container
-./manage-container.sh start
+./manage-container.py start
 
 # Verify it's running
-./manage-container.sh status
+./manage-container.py status
 ```
 
 **Expected Output:**
@@ -383,39 +383,39 @@ nano .env  # Edit with your settings
 
 ```bash
 # Build/Rebuild image
-./manage-container.sh build
+./manage-container.py build
 
 # Start container (creates if needed)
-./manage-container.sh start
+./manage-container.py start
 
 # Stop container
-./manage-container.sh stop
+./manage-container.py stop
 
 # Restart container
-./manage-container.sh restart
+./manage-container.py restart
 
 # View container status and resource usage
-./manage-container.sh status
+./manage-container.py status
 
 # View live logs (Ctrl+C to exit)
-./manage-container.sh logs
+./manage-container.py logs
 
 # Open shell inside container
-./manage-container.sh shell
+./manage-container.py shell
 
 # Remove container (keeps logs)
-./manage-container.sh remove
+./manage-container.py remove
 
 # Remove container and image (keeps logs)
-./manage-container.sh cleanup
+./manage-container.py cleanup
 
 # View help
-./manage-container.sh help
+./manage-container.py --help
 ```
 
 **Container Status Example:**
 ```bash
-$ ./manage-container.sh status
+$ ./manage-container.py status
 
 [INFO] Container status:
 [SUCCESS] Container is RUNNING
@@ -435,25 +435,25 @@ gitlab-pipeline-extractor      0.50%     125MiB / 1GiB         1.5kB / 2.3kB
 **View Monitoring Dashboard:**
 ```bash
 # 24-hour summary (default)
-./manage-container.sh monitor
+./manage-container.py monitor
 
 # Custom time range
-./manage-container.sh monitor --hours 48
+./manage-container.py monitor --hours 48
 
 # Recent requests
-./manage-container.sh monitor --recent 100
+./manage-container.py monitor --recent 100
 
 # Specific pipeline
-./manage-container.sh monitor --pipeline 12345
+./manage-container.py monitor --pipeline 12345
 ```
 
 **Export Monitoring Data:**
 ```bash
 # Export to CSV
-./manage-container.sh export monitoring_data.csv
+./manage-container.py export monitoring_data.csv
 
 # Or use default filename (monitoring_export.csv)
-./manage-container.sh export
+./manage-container.py export
 ```
 
 **Access API Endpoints:**
@@ -474,7 +474,7 @@ curl http://localhost:8000/monitor/export/csv -o data.csv
 **Direct Database Access:**
 ```bash
 # Enter container shell
-./manage-container.sh shell
+./manage-container.py shell
 
 # Inside container
 sqlite3 /app/logs/monitoring.db
@@ -489,13 +489,13 @@ SELECT status, COUNT(*) FROM requests GROUP BY status;
 **Send Test Webhook:**
 ```bash
 # Send sample webhook payload
-./manage-container.sh test
+./manage-container.py test
 
 # Expected output:
 # [INFO] Testing webhook endpoint with sample payload...
 # {"status":"queued","message":"Pipeline event queued for processing","request_id":1}
 # [SUCCESS] Test webhook sent!
-# [INFO] Check logs with: ./manage-container.sh logs
+# [INFO] Check logs with: ./manage-container.py logs
 ```
 
 **Manual Testing:**
@@ -524,8 +524,8 @@ docker images | grep gitlab-pipeline-extractor
 docker logs gitlab-pipeline-extractor
 
 # Remove and recreate
-./manage-container.sh remove
-./manage-container.sh start
+./manage-container.py remove
+./manage-container.py start
 ```
 
 **Port already in use:**
@@ -542,7 +542,7 @@ sudo kill <PID>
 echo "WEBHOOK_PORT=8001" >> .env
 
 # Restart container
-./manage-container.sh restart
+./manage-container.py restart
 ```
 
 **Container unhealthy:**
@@ -554,10 +554,10 @@ docker inspect --format='{{.State.Health.Status}}' gitlab-pipeline-extractor
 docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' gitlab-pipeline-extractor
 
 # Check application logs
-./manage-container.sh logs
+./manage-container.py logs
 
 # Restart container
-./manage-container.sh restart
+./manage-container.py restart
 ```
 
 **Permission issues with logs directory:**
@@ -572,7 +572,7 @@ sudo chown -R 1000:1000 ./logs
 chmod 777 ./logs
 
 # Restart container
-./manage-container.sh restart
+./manage-container.py restart
 ```
 
 **Logs not persisting:**
@@ -584,7 +584,7 @@ docker inspect gitlab-pipeline-extractor | grep -A 10 Mounts
 ls -la ./logs
 
 # Verify files are created
-./manage-container.sh shell
+./manage-container.py shell
 ls -la /app/logs
 ```
 
@@ -594,7 +594,7 @@ ls -la /app/logs
 cat .env
 
 # Test from inside container
-./manage-container.sh shell
+./manage-container.py shell
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" $GITLAB_URL/api/v4/projects
 
 # Verify network connectivity
@@ -604,13 +604,13 @@ docker exec gitlab-pipeline-extractor curl -I https://gitlab.com
 **Update after code changes:**
 ```bash
 # Rebuild image
-./manage-container.sh build
+./manage-container.py build
 
 # Restart with new image
-./manage-container.sh restart
+./manage-container.py restart
 
 # Verify new version
-./manage-container.sh logs
+./manage-container.py logs
 ```
 
 **View resource usage over time:**
@@ -619,7 +619,7 @@ docker exec gitlab-pipeline-extractor curl -I https://gitlab.com
 docker stats gitlab-pipeline-extractor
 
 # Or use management script
-./manage-container.sh status
+./manage-container.py status
 ```
 
 **Backup and restore:**
@@ -631,20 +631,20 @@ tar -czf backup_$(date +%Y%m%d).tar.gz ./logs
 tar -xzf backup_20240101.tar.gz
 
 # Restart container to use restored data
-./manage-container.sh restart
+./manage-container.py restart
 ```
 
 **Container Lifecycle:**
 ```
-1. Build:   ./manage-container.sh build
+1. Build:   ./manage-container.py build
             ↓
-2. Start:   ./manage-container.sh start
+2. Start:   ./manage-container.py start
             ↓
-3. Monitor: ./manage-container.sh status / logs
+3. Monitor: ./manage-container.py status / logs
             ↓
 4. Update:  Code changes → build → restart
             ↓
-5. Stop:    ./manage-container.sh stop (when needed)
+5. Stop:    ./manage-container.py stop (when needed)
 ```
 
 **Production Checklist:**
@@ -1294,7 +1294,7 @@ View logs in real-time from Docker console:
 
 ```bash
 # Follow live logs
-./manage-container.sh logs
+./manage-container.py logs
 
 # Or directly with Docker
 docker logs -f gitlab-pipeline-extractor
@@ -1330,7 +1330,7 @@ tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
 
 ```bash
 # Enter container
-./manage-container.sh shell
+./manage-container.py shell
 
 # Inside container
 tail -f /app/logs/application.log
@@ -1636,7 +1636,7 @@ LOG_LEVEL=WARNING        # Only warnings and errors
 
 **Restart required:**
 ```bash
-./manage-container.sh restart
+./manage-container.py restart
 ```
 
 #### Modify Rotation Settings
@@ -1656,8 +1656,8 @@ app_handler = logging.handlers.RotatingFileHandler(
 **After changes:**
 ```bash
 # Rebuild and restart container
-./manage-container.sh build
-./manage-container.sh restart
+./manage-container.py build
+./manage-container.py restart
 ```
 
 #### Disable Specific Logs
@@ -1706,7 +1706,7 @@ cat .env | grep LOG_DIR
 docker inspect gitlab-pipeline-extractor | grep -A 5 Mounts
 
 # Verify inside container
-./manage-container.sh shell
+./manage-container.py shell
 ls -la /app/logs
 ```
 
