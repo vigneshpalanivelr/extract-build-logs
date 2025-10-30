@@ -5,7 +5,7 @@ This module provides comprehensive logging configuration for the GitLab Pipeline
 Log Extraction System with the following features:
 
 - Pipe-delimited plain text format
-- Multiple log files (application, access, errors, performance)
+- Multiple log files (application, access, performance)
 - Request ID correlation across all logs
 - Sensitive data masking (tokens, secrets)
 - Log rotation with size limits
@@ -18,6 +18,8 @@ timestamp | level | logger | request_id | message | context
 
 Example:
 2024-01-01 10:15:30.123 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345 project_id=100
+
+Note: All logs including errors are kept in application.log to maintain context and traceability.
 """
 
 import logging
@@ -177,7 +179,7 @@ class LoggingConfig:
     Centralized logging configuration manager.
 
     Sets up:
-    - Multiple log files (application, access, errors, performance)
+    - Multiple log files (application, access, performance)
     - Console output
     - Log rotation
     - Request ID tracking
@@ -221,7 +223,7 @@ class LoggingConfig:
         console_handler.addFilter(SensitiveDataFilter())
         root_logger.addHandler(console_handler)
 
-        # 2. Application Log File - All levels (DEBUG and above)
+        # 2. Application Log File - All levels including errors (DEBUG and above)
         app_handler = logging.handlers.RotatingFileHandler(
             filename=self.log_dir / 'application.log',
             maxBytes=100 * 1024 * 1024,  # 100MB
@@ -234,20 +236,7 @@ class LoggingConfig:
         app_handler.addFilter(SensitiveDataFilter())
         root_logger.addHandler(app_handler)
 
-        # 3. Error Log File - ERROR and above only
-        error_handler = logging.handlers.RotatingFileHandler(
-            filename=self.log_dir / 'errors.log',
-            maxBytes=50 * 1024 * 1024,  # 50MB
-            backupCount=10,
-            encoding='utf-8'
-        )
-        error_handler.setLevel(logging.ERROR)
-        error_handler.setFormatter(formatter)
-        error_handler.addFilter(RequestIdFilter())
-        error_handler.addFilter(SensitiveDataFilter())
-        root_logger.addHandler(error_handler)
-
-        # 4. Access Log File - for webhook access logging
+        # 3. Access Log File - for webhook access logging
         access_handler = logging.handlers.RotatingFileHandler(
             filename=self.log_dir / 'access.log',
             maxBytes=50 * 1024 * 1024,  # 50MB
@@ -265,7 +254,7 @@ class LoggingConfig:
         access_logger.addHandler(access_handler)
         access_logger.propagate = False  # Don't propagate to root
 
-        # 5. Performance Log File - for performance metrics
+        # 4. Performance Log File - for performance metrics
         perf_handler = logging.handlers.RotatingFileHandler(
             filename=self.log_dir / 'performance.log',
             maxBytes=50 * 1024 * 1024,  # 50MB
@@ -448,7 +437,6 @@ if __name__ == "__main__":
     clear_request_id()
 
     print("\nLogging test complete! Check ./logs/ directory for log files:")
-    print("  - application.log (all logs)")
-    print("  - errors.log (errors only)")
+    print("  - application.log (all logs including errors)")
     print("  - access.log (access logs)")
     print("  - performance.log (performance metrics)")
