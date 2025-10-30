@@ -1306,7 +1306,7 @@ docker logs --tail 100 gitlab-pipeline-extractor
 docker logs --since "2025-10-29T10:00:00" gitlab-pipeline-extractor
 ```
 
-**What you see:** Console handler output (INFO and above from all loggers)
+**What you see:** Console handler output (respects LOG_LEVEL from .env configuration)
 
 #### Method 2: Log Files (Most Detailed)
 

@@ -215,9 +215,9 @@ class LoggingConfig:
         # Remove existing handlers
         root_logger.handlers.clear()
 
-        # 1. Console Handler (stdout) - INFO and above
+        # 1. Console Handler (stdout) - Respects LOG_LEVEL from config
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.INFO)
+        console_handler.setLevel(self.log_level)
         console_handler.setFormatter(formatter)
         console_handler.addFilter(RequestIdFilter())
         console_handler.addFilter(SensitiveDataFilter())
