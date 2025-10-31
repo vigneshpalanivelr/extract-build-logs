@@ -19,8 +19,8 @@ import requests
 from typing import Dict, List, Optional, Any
 from urllib.parse import quote
 
-from config_loader import Config
-from error_handler import retry_on_failure, RetryExhaustedError
+from .config_loader import Config
+from .error_handler import retry_on_failure, RetryExhaustedError
 
 # Configure module logger
 logger = logging.getLogger(__name__)
