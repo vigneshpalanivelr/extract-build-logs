@@ -35,7 +35,7 @@ class StorageManager:
     metadata files that make it easy to search and analyze stored logs.
 
     Directory Structure:
-        logs/
+        logs/pipeline-logs/
         └── project_{project_id}/
             └── pipeline_{pipeline_id}/
                 ├── metadata.json
@@ -47,12 +47,12 @@ class StorageManager:
         base_dir (Path): Base directory for log storage
     """
 
-    def __init__(self, base_dir: str = "./logs"):
+    def __init__(self, base_dir: str = "./logs/pipeline-logs"):
         """
         Initialize the storage manager.
 
         Args:
-            base_dir (str): Base directory for storing logs (default: ./logs)
+            base_dir (str): Base directory for storing logs (default: ./logs/pipeline-logs)
 
         Creates the base directory if it doesn't exist.
         """
@@ -441,7 +441,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     # Create storage manager
-    manager = StorageManager("./logs")
+    manager = StorageManager("./logs/pipeline-logs")
 
     # Save example log
     log_path = manager.save_log(

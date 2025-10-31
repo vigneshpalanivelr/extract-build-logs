@@ -4,103 +4,33 @@ Complete guide for debugging, monitoring, and operating the GitLab Pipeline Log 
 
 ## Table of Contents
 
-### Part 1: Setup & Debugging
+### Part 1: Setup & Operations
 - [Quick Start](#quick-start)
 - [Setup & Installation](#setup--installation)
-  - [Environment Setup](#environment-setup)
-  - [Install Dependencies](#install-dependencies)
-  - [Configuration](#configuration)
-  - [GitLab Access Token](#gitlab-access-token)
 - [Running the Application](#running-the-application)
-  - [Method 1: Using Main Script](#method-1-using-main-script-recommended)
-  - [Method 2: Using Uvicorn Directly](#method-2-using-uvicorn-directly)
-  - [Method 3: Background Process](#method-3-background-process)
-  - [Method 4: Systemd Service](#method-4-using-systemd-linux-production)
-  - [Method 5: Docker Deployment](#method-5-docker-deployment-recommended-for-production)
 - [Docker Operations](#docker-operations)
-  - [Quick Start with Docker](#quick-start-with-docker)
-  - [Container Management](#container-management)
-  - [Monitoring in Docker](#monitoring-in-docker)
-  - [Troubleshooting Docker](#troubleshooting-docker)
 - [Testing](#testing)
-  - [Run Unit Tests](#run-unit-tests)
-  - [Test Individual Modules](#test-individual-modules)
-  - [Test API Endpoints](#test-api-endpoints)
 - [Common Issues & Solutions](#common-issues--solutions)
-  - [Port Already in Use](#issue-1-port-already-in-use)
-  - [Import Errors](#issue-2-import-errors)
-  - [Configuration Not Found](#issue-3-configuration-not-found)
-  - [GitLab API Authentication Failed](#issue-4-gitlab-api-authentication-failed)
-  - [Webhook Returns 401](#issue-5-webhook-returns-401-unauthorized)
-  - [Logs Not Being Saved](#issue-6-logs-not-being-saved)
-  - [Connection Errors](#issue-7-databaseconnection-errors)
 - [Debugging Scripts](#debugging-scripts)
-  - [Debug Configuration](#debug-configuration)
-  - [Debug GitLab Connection](#debug-gitlab-connection)
-  - [Debug Storage](#debug-storage)
-  - [Check Dependencies](#check-all-dependencies)
-- [Monitoring & Logs](#monitoring--logs)
-  - [View Server Logs](#view-server-logs)
-  - [Monitor Storage](#monitor-storage)
-  - [Monitor System Resources](#monitor-system-resources)
 - [Application Logging System](#application-logging-system)
-  - [Logging Overview](#logging-overview)
-  - [Log Files and Formats](#log-files-and-formats)
-  - [Log Rotation Behavior](#log-rotation-behavior)
-  - [Application Restart Behavior](#application-restart-behavior)
-  - [Viewing Logs](#viewing-logs)
-  - [Searching Logs](#searching-logs)
-  - [Request ID Tracking](#request-id-tracking)
-  - [Log Storage and Retention](#log-storage-and-retention)
-  - [Log Configuration](#log-configuration)
-  - [Troubleshooting with Logs](#troubleshooting-with-logs)
 - [Manual Testing](#manual-testing)
-  - [Create Test Payload](#create-test-webhook-payload)
-  - [Test Webhook Locally](#test-webhook-locally)
-  - [Test with ngrok](#test-with-ngrok-for-local-gitlab-testing)
 - [Troubleshooting Checklist](#troubleshooting-checklist)
 
 ### Part 2: Monitoring & Tracking
 - [Monitoring Overview](#monitoring-overview)
 - [What is Tracked](#what-is-tracked)
-  - [Automatic Tracking](#automatic-tracking)
-  - [Request Status Flow](#request-status-flow)
 - [Monitoring Dashboard](#monitoring-dashboard)
-  - [CLI Dashboard Tool](#cli-dashboard-tool)
-  - [Dashboard Output Example](#dashboard-output-example)
 - [API Endpoints](#api-endpoints)
-  - [Monitoring Summary](#1-monitoring-summary)
-  - [Recent Requests](#2-recent-requests)
-  - [Pipeline Details](#3-pipeline-details)
-  - [Export to CSV](#4-export-to-csv)
 - [Viewing Statistics](#viewing-statistics)
-  - [Method 1: CLI Dashboard](#method-1-cli-dashboard-recommended)
-  - [Method 2: API Calls](#method-2-api-calls)
-  - [Method 3: Interactive Docs](#method-3-interactive-api-docs)
-  - [Method 4: Direct SQL](#method-4-direct-database-query)
 - [Exporting Data](#exporting-data)
-  - [CSV Export via CLI](#csv-export-via-cli)
-  - [CSV Export via API](#csv-export-via-api)
-  - [Analyze in Excel](#analyze-in-excelgoogle-sheets)
 - [Database](#database)
-  - [Database Location](#database-location)
-  - [Database Schema](#database-schema)
-  - [Querying the Database](#querying-the-database)
 - [Real-World Examples](#real-world-examples)
-  - [Check Today's Activity](#example-1-check-todays-activity)
-  - [Troubleshoot Failed Pipeline](#example-2-troubleshoot-failed-pipeline)
-  - [Track Performance](#example-3-track-performance-over-time)
-  - [Monitor Active Processing](#example-4-monitor-active-processing)
-  - [Generate Reports](#example-5-generate-weekly-report)
 - [Advanced Operations](#advanced-operations)
-  - [Real-Time Monitoring](#real-time-monitoring)
-  - [Cleanup Old Data](#cleanup-old-data)
-  - [Integration with Monitoring Tools](#integration-with-monitoring-tools)
 - [FAQ](#faq)
 
 ---
 
-# Part 1: Setup & Debugging
+# Part 1: Setup & Operations
 
 ## Quick Start
 
@@ -128,535 +58,133 @@ python src/webhook_listener.py
 
 ## Setup & Installation
 
-### Environment Setup
+**Prerequisites:**
+- Python 3.8 or higher
+- GitLab access token with 'api' scope
+- Docker (for containerized deployment)
 
-```bash
-# Check Python version (requires 3.8+)
-python3 --version
-
-# Create virtual environment
-python3 -m venv venv
-
-# Activate virtual environment
-# Linux/Mac:
-source venv/bin/activate
-
-# Windows (PowerShell):
-.\venv\Scripts\Activate.ps1
-
-# Windows (Command Prompt):
-venv\Scripts\activate.bat
-
-# Verify activation (should show venv path)
-which python  # Linux/Mac
-where python  # Windows
-```
-
-### Install Dependencies
-
-```bash
-# Install all dependencies
-pip install -r requirements.txt
-
-# Verify installations
-pip list
-
-# Expected packages:
-# - fastapi==0.109.0
-# - uvicorn==0.27.0
-# - requests==2.31.0
-# - python-dotenv==1.0.0
-# - pytest==7.4.3
-# - httpx==0.26.0
-# - tabulate==0.9.0
-```
-
-### Configuration
-
-```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit configuration
-nano .env  # or vim, code, etc.
-
-# Required settings:
-# GITLAB_URL=https://gitlab.com
-# GITLAB_TOKEN=your_token_here
-
-# Optional settings (with defaults):
-# WEBHOOK_PORT=8000
-# WEBHOOK_SECRET=
-# LOG_OUTPUT_DIR=./logs
-# RETRY_ATTEMPTS=3
-# RETRY_DELAY=2
-# LOG_LEVEL=INFO
-
-# Validate environment file
-cat .env
-```
-
-### GitLab Access Token
-
-```bash
-# Create GitLab token:
-# 1. Go to GitLab → Profile → Access Tokens
-# 2. Name: "Pipeline Log Extractor"
-# 3. Scopes: Select "api"
-# 4. Create token
-# 5. Copy token and add to .env
-
-# Test token validity
-curl --header "PRIVATE-TOKEN: your_token_here" \
-  "https://gitlab.com/api/v4/user"
-
-# Expected: Your user details in JSON
-```
+**Key Steps:**
+1. Create virtual environment: `python3 -m venv venv && source venv/bin/activate`
+2. Install dependencies: `pip install -r requirements.txt`
+3. Configure environment: `cp .env.example .env` and edit with your settings
+4. Set required variables: `GITLAB_URL` and `GITLAB_TOKEN`
+5. Start server: `python src/webhook_listener.py` or use Docker
 
 ---
 
 ## Running the Application
 
-### Method 1: Using Main Script (Recommended)
+### Option 1: Docker (Recommended for Production)
+
+```bash
+# Build and start
+./manage-container.py build
+./manage-container.py start
+
+# Check status
+./manage-container.py status
+
+# View logs
+./manage-container.py logs
+```
+
+**Benefits:** Isolated environment, automatic restarts, persistent storage, easy deployment
+
+### Option 2: Direct Python
 
 ```bash
 # Standard run
 python src/webhook_listener.py
 
-# Expected output:
-# ============================================================
-# GitLab Pipeline Log Extraction System
-# ============================================================
-# INFO - Initializing GitLab Pipeline Log Extractor...
-# INFO - Configuration loaded successfully
-# INFO - GitLab URL: https://gitlab.com
-# INFO - Webhook Port: 8000
-# INFO - Log Output Directory: ./logs
-# INFO - All components initialized successfully
-# INFO - Starting webhook server on port 8000...
-# INFO - Press Ctrl+C to stop
-```
-
-### Method 2: Using Uvicorn Directly
-
-```bash
-# Basic run
-uvicorn src.webhook_listener:app --host 0.0.0.0 --port 8000
-
-# With auto-reload (for development)
+# Development mode (auto-reload)
 uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
 
-# With custom log level
-uvicorn src.webhook_listener:app --log-level debug --host 0.0.0.0 --port 8000
-
-# With specific number of workers (production)
-uvicorn src.webhook_listener:app --workers 4 --host 0.0.0.0 --port 8000
-```
-
-### Method 3: Background Process
-
-```bash
-# Run in background (Linux/Mac)
+# Background process
 nohup python src/webhook_listener.py > server.log 2>&1 &
-
-# Get process ID
-echo $!
-
-# Check if running
-ps aux | grep webhook_listener
-
-# Stop background process
-kill <process_id>
 ```
 
-### Method 4: Using systemd (Linux Production)
+### Option 3: Systemd Service (Linux)
 
 ```bash
-# Create systemd service file
-sudo nano /etc/systemd/system/gitlab-log-extractor.service
+# Create service file at /etc/systemd/system/gitlab-log-extractor.service
+# See README.md for full configuration
 
-# Add content:
-# [Unit]
-# Description=GitLab Pipeline Log Extractor
-# After=network.target
-#
-# [Service]
-# Type=simple
-# User=your_user
-# WorkingDirectory=/path/to/extract-build-logs
-# Environment="PATH=/path/to/venv/bin"
-# ExecStart=/path/to/venv/bin/python src/webhook_listener.py
-# Restart=always
-#
-# [Install]
-# WantedBy=multi-user.target
-
-# Enable and start service
-sudo systemctl daemon-reload
-sudo systemctl enable gitlab-log-extractor
 sudo systemctl start gitlab-log-extractor
-
-# Check status
+sudo systemctl enable gitlab-log-extractor
 sudo systemctl status gitlab-log-extractor
-
-# View logs
-sudo journalctl -u gitlab-log-extractor -f
 ```
-
-### Method 5: Docker Deployment (Recommended for Production)
-
-```bash
-# 1. Build the Docker image
-./manage-container.py build
-
-# 2. Start the container
-./manage-container.py start
-
-# 3. Check status
-./manage-container.py status
-
-# 4. View logs
-./manage-container.py logs
-
-# Container will automatically:
-# - Restart on failure
-# - Persist logs to ./logs directory
-# - Use configuration from .env file
-```
-
-**What happens behind the scenes:**
-- Container runs on port 8000
-- Logs directory is mounted as volume (persistent storage)
-- .env file is mounted read-only for configuration
-- Health checks run every 30 seconds
-- Automatic restart on failure
-
-**Benefits:**
-- Isolated environment
-- Easy deployment and rollback
-- Consistent across environments
-- No Python virtual environment needed on host
-- Resource limits enforced
 
 ---
 
 ## Docker Operations
 
-### Quick Start with Docker
-
-**Prerequisites:**
+**Quick Start:**
 ```bash
-# Check Docker is installed
-docker --version
-
-# Create .env file if not exists
-cp .env.example .env
-nano .env  # Edit with your settings
-```
-
-**Build and Run:**
-```bash
-# Build image
+# Build and start
 ./manage-container.py build
-
-# Start container
 ./manage-container.py start
-
-# Verify it's running
 ./manage-container.py status
 ```
 
-**Expected Output:**
-```
-[INFO] Building Docker image: bfa-gitlab-pipeline-extractor
-[SUCCESS] Image built successfully!
-[INFO] Starting new container: bfa-gitlab-pipeline-extractor
-[SUCCESS] Container started successfully!
-[INFO] Webhook endpoint: http://localhost:8000/webhook
-[INFO] Health check: http://localhost:8000/health
-[INFO] API docs: http://localhost:8000/docs
-```
-
-### Container Management
-
-**All commands use the management script:**
-
+**Common Commands:**
 ```bash
-# Build/Rebuild image
-./manage-container.py build
-
-# Start container (creates if needed)
-./manage-container.py start
-
-# Stop container
-./manage-container.py stop
-
-# Restart container
-./manage-container.py restart
-
-# View container status and resource usage
-./manage-container.py status
-
-# View live logs (Ctrl+C to exit)
-./manage-container.py logs
-
-# Open shell inside container
-./manage-container.py shell
-
-# Remove container (keeps logs)
-./manage-container.py remove
-
-# Remove container and image (keeps logs)
-./manage-container.py cleanup
-
-# View help
-./manage-container.py --help
+./manage-container.py build      # Build/rebuild image
+./manage-container.py start      # Start container
+./manage-container.py stop       # Stop container
+./manage-container.py restart    # Restart container
+./manage-container.py status     # View status and resource usage
+./manage-container.py logs       # View live logs
+./manage-container.py shell      # Open shell inside container
+./manage-container.py monitor    # View monitoring dashboard
+./manage-container.py test       # Send test webhook
+./manage-container.py remove     # Remove container
+./manage-container.py cleanup    # Remove container and image
 ```
 
-**Container Status Example:**
+**Monitoring & Testing:**
 ```bash
-$ ./manage-container.py status
+# View monitoring dashboard
+./manage-container.py monitor --hours 24
 
-[INFO] Container status:
-[SUCCESS] Container is RUNNING
+# Export monitoring data
+./manage-container.py export data.csv
 
-CONTAINER ID   STATUS          PORTS
-abc123def456   Up 2 hours      0.0.0.0:8000->8000/tcp
-
-[INFO] Health status: healthy
-
-[INFO] Resource usage:
-CONTAINER                      CPU %     MEM USAGE / LIMIT     NET I/O
-bfa-gitlab-pipeline-extractor      0.50%     125MiB / 1GiB         1.5kB / 2.3kB
-```
-
-### Monitoring in Docker
-
-**View Monitoring Dashboard:**
-```bash
-# 24-hour summary (default)
-./manage-container.py monitor
-
-# Custom time range
-./manage-container.py monitor --hours 48
-
-# Recent requests
-./manage-container.py monitor --recent 100
-
-# Specific pipeline
-./manage-container.py monitor --pipeline 12345
-```
-
-**Export Monitoring Data:**
-```bash
-# Export to CSV
-./manage-container.py export monitoring_data.csv
-
-# Or use default filename (monitoring_export.csv)
-./manage-container.py export
-```
-
-**Access API Endpoints:**
-```bash
-# Health check
-curl http://localhost:8000/health
-
-# Monitoring summary
-curl http://localhost:8000/monitor/summary?hours=24
-
-# Recent requests
-curl http://localhost:8000/monitor/recent?limit=50
-
-# Export CSV
-curl http://localhost:8000/monitor/export/csv -o data.csv
-```
-
-**Direct Database Access:**
-```bash
-# Enter container shell
-./manage-container.py shell
-
-# Inside container
-sqlite3 /app/logs/monitoring.db
-
-# Run queries
-SELECT COUNT(*) FROM requests;
-SELECT status, COUNT(*) FROM requests GROUP BY status;
-```
-
-### Testing in Docker
-
-**Send Test Webhook:**
-```bash
-# Send sample webhook payload
+# Send test webhook
 ./manage-container.py test
 
-# Expected output:
-# [INFO] Testing webhook endpoint with sample payload...
-# {"status":"queued","message":"Pipeline event queued for processing","request_id":1}
-# [SUCCESS] Test webhook sent!
-# [INFO] Check logs with: ./manage-container.py logs
-```
-
-**Manual Testing:**
-```bash
-# Test health endpoint
+# Access API endpoints
 curl http://localhost:8000/health
-
-# Test with custom payload
-curl -X POST http://localhost:8000/webhook \
-  -H "Content-Type: application/json" \
-  -H "X-Gitlab-Event: Pipeline Hook" \
-  -d @test_payload.json
+curl http://localhost:8000/monitor/summary?hours=24
 ```
 
 ### Troubleshooting Docker
 
-**Container won't start:**
+**Common Issues:**
 ```bash
-# Check if .env file exists
-ls -la .env
-
-# Verify image exists
-docker images | grep bfa-gitlab-pipeline-extractor
-
-# Check Docker logs
+# Container won't start
 docker logs bfa-gitlab-pipeline-extractor
+./manage-container.py remove && ./manage-container.py start
 
-# Remove and recreate
-./manage-container.py remove
-./manage-container.py start
-```
-
-**Port already in use:**
-```bash
-# Find process using port 8000
+# Port already in use
 sudo lsof -i :8000
-# or
-sudo netstat -tulpn | grep 8000
-
-# Kill the process
 sudo kill <PID>
 
-# Or change port in .env
-echo "WEBHOOK_PORT=8001" >> .env
-
-# Restart container
-./manage-container.py restart
-```
-
-**Container unhealthy:**
-```bash
-# Check health status
-docker inspect --format='{{.State.Health.Status}}' bfa-gitlab-pipeline-extractor
-
-# View health check logs
-docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' bfa-gitlab-pipeline-extractor
-
-# Check application logs
-./manage-container.py logs
-
-# Restart container
-./manage-container.py restart
-```
-
-**Permission issues with logs directory:**
-```bash
-# Check directory permissions
-ls -ld ./logs
-
-# Fix permissions (container runs as UID 1000)
+# Permission issues
 sudo chown -R 1000:1000 ./logs
 
-# Or make it world-writable (less secure)
-chmod 777 ./logs
+# Update after code changes
+./manage-container.py build && ./manage-container.py restart
 
-# Restart container
-./manage-container.py restart
-```
-
-**Logs not persisting:**
-```bash
-# Verify volume mount
-docker inspect bfa-gitlab-pipeline-extractor | grep -A 10 Mounts
-
-# Check if logs directory exists on host
-ls -la ./logs
-
-# Verify files are created
-./manage-container.py shell
-ls -la /app/logs
-```
-
-**GitLab connection issues:**
-```bash
-# Check .env configuration
-cat .env
-
-# Test from inside container
-./manage-container.py shell
-curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" $GITLAB_URL/api/v4/projects
-
-# Verify network connectivity
-docker exec bfa-gitlab-pipeline-extractor curl -I https://gitlab.com
-```
-
-**Update after code changes:**
-```bash
-# Rebuild image
-./manage-container.py build
-
-# Restart with new image
-./manage-container.py restart
-
-# Verify new version
-./manage-container.py logs
-```
-
-**View resource usage over time:**
-```bash
-# Real-time stats
-docker stats bfa-gitlab-pipeline-extractor
-
-# Or use management script
-./manage-container.py status
-```
-
-**Backup and restore:**
-```bash
-# Backup logs and database
+# Backup logs
 tar -czf backup_$(date +%Y%m%d).tar.gz ./logs
-
-# Restore
-tar -xzf backup_20240101.tar.gz
-
-# Restart container to use restored data
-./manage-container.py restart
-```
-
-**Container Lifecycle:**
-```
-1. Build:   ./manage-container.py build
-            ↓
-2. Start:   ./manage-container.py start
-            ↓
-3. Monitor: ./manage-container.py status / logs
-            ↓
-4. Update:  Code changes → build → restart
-            ↓
-5. Stop:    ./manage-container.py stop (when needed)
 ```
 
 **Production Checklist:**
-- [ ] .env file created with correct credentials
+- [ ] .env configured with GITLAB_URL and GITLAB_TOKEN
 - [ ] WEBHOOK_SECRET set for security
-- [ ] Logs directory has correct permissions (UID 1000)
-- [ ] Port 8000 is accessible from GitLab
-- [ ] Firewall allows incoming connections
-- [ ] Monitoring dashboard accessible
-- [ ] Backup strategy in place
-- [ ] Health checks passing
-- [ ] Container restart policy verified
+- [ ] Logs directory permissions correct (UID 1000)
+- [ ] Port 8000 accessible from GitLab
+- [ ] Health checks passing: `curl http://localhost:8000/health`
 
 ---
 
@@ -666,20 +194,61 @@ tar -xzf backup_20240101.tar.gz
 
 ```bash
 # Run all tests
-pytest tests/
-
-# Run with verbose output
-pytest -v tests/
-
-# Run specific test file
-pytest tests/test_pipeline_extractor.py
+pytest tests/ -v
 
 # Run with coverage
-pytest --cov=src tests/
+pytest tests/ --cov=src --cov=. --cov-report=term-missing
 
 # Generate HTML coverage report
-pytest --cov=src --cov-report=html tests/
+pytest tests/ --cov=src --cov=. --cov-report=html
 # Open htmlcov/index.html in browser
+
+# Run specific test file
+pytest tests/test_pipeline_extractor.py -v
+
+# Run specific test
+pytest tests/test_pipeline_extractor.py::TestClass::test_method -v
+
+# Run tests matching pattern
+pytest tests/ -k "test_config" -v
+```
+
+### Test Container Management Script
+
+```bash
+# Run all tests for manage-container.py
+pytest tests/test_manage_container.py -v
+
+# Run with coverage
+pytest tests/test_manage_container.py --cov=manage_container --cov-report=term-missing
+
+# Test specific functionality
+pytest tests/test_manage_container.py::TestLoadConfig -v
+pytest tests/test_manage_container.py::TestBuildImage -v
+pytest tests/test_manage_container.py::TestStartContainer -v
+```
+
+### Parallel Testing
+
+```bash
+# Install pytest-xdist for parallel execution
+pip install pytest-xdist
+
+# Run tests in parallel (4 workers)
+pytest tests/ -n 4 -v
+
+# Run tests in parallel with coverage
+pytest tests/ -n auto --cov=src --cov-report=term-missing
+```
+
+### Watch Mode
+
+```bash
+# Install pytest-watch
+pip install pytest-watch
+
+# Auto-run tests on file changes
+ptw tests/ -- -v
 ```
 
 ### Test Individual Modules
@@ -716,6 +285,36 @@ curl -X POST http://localhost:8000/webhook \
   -H "X-Gitlab-Event: Pipeline Hook" \
   -H "X-Gitlab-Token: your_secret_token" \
   -d @test_payload.json
+```
+
+### Integration Testing
+
+```bash
+# End-to-end Docker workflow
+./manage-container.py build
+./manage-container.py start --yes
+./manage-container.py status
+./manage-container.py test
+./manage-container.py logs --no-follow | tail -20
+./manage-container.py monitor
+./manage-container.py export test_data.csv
+./manage-container.py cleanup --force
+```
+
+### Debugging Tests
+
+```bash
+# Run with maximum verbosity
+pytest tests/ -vvv -s
+
+# Show local variables on failure
+pytest tests/ --showlocals
+
+# Drop into debugger on failure
+pytest tests/ --pdb
+
+# Run specific failing test with full output
+pytest tests/test_file.py::test_name -vv -s
 ```
 
 ---
@@ -864,188 +463,55 @@ curl -v "https://gitlab.com/api/v4/projects"
 
 ## Debugging Scripts
 
-### Debug Configuration
-
+**Test Configuration:**
 ```bash
-# debug_config.py
-cat > debug_config.py << 'EOF'
-#!/usr/bin/env python3
-"""Debug configuration loading"""
-import sys
-sys.path.insert(0, 'src')
-
-from config_loader import ConfigLoader
-
-try:
-    config = ConfigLoader.load()
-    print("✓ Configuration loaded successfully")
-    print(f"  GitLab URL: {config.gitlab_url}")
-    print(f"  Webhook Port: {config.webhook_port}")
-    print(f"  Log Directory: {config.log_output_dir}")
-    print(f"  Retry Attempts: {config.retry_attempts}")
-    print(f"  Log Level: {config.log_level}")
-except Exception as e:
-    print(f"✗ Configuration error: {e}")
-    sys.exit(1)
-EOF
-
-chmod +x debug_config.py
-python debug_config.py
+python src/config_loader.py
 ```
 
-### Debug GitLab Connection
-
+**Test Individual Components:**
 ```bash
-# debug_gitlab.py
-cat > debug_gitlab.py << 'EOF'
-#!/usr/bin/env python3
-"""Debug GitLab API connection"""
-import sys
-sys.path.insert(0, 'src')
-
-from config_loader import ConfigLoader
-from log_fetcher import LogFetcher
-
-try:
-    config = ConfigLoader.load()
-    fetcher = LogFetcher(config)
-
-    print("Testing GitLab API connection...")
-    print("✓ GitLab API connection successful")
-
-except Exception as e:
-    print(f"✗ GitLab API error: {e}")
-    sys.exit(1)
-EOF
-
-chmod +x debug_gitlab.py
-python debug_gitlab.py
+python src/storage_manager.py
+python src/error_handler.py
+python src/pipeline_extractor.py
 ```
 
-### Debug Storage
-
+**Check Dependencies:**
 ```bash
-# debug_storage.py
-cat > debug_storage.py << 'EOF'
-#!/usr/bin/env python3
-"""Debug storage operations"""
-import sys
-sys.path.insert(0, 'src')
-
-from storage_manager import StorageManager
-
-try:
-    manager = StorageManager("./logs")
-
-    print("Testing storage write...")
-    path = manager.save_log(
-        project_id=123,
-        pipeline_id=789,
-        job_id=456,
-        job_name="test",
-        log_content="Test log content",
-        job_details={"status": "success"}
-    )
-    print(f"✓ Log saved to: {path}")
-
-    metadata = manager.get_pipeline_metadata(123, 789)
-    print(f"✓ Metadata retrieved: {metadata is not None}")
-
-    stats = manager.get_storage_stats()
-    print(f"✓ Stats: {stats}")
-
-except Exception as e:
-    print(f"✗ Storage error: {e}")
-    sys.exit(1)
-EOF
-
-chmod +x debug_storage.py
-python debug_storage.py
-```
-
-### Check All Dependencies
-
-```bash
-# check_dependencies.sh
-cat > check_dependencies.sh << 'EOF'
-#!/bin/bash
-echo "Checking Python dependencies..."
-
-dependencies=(
-    "fastapi"
-    "uvicorn"
-    "requests"
-    "python-dotenv"
-    "pytest"
-    "httpx"
-    "tabulate"
-)
-
-for dep in "${dependencies[@]}"; do
-    if python -c "import $dep" 2>/dev/null; then
-        version=$(pip show $dep | grep Version | awk '{print $2}')
-        echo "✓ $dep ($version)"
-    else
-        echo "✗ $dep (not installed)"
-    fi
-done
-EOF
-
-chmod +x check_dependencies.sh
-bash check_dependencies.sh
+pip list | grep -E "fastapi|uvicorn|requests|python-dotenv|pytest"
 ```
 
 ---
 
 ## Monitoring & Logs
 
-### View Server Logs
-
+**View Logs:**
 ```bash
-# Real-time log viewing
-tail -f webhook_server.log
-
-# View last 100 lines
-tail -n 100 webhook_server.log
+# Real-time
+tail -f logs/application.log
 
 # Search for errors
-grep ERROR webhook_server.log
+grep ERROR logs/application.log
 
 # Search for specific pipeline
-grep "pipeline_id.*12345" webhook_server.log
-
-# Count requests by status
-grep "Processing pipeline" webhook_server.log | wc -l
+grep "pipeline_id=12345" logs/application.log
 ```
 
-### Monitor Storage
-
+**Monitor Storage:**
 ```bash
-# Watch logs directory
-watch -n 5 'ls -lah logs/'
-
-# Count total log files
-find logs/ -name "*.log" | wc -l
-
 # Check storage size
 du -sh logs/
 
-# List recent pipelines
-find logs/ -type d -name "pipeline_*" | head -10
+# Count log files
+find logs/ -name "*.log" | wc -l
 ```
 
-### Monitor System Resources
-
+**System Resources:**
 ```bash
-# CPU and memory usage
+# Docker
+./manage-container.py status
+
+# Direct Python
 top -p $(pgrep -f webhook_listener)
-
-# Detailed process info
-ps aux | grep webhook_listener
-
-# Network connections
-netstat -an | grep :8000
-lsof -i :8000
 ```
 
 ---

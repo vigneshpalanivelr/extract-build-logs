@@ -104,7 +104,7 @@ class ConfigLoader:
         # Optional settings with defaults
         webhook_port = int(os.getenv('WEBHOOK_PORT', '8000'))
         webhook_secret = os.getenv('WEBHOOK_SECRET')
-        log_output_dir = os.getenv('LOG_OUTPUT_DIR', './logs')
+        log_output_dir = os.getenv('LOG_OUTPUT_DIR', './logs/pipeline-logs')
         retry_attempts = int(os.getenv('RETRY_ATTEMPTS', '3'))
         retry_delay = int(os.getenv('RETRY_DELAY', '2'))
         log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
