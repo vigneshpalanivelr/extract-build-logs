@@ -100,21 +100,29 @@ class StorageManager:
 
         return sanitized.strip('_')
 
-    def get_pipeline_directory(self, project_id: int, pipeline_id: int) -> Path:
+    def get_pipeline_directory(self, project_id: int, pipeline_id: int, project_name: Optional[str] = None) -> Path:
         """
         Get (and create if needed) the directory for a specific pipeline.
 
         Args:
             project_id (int): GitLab project ID
             pipeline_id (int): GitLab pipeline ID
+            project_name (Optional[str]): GitLab project name for readability
 
         Returns:
             Path: Path to pipeline directory
 
         Directory Structure:
-            {base_dir}/project_{project_id}/pipeline_{pipeline_id}/
+            If project_name provided: {base_dir}/{project_name}_{project_id}/pipeline_{pipeline_id}/
+            Otherwise: {base_dir}/project_{project_id}/pipeline_{pipeline_id}/
         """
-        pipeline_dir = self.base_dir / f"project_{project_id}" / f"pipeline_{pipeline_id}"
+        if project_name:
+            safe_project_name = self._sanitize_filename(project_name)
+            project_dir = f"{safe_project_name}_{project_id}"
+        else:
+            project_dir = f"project_{project_id}"
+
+        pipeline_dir = self.base_dir / project_dir / f"pipeline_{pipeline_id}"
         self._ensure_directory(pipeline_dir)
         return pipeline_dir
 
@@ -125,7 +133,8 @@ class StorageManager:
         job_id: int,
         job_name: str,
         log_content: str,
-        job_details: Optional[Dict[str, Any]] = None
+        job_details: Optional[Dict[str, Any]] = None,
+        project_name: Optional[str] = None
     ) -> Path:
         """
         Save a job log to the filesystem.
@@ -137,6 +146,7 @@ class StorageManager:
             job_name (str): Name of the job
             log_content (str): Raw log content
             job_details (Optional[Dict[str, Any]]): Additional job metadata
+            project_name (Optional[str]): GitLab project name for readability
 
         Returns:
             Path: Path to saved log file
@@ -152,10 +162,11 @@ class StorageManager:
                 job_id=456,
                 job_name="build:production",
                 log_content="Build started...",
-                job_details={"status": "success", "duration": 120.5}
+                job_details={"status": "success", "duration": 120.5},
+                project_name="my-app"
             )
         """
-        pipeline_dir = self.get_pipeline_directory(project_id, pipeline_id)
+        pipeline_dir = self.get_pipeline_directory(project_id, pipeline_id, project_name)
 
         # Create sanitized filename
         sanitized_name = self._sanitize_filename(job_name)
@@ -189,7 +200,8 @@ class StorageManager:
         self,
         project_id: int,
         pipeline_id: int,
-        pipeline_data: Dict[str, Any]
+        pipeline_data: Dict[str, Any],
+        project_name: Optional[str] = None
     ):
         """
         Save metadata for an entire pipeline.
@@ -198,6 +210,7 @@ class StorageManager:
             project_id (int): GitLab project ID
             pipeline_id (int): GitLab pipeline ID
             pipeline_data (Dict[str, Any]): Pipeline metadata
+            project_name (Optional[str]): GitLab project name for readability
 
         Creates/updates:
             {pipeline_dir}/metadata.json
@@ -206,6 +219,7 @@ class StorageManager:
             {
                 "pipeline_id": 789,
                 "project_id": 123,
+                "project_name": "my-app",
                 "status": "success",
                 "ref": "main",
                 "created_at": "2023-01-01T00:00:00Z",
@@ -213,7 +227,7 @@ class StorageManager:
                 "jobs": {...}
             }
         """
-        pipeline_dir = self.get_pipeline_directory(project_id, pipeline_id)
+        pipeline_dir = self.get_pipeline_directory(project_id, pipeline_id, project_name)
         metadata_path = pipeline_dir / "metadata.json"
 
         try:
@@ -225,11 +239,15 @@ class StorageManager:
                 metadata = {
                     "pipeline_id": pipeline_id,
                     "project_id": project_id,
+                    "project_name": project_name or "unknown",
                     "jobs": {}
                 }
 
             # Update with new pipeline data
             metadata.update(pipeline_data)
+            # Ensure project_name is in metadata
+            if project_name:
+                metadata["project_name"] = project_name
             metadata["last_updated"] = datetime.utcnow().isoformat()
 
             # Save metadata

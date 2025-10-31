@@ -118,23 +118,37 @@ class RequestIdFilter(logging.Filter):
 
 class PipeDelimitedFormatter(logging.Formatter):
     """
-    Custom formatter for pipe-delimited log format.
+    Custom formatter for pipe-delimited log format with aligned columns.
 
     Format: timestamp | level | logger | request_id | message | context
 
     Example:
-    2024-01-01 10:15:30.123 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345
+    2024-01-01 10:15:30.123 | INFO     | src.webhook_listener       | a1b2c3d4 | Webhook received | pipeline_id=12345
     """
 
+    # Column widths for alignment
+    LEVEL_WIDTH = 8
+    LOGGER_WIDTH = 30
+    REQUEST_ID_WIDTH = 8
+
     def format(self, record: logging.LogRecord) -> str:
-        """Format log record with pipe delimiters"""
-        # Get timestamp with milliseconds
+        """Format log record with pipe delimiters and aligned columns"""
+        # Get timestamp with milliseconds (fixed width: 23 chars)
         timestamp = datetime.fromtimestamp(record.created).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-        # Get basic fields
-        level = record.levelname
+        # Get basic fields with padding
+        level = record.levelname.ljust(self.LEVEL_WIDTH)
+
+        # Truncate or pad logger name
         logger = record.name
+        if len(logger) > self.LOGGER_WIDTH:
+            logger = logger[:self.LOGGER_WIDTH-3] + '...'
+        else:
+            logger = logger.ljust(self.LOGGER_WIDTH)
+
+        # Pad request ID
         request_id = getattr(record, 'request_id', 'N/A')
+        request_id = request_id.ljust(self.REQUEST_ID_WIDTH)
 
         # Format the main message
         message = record.getMessage()
@@ -143,7 +157,7 @@ class PipeDelimitedFormatter(logging.Formatter):
         context_parts = []
 
         # Standard extra fields we want to include
-        extra_fields = ['pipeline_id', 'project_id', 'job_id', 'event_type', 'source_ip',
+        extra_fields = ['pipeline_id', 'project_id', 'project_name', 'job_id', 'event_type', 'source_ip',
                        'duration_ms', 'status_code', 'operation', 'path', 'error_type']
 
         for field in extra_fields:

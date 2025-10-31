@@ -14,7 +14,7 @@ Module Dependencies:
 """
 
 import os
-from typing import Optional
+from typing import Optional, List
 from dataclasses import dataclass
 
 
@@ -32,6 +32,11 @@ class Config:
         retry_attempts (int): Number of retry attempts for failed API calls
         retry_delay (int): Delay in seconds between retry attempts
         log_level (str): Logging level (DEBUG, INFO, WARNING, ERROR)
+        log_save_pipeline_status (List[str]): Which pipeline statuses to save logs for
+        log_save_projects (List[str]): Whitelist of project IDs to save logs for (empty = all)
+        log_exclude_projects (List[str]): Blacklist of project IDs to exclude from logging
+        log_save_job_status (List[str]): Which job statuses to save logs for
+        log_save_metadata_always (bool): Whether to save metadata even if logs are filtered out
     """
     gitlab_url: str
     gitlab_token: str
@@ -41,6 +46,11 @@ class Config:
     retry_attempts: int
     retry_delay: int
     log_level: str
+    log_save_pipeline_status: List[str]
+    log_save_projects: List[str]
+    log_exclude_projects: List[str]
+    log_save_job_status: List[str]
+    log_save_metadata_always: bool
 
 
 class ConfigLoader:
@@ -99,6 +109,22 @@ class ConfigLoader:
         retry_delay = int(os.getenv('RETRY_DELAY', '2'))
         log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
 
+        # Log filtering settings
+        log_save_pipeline_status_str = os.getenv('LOG_SAVE_PIPELINE_STATUS', 'all')
+        log_save_pipeline_status = [s.strip().lower() for s in log_save_pipeline_status_str.split(',') if s.strip()]
+
+        log_save_projects_str = os.getenv('LOG_SAVE_PROJECTS', '')
+        log_save_projects = [s.strip() for s in log_save_projects_str.split(',') if s.strip()]
+
+        log_exclude_projects_str = os.getenv('LOG_EXCLUDE_PROJECTS', '')
+        log_exclude_projects = [s.strip() for s in log_exclude_projects_str.split(',') if s.strip()]
+
+        log_save_job_status_str = os.getenv('LOG_SAVE_JOB_STATUS', 'all')
+        log_save_job_status = [s.strip().lower() for s in log_save_job_status_str.split(',') if s.strip()]
+
+        log_save_metadata_always_str = os.getenv('LOG_SAVE_METADATA_ALWAYS', 'true').lower()
+        log_save_metadata_always = log_save_metadata_always_str in ['true', '1', 'yes', 'on']
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -116,7 +142,12 @@ class ConfigLoader:
             log_output_dir=log_output_dir,
             retry_attempts=retry_attempts,
             retry_delay=retry_delay,
-            log_level=log_level
+            log_level=log_level,
+            log_save_pipeline_status=log_save_pipeline_status,
+            log_save_projects=log_save_projects,
+            log_exclude_projects=log_exclude_projects,
+            log_save_job_status=log_save_job_status,
+            log_save_metadata_always=log_save_metadata_always
         )
 
     @staticmethod

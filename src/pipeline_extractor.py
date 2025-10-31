@@ -125,7 +125,9 @@ class PipelineExtractor:
 
         logger.info(
             f"Extracted info for pipeline {pipeline_info['pipeline_id']} "
-            f"(type: {pipeline_type.value}, status: {pipeline_info['status']})"
+            f"from project '{pipeline_info['project_name']}' "
+            f"(type: {pipeline_type.value}, status: {pipeline_info['status']})",
+            extra={'project_name': pipeline_info['project_name'], 'project_id': pipeline_info['project_id']}
         )
 
         return pipeline_info

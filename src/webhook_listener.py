@@ -322,9 +322,21 @@ async def webhook_handler(
         try:
             pipeline_info = pipeline_extractor.extract_pipeline_info(payload)
 
+            # Log request ID tracking info for easy correlation
+            logger.info(
+                f"Request ID {req_id} tracking pipeline {pipeline_info['pipeline_id']} "
+                f"from project '{pipeline_info['project_name']}' (ID: {pipeline_info['project_id']})",
+                extra={
+                    'pipeline_id': pipeline_info['pipeline_id'],
+                    'project_id': pipeline_info['project_id'],
+                    'project_name': pipeline_info['project_name']
+                }
+            )
+
             logger.info("Pipeline info extracted", extra={
                 'pipeline_id': pipeline_info['pipeline_id'],
                 'project_id': pipeline_info['project_id'],
+                'project_name': pipeline_info['project_name'],
                 'status': pipeline_info['status'],
                 'pipeline_type': pipeline_info['pipeline_type']
             })
@@ -477,10 +489,12 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
     pipeline_id = pipeline_info['pipeline_id']
     project_id = pipeline_info['project_id']
+    project_name = pipeline_info.get('project_name', 'unknown')
 
-    logger.info("Starting pipeline log extraction", extra={
+    logger.info(f"Starting pipeline log extraction for '{project_name}'", extra={
         'pipeline_id': pipeline_id,
         'project_id': project_id,
+        'project_name': project_name,
         'db_request_id': db_request_id
     })
 
@@ -492,13 +506,15 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
     try:
         # Save pipeline metadata
-        logger.debug("Saving pipeline metadata", extra={
+        logger.debug(f"Saving pipeline metadata for '{project_name}'", extra={
             'pipeline_id': pipeline_id,
-            'project_id': project_id
+            'project_id': project_id,
+            'project_name': project_name
         })
 
         storage_manager.save_pipeline_metadata(
             project_id=project_id,
+            project_name=project_name,
             pipeline_id=pipeline_id,
             pipeline_data={
                 "status": pipeline_info['status'],
@@ -516,9 +532,10 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         logger.debug("Pipeline metadata saved successfully")
 
         # Fetch all logs for the pipeline
-        logger.info("Fetching pipeline logs", extra={
+        logger.info(f"Fetching pipeline logs for '{project_name}'", extra={
             'pipeline_id': pipeline_id,
-            'project_id': project_id
+            'project_id': project_id,
+            'project_name': project_name
         })
 
         fetch_start = time.time()
@@ -552,6 +569,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
                 storage_manager.save_log(
                     project_id=project_id,
+                    project_name=project_name,
                     pipeline_id=pipeline_id,
                     job_id=job_id,
                     job_name=job_details['name'],
