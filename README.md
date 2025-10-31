@@ -161,16 +161,34 @@ sequenceDiagram
 - **Interactive API Docs**: Automatic Swagger UI and ReDoc documentation at `/docs` and `/redoc`
 - **Event Processing**: Identifies and processes different pipeline types (main, child, merge request)
 - **Smart Filtering**: Only processes completed pipelines (success/failed)
+- **Flexible Log Filtering**: Configure which logs to save based on:
+  - Pipeline status (all, failed, success, running, canceled, skipped)
+  - Project whitelist/blacklist (save specific projects or exclude noisy ones)
+  - Job status (all, failed, success, canceled, skipped)
+  - Optional metadata-only mode for tracking without storing logs
 - **Log Extraction**: Fetches logs for all jobs in a pipeline via GitLab API
+- **Advanced Logging System**:
+  - **Aligned log columns** for easy reading
+  - **Project names** in logs instead of just IDs
+  - **Request ID tracking** to trace pipeline processing across all log entries
+  - **Pipe-delimited format** for easy parsing and analysis
+  - **Multiple log files**: application.log, access.log, performance.log
+  - **Configurable log levels** (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  - **Automatic log rotation** with size limits
+  - **Sensitive data masking** for tokens and secrets
 - **Error Handling**:
   - Automatic retry with exponential backoff
   - Circuit breaker pattern for cascade failure prevention
   - Comprehensive error logging
-- **Structured Storage**: Organized directory structure with metadata files
+- **Structured Storage**:
+  - Organized by project name and ID for easy browsing
+  - Directory structure: `{project-name}_{id}/pipeline_{id}/`
+  - Metadata files with complete pipeline and job information
 - **Security**: Optional webhook secret token validation
 - **Background Processing**: Non-blocking webhook responses with FastAPI BackgroundTasks
 - **Health Monitoring**: Health check and statistics endpoints
 - **High Performance**: Async/await support for better concurrency
+- **Production Ready**: Docker containerization, comprehensive monitoring, and testing
 
 ## 📁 Project Structure
 
@@ -193,10 +211,14 @@ extract-build-logs/
 │   └── test_error_handler.py
 │
 ├── logs/                         # Output directory for extracted logs
-│   └── project_{id}/            # Organized by project
-│       └── pipeline_{id}/       # Then by pipeline
-│           ├── metadata.json    # Pipeline and job metadata
-│           └── job_{id}_{name}.log  # Individual job logs
+│   ├── {project-name}_{id}/     # Organized by project name and ID
+│   │   └── pipeline_{id}/       # Then by pipeline
+│   │       ├── metadata.json    # Pipeline and job metadata
+│   │       └── job_{id}_{name}.log  # Individual job logs
+│   ├── application.log          # Main application logs (aligned columns)
+│   ├── access.log               # Webhook access logs
+│   ├── performance.log          # Performance metrics
+│   └── monitoring.db            # Monitoring database
 │
 ├── config/                       # Configuration templates
 │   └── webhook_setup.md         # GitLab webhook setup guide
@@ -778,17 +800,69 @@ curl http://localhost:8000/monitor/summary
 Edit `.env` file:
 
 ```bash
-# Required
+# ============================================================================
+# REQUIRED SETTINGS
+# ============================================================================
 GITLAB_URL=https://gitlab.com
 GITLAB_TOKEN=your_gitlab_token_here
 
-# Optional
+# ============================================================================
+# OPTIONAL SETTINGS
+# ============================================================================
 WEBHOOK_PORT=8000
 WEBHOOK_SECRET=your_webhook_secret
 LOG_OUTPUT_DIR=./logs
 RETRY_ATTEMPTS=3
 RETRY_DELAY=2
 LOG_LEVEL=INFO
+
+# ============================================================================
+# LOG FILTERING CONFIGURATION (New!)
+# ============================================================================
+# Which pipeline statuses to save logs for
+# Options: all, failed, success, running, canceled, skipped
+# Multiple values: failed,canceled,skipped
+# Default: all (saves logs from all pipelines)
+LOG_SAVE_PIPELINE_STATUS=all
+
+# Which projects to save logs for (comma-separated project IDs)
+# Leave empty to save all projects
+# Example: 123,456,789
+LOG_SAVE_PROJECTS=
+
+# Which projects to exclude from logging (comma-separated project IDs)
+# Only used if LOG_SAVE_PROJECTS is empty
+# Example: 999,888
+LOG_EXCLUDE_PROJECTS=
+
+# Which job statuses to save logs for within a pipeline
+# Options: all, failed, success, canceled, skipped
+# Default: all (saves logs from all jobs)
+LOG_SAVE_JOB_STATUS=all
+
+# Save pipeline metadata even if logs are filtered out
+# Useful for tracking all pipelines even if only storing failed logs
+# Options: true, false
+# Default: true
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+**Common Filtering Scenarios:**
+
+```bash
+# 1. Save only failed pipeline logs (reduce storage by ~90%)
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+LOG_SAVE_METADATA_ALWAYS=true
+
+# 2. Save logs only for specific projects
+LOG_SAVE_PROJECTS=123,456,789
+
+# 3. Save all pipelines but only failed job logs
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=failed,canceled
+
+# 4. Exclude noisy test projects
+LOG_EXCLUDE_PROJECTS=999,888
 ```
 
 ### GitLab Webhook Setup
@@ -843,11 +917,30 @@ http://localhost:8000/redoc
 ### Monitor Logs
 
 ```bash
-# Watch server logs
-tail -f webhook_server.log
+# Watch application logs (aligned columns for easy reading)
+tail -f logs/application.log
+
+# Watch access logs
+tail -f logs/access.log
+
+# Watch performance logs
+tail -f logs/performance.log
 
 # Watch extracted logs directory
 watch -n 5 'ls -lah logs/'
+
+# Filter logs by request ID (trace a single pipeline)
+grep "4729a324" logs/application.log
+
+# Filter logs by project name
+grep "my-project" logs/application.log
+```
+
+**Example Log Output (Aligned Columns):**
+```
+2025-10-31 06:15:13.670 | INFO     | src.webhook_listener           | 4729a324 | Request ID 4729a324 tracking pipeline 1061175 from project 'my-app' (ID: 123)
+2025-10-31 06:15:13.670 | INFO     | src.pipeline_extractor         | 4729a324 | Extracted info for pipeline 1061175 from project 'my-app' (type: main, status: success)
+2025-10-31 06:15:13.700 | INFO     | src.webhook_listener           | 4729a324 | Starting pipeline log extraction for 'my-app'
 ```
 
 ### View Storage Statistics

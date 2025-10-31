@@ -1057,27 +1057,48 @@ The system includes a comprehensive logging infrastructure that tracks all opera
 ### Logging Overview
 
 **Features:**
+- ✅ **Aligned columns** for easy reading
+- ✅ **Project names** in logs instead of just IDs
+- ✅ **Request ID tracking** with project and pipeline information
 - ✅ Pipe-delimited plain text format for easy parsing
 - ✅ Multiple specialized log files (application, access, performance)
 - ✅ Request ID correlation across all logs
 - ✅ Automatic sensitive data masking (tokens, secrets)
 - ✅ Automatic log rotation with size limits
 - ✅ DEBUG level logging for detailed troubleshooting
+- ✅ **Flexible log filtering** by pipeline/job status and project
 - ✅ Both console and file output
 - ✅ Logs visible in Docker container output
 - ✅ Persistent storage across container restarts
 
-**Log Format:**
+**Log Format (Aligned Columns):**
 ```
-timestamp | level | logger | request_id | message | context
+timestamp              | level    | logger                          | req_id   | message                   | context
+2025-10-31 06:15:13.670 | INFO     | src.webhook_listener           | 4729a324 | Webhook received          | event_type=Pipeline Hook source_ip=192.168.1.100
 ```
 
-**Example:**
+**Column Widths:**
+- Timestamp: 23 chars (fixed)
+- Level: 8 chars (padded)
+- Logger: 30 chars (padded/truncated)
+- Request ID: 8 chars (padded)
+- Message: Variable
+- Context: Variable
+
+**Example (Showing Request ID Tracking):**
 ```
-2025-10-29 17:52:05.836 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345 project_id=100
-2025-10-29 17:52:06.123 | INFO | log_fetcher | a1b2c3d4 | Pipeline logs fetched | job_count=5 duration_ms=287
-2025-10-29 17:52:06.450 | ERROR | storage_manager | a1b2c3d4 | Failed to save log | job_id=789 error_type=IOError
+2025-10-31 06:15:13.670 | INFO     | src.webhook_listener           | 4729a324 | Request ID 4729a324 tracking pipeline 1061175 from project 'my-app' (ID: 123)
+2025-10-31 06:15:13.670 | INFO     | src.pipeline_extractor         | 4729a324 | Extracted info for pipeline 1061175 from project 'my-app' (type: main, status: success)
+2025-10-31 06:15:13.700 | INFO     | src.webhook_listener           | 4729a324 | Starting pipeline log extraction for 'my-app'
+2025-10-31 06:15:13.925 | INFO     | src.log_fetcher                | 4729a324 | Successfully fetched logs for 0 jobs
+2025-10-31 06:15:13.926 | INFO     | src.webhook_listener           | 4729a324 | Pipeline processing completed for 'my-app'
 ```
+
+**Benefits:**
+- Easy to trace a single pipeline across all log entries using Request ID
+- Project names make logs human-readable
+- Aligned columns improve readability for manual review
+- Pipe-delimited format allows easy parsing with grep, awk, or log analysis tools
 
 ---
 
@@ -1380,6 +1401,22 @@ grep -c "pipeline_id=12345" logs/application.log
 grep "pipeline_id=12345" logs/application.log > pipeline_12345_logs.txt
 ```
 
+#### Search by Project Name
+
+```bash
+# Find all logs for a specific project
+grep "project_name=my-app" logs/application.log
+
+# Search with project name in message
+grep "from project 'my-app'" logs/application.log
+
+# Extract all project names
+grep -oP "project_name=\K[^' |]+" logs/application.log | sort -u
+
+# Count logs by project
+grep -oP "project_name=\K[^' |]+" logs/application.log | sort | uniq -c | sort -rn
+```
+
 #### Search by Log Level
 
 ```bash
@@ -1672,6 +1709,114 @@ app_handler = logging.handlers.RotatingFileHandler(
 ```python
 # In src/logging_config.py, comment out access logger setup
 # access_logger.addHandler(access_handler)
+```
+
+---
+
+### Log Filtering Configuration
+
+The system supports flexible filtering to control which logs are saved, reducing storage requirements while maintaining visibility into important events.
+
+#### Filtering Options
+
+All filtering is configured via environment variables in `.env`:
+
+```bash
+# ============================================================================
+# LOG FILTERING CONFIGURATION
+# ============================================================================
+
+# Which pipeline statuses to save logs for
+# Options: all, failed, success, running, canceled, skipped
+# Multiple values: failed,canceled,skipped
+LOG_SAVE_PIPELINE_STATUS=all
+
+# Which projects to save logs for (comma-separated project IDs)
+# Leave empty to save all projects
+LOG_SAVE_PROJECTS=
+
+# Which projects to exclude from logging
+LOG_EXCLUDE_PROJECTS=
+
+# Which job statuses to save logs for
+# Options: all, failed, success, canceled, skipped
+LOG_SAVE_JOB_STATUS=all
+
+# Save pipeline metadata even if logs are filtered
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+#### Common Filtering Scenarios
+
+**Scenario 1: Save only failed pipeline logs (90% storage reduction)**
+```bash
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+LOG_SAVE_JOB_STATUS=all
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+**Result:**
+- Only pipelines with status `failed` or `canceled` will have logs saved
+- Metadata for all pipelines is still saved (for tracking)
+- Logs show: "Pipeline X skipped - status 'success' not in filter [failed,canceled]"
+
+**Scenario 2: Save logs only for specific projects**
+```bash
+LOG_SAVE_PROJECTS=123,456,789
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=all
+```
+
+**Result:**
+- Only projects with IDs 123, 456, or 789 will have logs saved
+- All other projects are skipped
+- Logs show: "Pipeline X from 'other-project' (ID: 999) skipped - not in whitelist [123,456,789]"
+
+**Scenario 3: Exclude noisy test projects**
+```bash
+LOG_EXCLUDE_PROJECTS=999,888
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=all
+```
+
+**Result:**
+- All projects except 999 and 888 will have logs saved
+- Logs show: "Pipeline X from 'test-project' (ID: 999) skipped - in blacklist [999,888]"
+
+**Scenario 4: Save all pipelines, but only failed job logs**
+```bash
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=failed,canceled
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+**Result:**
+- All pipeline metadata is saved
+- Only job logs with status `failed` or `canceled` are saved
+- Successful jobs are skipped
+- Logs show: "Job 456 'test-job' from 'my-app' skipped - status 'success' not in filter [failed,canceled]"
+
+#### Filtering Benefits
+
+- **Storage Savings**: Reduce storage by 70-90% by saving only failed pipelines
+- **Focus on Failures**: Makes it easier to find and debug problems
+- **Multi-Project Support**: Easily add/remove projects without code changes
+- **Flexible**: Combine filters for fine-grained control
+- **Visibility**: Always know what's being filtered via logs
+
+#### Monitoring Filtered Logs
+
+Check how many logs are being filtered:
+
+```bash
+# Count filtered pipelines
+grep "skipped - status" logs/application.log | wc -l
+
+# See which projects are being filtered
+grep "skipped - not in whitelist" logs/application.log
+
+# Count skipped jobs
+grep "Job.*skipped" logs/application.log | wc -l
 ```
 
 ---
