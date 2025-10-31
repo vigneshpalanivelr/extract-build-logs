@@ -32,20 +32,20 @@ def print_summary(monitor: PipelineMonitor, hours: int = 24):
     print(f"  PIPELINE MONITORING DASHBOARD - Last {hours} Hours")
     print("=" * 70)
     print(f"\nGenerated: {summary['generated_at']}")
-    print(f"\n📊 OVERALL STATISTICS")
+    print(f"\nOVERALL STATISTICS")
     print(f"   Total Requests:      {summary['total_requests']}")
     print(f"   Success Rate:        {summary['success_rate']}%")
     print(f"   Avg Processing Time: {summary['avg_processing_time_seconds']}s")
     print(f"   Total Jobs Processed: {summary['total_jobs_processed']}")
 
     # Status breakdown
-    print(f"\n📈 REQUESTS BY STATUS")
+    print(f"\nREQUESTS BY STATUS")
     status_data = [[status.title(), count] for status, count in summary['by_status'].items()]
     print(tabulate(status_data, headers=['Status', 'Count'], tablefmt='grid'))
 
     # Type breakdown
     if summary['by_type']:
-        print(f"\n🔀 REQUESTS BY PIPELINE TYPE")
+        print(f"\nREQUESTS BY PIPELINE TYPE")
         type_data = [[ptype.title(), count] for ptype, count in summary['by_type'].items()]
         print(tabulate(type_data, headers=['Type', 'Count'], tablefmt='grid'))
 
@@ -173,7 +173,7 @@ Examples:
 
     # Check if database exists
     if not Path(args.db).exists():
-        print(f"\n❌ Error: Monitoring database not found at {args.db}")
+        print(f"\n✗ Error: Monitoring database not found at {args.db}")
         print(f"   Make sure the webhook server has been running and processing requests.\n")
         sys.exit(1)
 
@@ -181,7 +181,7 @@ Examples:
     try:
         monitor = PipelineMonitor(args.db)
     except Exception as e:
-        print(f"\n❌ Error: Failed to initialize monitor: {e}\n")
+        print(f"\n✗ Error: Failed to initialize monitor: {e}\n")
         sys.exit(1)
 
     try:
@@ -198,7 +198,7 @@ Examples:
     except KeyboardInterrupt:
         print("\n\nInterrupted by user.\n")
     except Exception as e:
-        print(f"\n❌ Error: {e}\n")
+        print(f"\n✗ Error: {e}\n")
         sys.exit(1)
     finally:
         monitor.close()
@@ -209,7 +209,7 @@ if __name__ == "__main__":
     try:
         import tabulate
     except ImportError:
-        print("\n❌ Error: Required module 'tabulate' not found.")
+        print("\n✗ Error: Required module 'tabulate' not found.")
         print("   Install it with: pip install tabulate\n")
         sys.exit(1)
 

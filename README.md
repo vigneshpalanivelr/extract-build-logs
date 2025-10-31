@@ -2,56 +2,75 @@
 
 A production-ready webhook server that automatically extracts and stores GitLab pipeline logs with comprehensive error handling, retry logic, and structured metadata.
 
-## 📋 Table of Contents
+## Table of Contents
 
-- [Overview](#overview)
-- [Architecture](#architecture)
-  - [System Architecture Diagram](#system-architecture-diagram)
-  - [Data Flow Diagram](#data-flow-diagram)
-- [Features](#features)
-- [Project Structure](#project-structure)
-  - [Directory Structure After Processing](#directory-structure-after-processing)
-- [Module Documentation](#module-documentation)
-  - [Module Connection Diagram](#module-connection-diagram)
-  - [Files & Folder Structure](#files--folder-structure)
-  - [Module Functions & Data Flow](#module-functions--data-flow)
-- [Data Flow](#data-flow)
-  - [Complete Event Processing Flow](#complete-event-processing-flow)
-  - [Data Transformations](#data-transformations)
-- [Installation](#installation)
-  - [Prerequisites](#prerequisites)
-  - [Step-by-Step Setup](#step-by-step-setup)
-- [Docker Deployment](#docker-deployment)
-  - [Quick Start with Docker](#quick-start-with-docker)
-  - [Docker Commands](#docker-commands)
-  - [Docker Monitoring](#docker-monitoring)
-- [Configuration](#configuration)
-  - [Environment Variables](#environment-variables)
-  - [GitLab Webhook Setup](#gitlab-webhook-setup)
-- [Usage](#usage)
-  - [Start the Server](#start-the-server)
-  - [Verify Server is Running](#verify-server-is-running)
-  - [Access API Documentation](#access-api-documentation)
-  - [Monitor Logs](#monitor-logs)
-  - [View Storage Statistics](#view-storage-statistics)
-- [Monitoring & Tracking](#monitoring--tracking)
-  - [Quick Start](#quick-start-1)
-  - [What is Tracked](#what-is-tracked)
-  - [Monitoring API Endpoints](#monitoring-api-endpoints)
-  - [Database Location](#database-location)
-- [API Documentation](#api-documentation)
-  - [Webhook Events](#webhook-events)
-  - [Health & Stats Endpoints](#health--stats-endpoints)
-- [Testing](#testing)
-  - [Run All Tests](#run-all-tests)
-  - [Manual Testing](#manual-testing-1)
-- [Troubleshooting](#troubleshooting)
-  - [Common Problems](#common-problems)
-  - [Getting Help](#getting-help)
-- [Development](#development)
-- [Contributing](#contributing)
+- [GitLab Pipeline Log Extraction System](#gitlab-pipeline-log-extraction-system)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Architecture](#architecture)
+    - [System Architecture Diagram](#system-architecture-diagram)
+    - [Data Flow Diagram](#data-flow-diagram)
+  - [Features](#features)
+  - [Project Structure](#project-structure)
+    - [Directory Structure After Processing](#directory-structure-after-processing)
+  - [Module Documentation](#-module-documentation)
+    - [Module Connection Diagram](#module-connection-diagram)
+    - [Files \& Folder Structure](#files--folder-structure)
+      - [Core Application Files](#core-application-files)
+      - [Test Files](#test-files)
+    - [Module Functions \& Data Flow](#module-functions--data-flow)
+      - [1. webhook\_listener.py (Main Server)](#1-webhook_listenerpy-main-server)
+      - [2. pipeline\_extractor.py (Event Parser)](#2-pipeline_extractorpy-event-parser)
+      - [3. log\_fetcher.py (API Client)](#3-log_fetcherpy-api-client)
+      - [4. storage\_manager.py (File Storage)](#4-storage_managerpy-file-storage)
+      - [5. config\_loader.py (Configuration)](#5-config_loaderpy-configuration)
+      - [6. error\_handler.py (Retry Logic)](#6-error_handlerpy-retry-logic)
+  - [Data Flow](#data-flow)
+    - [Complete Event Processing Flow](#complete-event-processing-flow)
+    - [Data Transformations](#data-transformations)
+  - [Installation](#-installation)
+    - [Prerequisites](#prerequisites)
+    - [Step 1: Clone Repository](#step-1-clone-repository)
+    - [Step 2: Create Virtual Environment](#step-2-create-virtual-environment)
+    - [Step 3: Install Dependencies](#step-3-install-dependencies)
+    - [Step 4: Configure Environment](#step-4-configure-environment)
+    - [Step 5: Create GitLab Access Token](#step-5-create-gitlab-access-token)
+  - [Docker Deployment](#docker-deployment)
+    - [Quick Start with Docker](#quick-start-with-docker)
+    - [Docker Commands](#docker-commands)
+    - [Docker Monitoring](#docker-monitoring)
+  - [Configuration](#configuration)
+    - [Environment Variables](#environment-variables)
+    - [GitLab Webhook Setup](#gitlab-webhook-setup)
+  - [Usage](#usage)
+    - [Start the Server](#start-the-server)
+    - [Verify Server is Running](#verify-server-is-running)
+    - [Access API Documentation](#access-api-documentation)
+    - [Monitor Logs](#monitor-logs)
+    - [View Storage Statistics](#view-storage-statistics)
+  - [Monitoring \& Tracking](#monitoring--tracking)
+    - [Quick Start](#quick-start)
+    - [What is Tracked](#what-is-tracked)
+    - [Monitoring API Endpoints](#monitoring-api-endpoints)
+    - [Database Location](#database-location)
+  - [API Documentation](#api-documentation)
+    - [Webhook Events](#webhook-events)
+      - [POST /webhook](#post-webhook)
+      - [GET /health](#get-health)
+      - [GET /stats](#get-stats)
+  - [Testing](#testing)
+    - [Run All Tests](#run-all-tests)
+    - [Manual Testing](#manual-testing)
+  - [Troubleshooting](#-troubleshooting)
+    - [Server Won't Start](#server-wont-start)
+    - [Webhook Returns 401](#webhook-returns-401)
+    - [Logs Not Being Saved](#logs-not-being-saved)
+    - [API Calls Failing](#api-calls-failing)
+  - [Development](#development)
+    - [Adding New Features](#adding-new-features)
+  - [Contributing](#contributing)
 
-## 🎯 Overview
+## Overview
 
 This system provides a complete solution for:
 - Receiving GitLab webhook events for pipeline completion
@@ -60,7 +79,7 @@ This system provides a complete solution for:
 - Handling failures with exponential backoff retry logic
 - Supporting multiple pipeline types (main, child, merge request)
 
-## 🏗️ Architecture
+## Architecture
 
 ### System Architecture Diagram
 
@@ -155,7 +174,7 @@ sequenceDiagram
     Storage-->>Webhook: Processing Complete
 ```
 
-## ✨ Features
+## Features
 
 - **Modern Async Server**: FastAPI-based async server with automatic API documentation
 - **Interactive API Docs**: Automatic Swagger UI and ReDoc documentation at `/docs` and `/redoc`
@@ -190,7 +209,7 @@ sequenceDiagram
 - **High Performance**: Async/await support for better concurrency
 - **Production Ready**: Docker containerization, comprehensive monitoring, and testing
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 extract-build-logs/
@@ -248,7 +267,7 @@ logs/
         └── job_460_test.log
 ```
 
-## 📚 Module Documentation
+## Module Documentation
 
 ### Module Connection Diagram
 
@@ -539,7 +558,7 @@ def retry_on_failure(max_retries=3, base_delay=2.0):
 
 **Dependencies**: None
 
-## 🔄 Data Flow
+## Data Flow
 
 ### Complete Event Processing Flow
 
@@ -625,7 +644,7 @@ logs/project_123/pipeline_789/job_456_build.log
 logs/project_123/pipeline_789/metadata.json
 ```
 
-## 🚀 Installation
+## Installation
 
 ### Prerequisites
 
@@ -678,7 +697,7 @@ nano .env  # or your preferred editor
 
 ---
 
-## 🐳 Docker Deployment
+## Docker Deployment
 
 **Recommended for production deployments.** Docker provides isolated environment, easy deployment, and automatic restarts.
 
@@ -782,18 +801,18 @@ curl http://localhost:8000/monitor/summary
 - **Data persists** even when container is removed
 
 **Benefits:**
-- ✅ Isolated environment
-- ✅ Automatic restart on failure
-- ✅ No Python virtual environment needed
-- ✅ Easy updates (rebuild + restart)
-- ✅ Resource limits enforced
-- ✅ Consistent across environments
+- ✓ Isolated environment
+- ✓ Automatic restart on failure
+- ✓ No Python virtual environment needed
+- ✓ Easy updates (rebuild + restart)
+- ✓ Resource limits enforced
+- ✓ Consistent across environments
 
 **For detailed Docker operations, see:** [OPERATIONS.md - Docker Operations](OPERATIONS.md#docker-operations)
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 ### Environment Variables
 
@@ -877,7 +896,7 @@ LOG_EXCLUDE_PROJECTS=999,888
 
 See [config/webhook_setup.md](config/webhook_setup.md) for detailed instructions.
 
-## 📖 Usage
+## Usage
 
 ### Start the Server
 
@@ -949,7 +968,7 @@ grep "my-project" logs/application.log
 curl http://localhost:8000/stats
 ```
 
-## 📊 Monitoring & Tracking
+## Monitoring & Tracking
 
 The system automatically tracks **every webhook request** and processing status. See [OPERATIONS.md](OPERATIONS.md) (Part 2: Monitoring & Tracking) for complete documentation.
 
@@ -968,13 +987,13 @@ python monitor_dashboard.py --export pipeline_data.csv
 
 ### What is Tracked
 
-- ✅ Total requests received
-- ✅ Processing status (queued, processing, completed, failed, skipped)
-- ✅ Success/failure rates
-- ✅ Processing times
-- ✅ Job counts per pipeline
-- ✅ Error messages
-- ✅ Pipeline types
+- ✓ Total requests received
+- ✓ Processing status (queued, processing, completed, failed, skipped)
+- ✓ Success/failure rates
+- ✓ Processing times
+- ✓ Job counts per pipeline
+- ✓ Error messages
+- ✓ Pipeline types
 
 ### Monitoring API Endpoints
 
@@ -1000,7 +1019,7 @@ You can query it directly with SQL or use the provided CLI dashboard.
 
 **For complete debugging, monitoring documentation, and examples, see [OPERATIONS.md](OPERATIONS.md)**
 
-## 📡 API Documentation
+## API Documentation
 
 ### Webhook Events
 
@@ -1059,7 +1078,7 @@ Get storage statistics.
 }
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Run All Tests
 
@@ -1088,7 +1107,7 @@ curl -X POST http://localhost:8000/webhook \
   -d '{"object_kind":"pipeline","object_attributes":{"id":123,"status":"success"}}'
 ```
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Server Won't Start
 
@@ -1133,7 +1152,7 @@ chmod 755 logs
 - Check token hasn't expired
 - Ensure `GITLAB_URL` is correct
 
-## 📝 Development
+## Development
 
 ### Adding New Features
 
@@ -1142,7 +1161,7 @@ chmod 755 logs
 3. Update module documentation in README
 4. Update architecture diagrams if needed
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create feature branch
@@ -1151,5 +1170,3 @@ chmod 755 logs
 5. Open Pull Request
 
 ---
-
-**Built with ❤️ for reliable GitLab pipeline log extraction**

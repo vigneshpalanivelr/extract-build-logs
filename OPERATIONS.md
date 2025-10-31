@@ -523,19 +523,19 @@ The system includes a comprehensive logging infrastructure that tracks all opera
 ### Logging Overview
 
 **Features:**
-- ✅ **Aligned columns** for easy reading
-- ✅ **Project names** in logs instead of just IDs
-- ✅ **Request ID tracking** with project and pipeline information
-- ✅ Pipe-delimited plain text format for easy parsing
-- ✅ Multiple specialized log files (application, access, performance)
-- ✅ Request ID correlation across all logs
-- ✅ Automatic sensitive data masking (tokens, secrets)
-- ✅ Automatic log rotation with size limits
-- ✅ DEBUG level logging for detailed troubleshooting
-- ✅ **Flexible log filtering** by pipeline/job status and project
-- ✅ Both console and file output
-- ✅ Logs visible in Docker container output
-- ✅ Persistent storage across container restarts
+- ✓ **Aligned columns** for easy reading
+- ✓ **Project names** in logs instead of just IDs
+- ✓ **Request ID tracking** with project and pipeline information
+- ✓ Pipe-delimited plain text format for easy parsing
+- ✓ Multiple specialized log files (application, access, performance)
+- ✓ Request ID correlation across all logs
+- ✓ Automatic sensitive data masking (tokens, secrets)
+- ✓ Automatic log rotation with size limits
+- ✓ DEBUG level logging for detailed troubleshooting
+- ✓ **Flexible log filtering** by pipeline/job status and project
+- ✓ Both console and file output
+- ✓ Logs visible in Docker container output
+- ✓ Persistent storage across container restarts
 
 **Log Format (Aligned Columns):**
 ```
@@ -676,12 +676,12 @@ After rotation:
 ```
 
 **Key Points:**
-- ✅ Rotation happens automatically in real-time
-- ✅ No application restart required
-- ✅ No interruption to logging
-- ✅ Old files are numbered sequentially
-- ✅ Oldest file (beyond backup count) is deleted
-- ✅ You always have current file + N backups
+- ✓ Rotation happens automatically in real-time
+- ✓ No application restart required
+- ✓ No interruption to logging
+- ✓ Old files are numbered sequentially
+- ✓ Oldest file (beyond backup count) is deleted
+- ✓ You always have current file + N backups
 
 #### Rotation Settings
 
@@ -758,10 +758,10 @@ docker run -d \
 ```
 
 **This means:**
-- ✅ Logs survive container deletion
-- ✅ Logs survive container recreation
-- ✅ Logs survive host reboots
-- ✅ You can access logs from host even when container is stopped
+- ✓ Logs survive container deletion
+- ✓ Logs survive container recreation
+- ✓ Logs survive host reboots
+- ✓ You can access logs from host even when container is stopped
 
 ```bash
 # View logs from host (even when container is stopped)
@@ -1491,12 +1491,12 @@ Before asking for help, verify:
 The system automatically tracks **every webhook request** and maintains a complete history in a SQLite database.
 
 **What you get:**
-- ✅ Request counts and rates
-- ✅ Processing status tracking
-- ✅ Success/failure metrics
-- ✅ Performance data (processing times)
-- ✅ Error tracking with messages
-- ✅ Export capabilities (CSV, JSON, SQL)
+- ✓ Request counts and rates
+- ✓ Processing status tracking
+- ✓ Success/failure metrics
+- ✓ Performance data (processing times)
+- ✓ Error tracking with messages
+- ✓ Export capabilities (CSV, JSON, SQL)
 
 **Access methods:**
 1. **CLI Dashboard** - `python monitor_dashboard.py`
@@ -1576,13 +1576,13 @@ python monitor_dashboard.py --export data.csv --hours 24
 
 Generated: 2024-01-01T12:00:00Z
 
-📊 OVERALL STATISTICS
+OVERALL STATISTICS
    Total Requests:      150
    Success Rate:        92.3%
    Avg Processing Time: 12.5s
    Total Jobs Processed: 450
 
-📈 REQUESTS BY STATUS
+REQUESTS BY STATUS
 ╔═══════════╦═══════╗
 ║ Status    ║ Count ║
 ╠═══════════╬═══════╣
@@ -1592,7 +1592,7 @@ Generated: 2024-01-01T12:00:00Z
 ║ Processing║     5 ║
 ╚═══════════╩═══════╝
 
-🔀 REQUESTS BY PIPELINE TYPE
+REQUESTS BY PIPELINE TYPE
 ╔════════════════╦═══════╗
 ║ Type           ║ Count ║
 ╠════════════════╬═══════╣

@@ -67,7 +67,7 @@ http://your-server-ip:8000/webhook
 ### 4. Select Trigger Events
 
 **Enable only Pipeline events:**
-- ✅ **Pipeline events** (REQUIRED)
+- ✓ **Pipeline events** (REQUIRED)
 
 Disable all other events unless you plan to handle them.
 
