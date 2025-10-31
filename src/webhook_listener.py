@@ -166,6 +166,112 @@ def validate_webhook_secret(payload: bytes, signature: Optional[str]) -> bool:
     return is_valid
 
 
+def should_save_pipeline_logs(pipeline_info: Dict[str, Any]) -> bool:
+    """
+    Determine if logs should be saved for this pipeline based on filtering config.
+
+    Args:
+        pipeline_info: Pipeline information dictionary
+
+    Returns:
+        bool: True if logs should be saved
+
+    Checks:
+        1. Pipeline status filter (LOG_SAVE_PIPELINE_STATUS)
+        2. Project whitelist (LOG_SAVE_PROJECTS)
+        3. Project blacklist (LOG_EXCLUDE_PROJECTS)
+    """
+    pipeline_status = pipeline_info.get('status', '').lower()
+    project_id = str(pipeline_info.get('project_id', ''))
+    project_name = pipeline_info.get('project_name', 'unknown')
+
+    # Check pipeline status filter
+    if 'all' not in config.log_save_pipeline_status:
+        if pipeline_status not in config.log_save_pipeline_status:
+            logger.info(
+                f"Pipeline {pipeline_info['pipeline_id']} from '{project_name}' skipped - "
+                f"status '{pipeline_status}' not in filter {config.log_save_pipeline_status}",
+                extra={
+                    'pipeline_id': pipeline_info['pipeline_id'],
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'status': pipeline_status,
+                    'filter': 'pipeline_status'
+                }
+            )
+            return False
+
+    # Check project whitelist
+    if config.log_save_projects:
+        if project_id not in config.log_save_projects:
+            logger.info(
+                f"Pipeline {pipeline_info['pipeline_id']} from '{project_name}' (ID: {project_id}) skipped - "
+                f"not in whitelist {config.log_save_projects}",
+                extra={
+                    'pipeline_id': pipeline_info['pipeline_id'],
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'filter': 'project_whitelist'
+                }
+            )
+            return False
+
+    # Check project blacklist (only if whitelist is empty)
+    if not config.log_save_projects and config.log_exclude_projects:
+        if project_id in config.log_exclude_projects:
+            logger.info(
+                f"Pipeline {pipeline_info['pipeline_id']} from '{project_name}' (ID: {project_id}) skipped - "
+                f"in blacklist {config.log_exclude_projects}",
+                extra={
+                    'pipeline_id': pipeline_info['pipeline_id'],
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'filter': 'project_blacklist'
+                }
+            )
+            return False
+
+    return True
+
+
+def should_save_job_log(job_details: Dict[str, Any], pipeline_info: Dict[str, Any]) -> bool:
+    """
+    Determine if a specific job log should be saved based on filtering config.
+
+    Args:
+        job_details: Job information dictionary
+        pipeline_info: Pipeline information dictionary
+
+    Returns:
+        bool: True if job log should be saved
+
+    Checks:
+        1. Job status filter (LOG_SAVE_JOB_STATUS)
+    """
+    job_status = job_details.get('status', '').lower()
+    job_id = job_details.get('id')
+    job_name = job_details.get('name', 'unknown')
+    project_name = pipeline_info.get('project_name', 'unknown')
+
+    # Check job status filter
+    if 'all' not in config.log_save_job_status:
+        if job_status not in config.log_save_job_status:
+            logger.debug(
+                f"Job {job_id} '{job_name}' from '{project_name}' skipped - "
+                f"status '{job_status}' not in filter {config.log_save_job_status}",
+                extra={
+                    'job_id': job_id,
+                    'job_name': job_name,
+                    'project_name': project_name,
+                    'status': job_status,
+                    'filter': 'job_status'
+                }
+            )
+            return False
+
+    return True
+
+
 @app.get('/health')
 async def health_check():
     """
@@ -505,31 +611,56 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
     logger.debug("Request status updated to PROCESSING")
 
     try:
-        # Save pipeline metadata
-        logger.debug(f"Saving pipeline metadata for '{project_name}'", extra={
-            'pipeline_id': pipeline_id,
-            'project_id': project_id,
-            'project_name': project_name
-        })
+        # Check if logs should be saved based on filtering config
+        save_logs = should_save_pipeline_logs(pipeline_info)
 
-        storage_manager.save_pipeline_metadata(
-            project_id=project_id,
-            project_name=project_name,
-            pipeline_id=pipeline_id,
-            pipeline_data={
-                "status": pipeline_info['status'],
-                "ref": pipeline_info['ref'],
-                "sha": pipeline_info['sha'],
-                "source": pipeline_info['source'],
-                "pipeline_type": pipeline_info['pipeline_type'],
-                "created_at": pipeline_info['created_at'],
-                "finished_at": pipeline_info['finished_at'],
-                "duration": pipeline_info['duration'],
-                "user": pipeline_info['user'],
-                "stages": pipeline_info['stages']
-            }
-        )
-        logger.debug("Pipeline metadata saved successfully")
+        # Save metadata (always if configured, or if logs will be saved)
+        if save_logs or config.log_save_metadata_always:
+            logger.debug(f"Saving pipeline metadata for '{project_name}'", extra={
+                'pipeline_id': pipeline_id,
+                'project_id': project_id,
+                'project_name': project_name
+            })
+
+            storage_manager.save_pipeline_metadata(
+                project_id=project_id,
+                project_name=project_name,
+                pipeline_id=pipeline_id,
+                pipeline_data={
+                    "status": pipeline_info['status'],
+                    "ref": pipeline_info['ref'],
+                    "sha": pipeline_info['sha'],
+                    "source": pipeline_info['source'],
+                    "pipeline_type": pipeline_info['pipeline_type'],
+                    "created_at": pipeline_info['created_at'],
+                    "finished_at": pipeline_info['finished_at'],
+                    "duration": pipeline_info['duration'],
+                    "user": pipeline_info['user'],
+                    "stages": pipeline_info['stages']
+                }
+            )
+            logger.debug("Pipeline metadata saved successfully")
+
+        # Skip log fetching if filtered out
+        if not save_logs:
+            logger.info(
+                f"Pipeline {pipeline_id} from '{project_name}' - logs filtered, only metadata saved",
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'filtered': True
+                }
+            )
+            # Mark as completed with no jobs processed
+            monitor.update_request(
+                request_id=db_request_id,
+                status=RequestStatus.COMPLETED,
+                processing_time=time.time() - start_time,
+                success_count=0,
+                error_count=0
+            )
+            return
 
         # Fetch all logs for the pipeline
         logger.info(f"Fetching pipeline logs for '{project_name}'", extra={
@@ -549,9 +680,10 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             'duration_ms': fetch_duration_ms
         })
 
-        # Save each job log
+        # Save each job log (with filtering)
         success_count = 0
         error_count = 0
+        skipped_count = 0
         save_start = time.time()
 
         for job_id, job_data in all_logs.items():
@@ -559,6 +691,11 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                 job_details = job_data['details']
                 log_content = job_data['log']
                 log_size = len(log_content)
+
+                # Check if this job should be saved based on filtering
+                if not should_save_job_log(job_details, pipeline_info):
+                    skipped_count += 1
+                    continue
 
                 logger.debug("Saving job log", extra={
                     'pipeline_id': pipeline_id,
@@ -602,13 +739,22 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         save_duration_ms = int((time.time() - save_start) * 1000)
         total_duration_ms = int((time.time() - start_time) * 1000)
 
-        logger.info("Pipeline processing completed", extra={
+        logger.info(f"Pipeline processing completed for '{project_name}'", extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
+            'project_name': project_name,
             'success_count': success_count,
             'error_count': error_count,
+            'skipped_count': skipped_count,
             'total_jobs': job_count
         })
+
+        if skipped_count > 0:
+            logger.info(f"Skipped {skipped_count} job(s) due to filtering", extra={
+                'pipeline_id': pipeline_id,
+                'project_name': project_name,
+                'skipped_count': skipped_count
+            })
 
         # Log summary
         summary = pipeline_extractor.get_pipeline_summary(pipeline_info)
@@ -618,12 +764,14 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         perf_logger.info("Pipeline processing metrics", extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
+            'project_name': project_name,
             'total_duration_ms': total_duration_ms,
             'fetch_duration_ms': fetch_duration_ms,
             'save_duration_ms': save_duration_ms,
             'job_count': job_count,
             'success_count': success_count,
             'error_count': error_count,
+            'skipped_count': skipped_count,
             'operation': 'pipeline_processing'
         })
 
