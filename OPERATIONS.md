@@ -368,9 +368,9 @@ nano .env  # Edit with your settings
 
 **Expected Output:**
 ```
-[INFO] Building Docker image: gitlab-pipeline-extractor
+[INFO] Building Docker image: bfa-gitlab-pipeline-extractor
 [SUCCESS] Image built successfully!
-[INFO] Starting new container: gitlab-pipeline-extractor
+[INFO] Starting new container: bfa-gitlab-pipeline-extractor
 [SUCCESS] Container started successfully!
 [INFO] Webhook endpoint: http://localhost:8000/webhook
 [INFO] Health check: http://localhost:8000/health
@@ -427,7 +427,7 @@ abc123def456   Up 2 hours      0.0.0.0:8000->8000/tcp
 
 [INFO] Resource usage:
 CONTAINER                      CPU %     MEM USAGE / LIMIT     NET I/O
-gitlab-pipeline-extractor      0.50%     125MiB / 1GiB         1.5kB / 2.3kB
+bfa-gitlab-pipeline-extractor      0.50%     125MiB / 1GiB         1.5kB / 2.3kB
 ```
 
 ### Monitoring in Docker
@@ -518,10 +518,10 @@ curl -X POST http://localhost:8000/webhook \
 ls -la .env
 
 # Verify image exists
-docker images | grep gitlab-pipeline-extractor
+docker images | grep bfa-gitlab-pipeline-extractor
 
 # Check Docker logs
-docker logs gitlab-pipeline-extractor
+docker logs bfa-gitlab-pipeline-extractor
 
 # Remove and recreate
 ./manage-container.py remove
@@ -548,10 +548,10 @@ echo "WEBHOOK_PORT=8001" >> .env
 **Container unhealthy:**
 ```bash
 # Check health status
-docker inspect --format='{{.State.Health.Status}}' gitlab-pipeline-extractor
+docker inspect --format='{{.State.Health.Status}}' bfa-gitlab-pipeline-extractor
 
 # View health check logs
-docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' gitlab-pipeline-extractor
+docker inspect --format='{{range .State.Health.Log}}{{.Output}}{{end}}' bfa-gitlab-pipeline-extractor
 
 # Check application logs
 ./manage-container.py logs
@@ -578,7 +578,7 @@ chmod 777 ./logs
 **Logs not persisting:**
 ```bash
 # Verify volume mount
-docker inspect gitlab-pipeline-extractor | grep -A 10 Mounts
+docker inspect bfa-gitlab-pipeline-extractor | grep -A 10 Mounts
 
 # Check if logs directory exists on host
 ls -la ./logs
@@ -598,7 +598,7 @@ cat .env
 curl -H "PRIVATE-TOKEN: $GITLAB_TOKEN" $GITLAB_URL/api/v4/projects
 
 # Verify network connectivity
-docker exec gitlab-pipeline-extractor curl -I https://gitlab.com
+docker exec bfa-gitlab-pipeline-extractor curl -I https://gitlab.com
 ```
 
 **Update after code changes:**
@@ -616,7 +616,7 @@ docker exec gitlab-pipeline-extractor curl -I https://gitlab.com
 **View resource usage over time:**
 ```bash
 # Real-time stats
-docker stats gitlab-pipeline-extractor
+docker stats bfa-gitlab-pipeline-extractor
 
 # Or use management script
 ./manage-container.py status
@@ -1297,13 +1297,13 @@ View logs in real-time from Docker console:
 ./manage-container.py logs
 
 # Or directly with Docker
-docker logs -f gitlab-pipeline-extractor
+docker logs -f bfa-gitlab-pipeline-extractor
 
 # Last 100 lines
-docker logs --tail 100 gitlab-pipeline-extractor
+docker logs --tail 100 bfa-gitlab-pipeline-extractor
 
 # Logs since specific time
-docker logs --since "2025-10-29T10:00:00" gitlab-pipeline-extractor
+docker logs --since "2025-10-29T10:00:00" bfa-gitlab-pipeline-extractor
 ```
 
 **What you see:** Console handler output (respects LOG_LEVEL from .env configuration)
@@ -1682,7 +1682,7 @@ app_handler = logging.handlers.RotatingFileHandler(
 
 ```bash
 # Check Docker container logs
-docker logs gitlab-pipeline-extractor
+docker logs bfa-gitlab-pipeline-extractor
 
 # Check if log directory has permission issues
 ls -la ./logs
@@ -1703,7 +1703,7 @@ touch ./logs/test.txt && rm ./logs/test.txt
 cat .env | grep LOG_DIR
 
 # Check Docker volume mount
-docker inspect gitlab-pipeline-extractor | grep -A 5 Mounts
+docker inspect bfa-gitlab-pipeline-extractor | grep -A 5 Mounts
 
 # Verify inside container
 ./manage-container.py shell

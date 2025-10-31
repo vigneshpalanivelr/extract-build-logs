@@ -58,8 +58,8 @@ except ImportError as e:
 
 
 # Constants
-IMAGE_NAME = "gitlab-pipeline-extractor"
-CONTAINER_NAME = "gitlab-pipeline-extractor"
+IMAGE_NAME = "bfa-gitlab-pipeline-extractor"
+CONTAINER_NAME = "bfa-gitlab-pipeline-extractor"
 LOGS_DIR = "./logs"
 ENV_FILE = ".env"
 
@@ -708,13 +708,14 @@ def open_shell(client: docker.DockerClient) -> bool:
         return False
 
 
-def remove_container(client: docker.DockerClient, force: bool = False) -> bool:
+def remove_container(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:
     """
     Remove container.
 
     Args:
         client: Docker client
         force: If True, skip confirmation
+        force_remove: If True, force remove even if container is running/restarting
 
     Returns:
         True if successful, False otherwise
@@ -730,12 +731,22 @@ def remove_container(client: docker.DockerClient, force: bool = False) -> bool:
                 console.print("[blue]Cancelled.[/blue]")
                 return False
 
-        # Stop first
-        stop_container(client)
-
         console.print(f"[blue]Removing container:[/blue] {CONTAINER_NAME}")
         container = client.containers.get(CONTAINER_NAME)
-        container.remove()
+
+        # Try to stop first (if not force_remove)
+        if not force_remove:
+            try:
+                if container.status in ['running', 'restarting']:
+                    console.print("[blue]Stopping container first...[/blue]")
+                    container.stop(timeout=10)
+            except Exception as e:
+                console.print(f"[yellow]⚠️  Could not stop container: {e}[/yellow]")
+                console.print("[yellow]Attempting force removal...[/yellow]")
+                force_remove = True
+
+        # Remove container (with force if needed)
+        container.remove(force=force_remove)
 
         console.print("[bold green]✅ Container removed![/bold green]")
         return True
@@ -745,16 +756,18 @@ def remove_container(client: docker.DockerClient, force: bool = False) -> bool:
         return True
     except APIError as e:
         console.print(f"[bold red]❌ Failed to remove container:[/bold red] {str(e)}", style="red")
+        console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
         return False
 
 
-def cleanup(client: docker.DockerClient, force: bool = False) -> bool:
+def cleanup(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:
     """
     Remove container and image.
 
     Args:
         client: Docker client
         force: If True, skip confirmation
+        force_remove: If True, force remove even if container is running/restarting
 
     Returns:
         True if successful, False otherwise
@@ -765,13 +778,14 @@ def cleanup(client: docker.DockerClient, force: bool = False) -> bool:
             console.print("[blue]Cancelled.[/blue]")
             return False
 
-    # Remove container first
-    remove_container(client, force=True)
+    # Remove container first (with force_remove flag)
+    remove_container(client, force=True, force_remove=force_remove)
 
     # Remove image
     try:
         console.print(f"[blue]Removing image:[/blue] {IMAGE_NAME}")
-        client.images.remove(IMAGE_NAME)
+        # Force remove image if needed
+        client.images.remove(IMAGE_NAME, force=force_remove)
         console.print("[bold green]✅ Image removed![/bold green]")
         return True
     except ImageNotFound:
@@ -779,6 +793,8 @@ def cleanup(client: docker.DockerClient, force: bool = False) -> bool:
         return True
     except APIError as e:
         console.print(f"[bold red]❌ Failed to remove image:[/bold red] {str(e)}", style="red")
+        if not force_remove:
+            console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
         return False
 
 
@@ -1081,7 +1097,8 @@ def cmd_remove(args):
     if not client:
         sys.exit(EXIT_DOCKER_ERROR)
 
-    success = remove_container(client, args.force)
+    force_remove = getattr(args, 'force_remove', False)
+    success = remove_container(client, args.force, force_remove=force_remove)
     sys.exit(EXIT_SUCCESS if success else EXIT_DOCKER_ERROR)
 
 
@@ -1092,7 +1109,8 @@ def cmd_cleanup(args):
     if not client:
         sys.exit(EXIT_DOCKER_ERROR)
 
-    success_result = cleanup(client, args.force)
+    force_remove = getattr(args, 'force_remove', False)
+    success_result = cleanup(client, args.force, force_remove=force_remove)
     sys.exit(EXIT_SUCCESS if success_result else EXIT_DOCKER_ERROR)
 
 
@@ -1194,11 +1212,13 @@ For more information, see OPERATIONS.md
     # remove command
     parser_remove = subparsers.add_parser('remove', help='Remove the container (keeps logs)')
     parser_remove.add_argument('-f', '--force', action='store_true', help='Skip confirmation')
+    parser_remove.add_argument('--force-remove', action='store_true', help='Force remove even if container is running/restarting')
     parser_remove.set_defaults(func=cmd_remove)
 
     # cleanup command
     parser_cleanup = subparsers.add_parser('cleanup', help='Remove container and image (keeps logs)')
     parser_cleanup.add_argument('-f', '--force', action='store_true', help='Skip confirmation')
+    parser_cleanup.add_argument('--force-remove', action='store_true', help='Force remove even if container is running/restarting')
     parser_cleanup.set_defaults(func=cmd_cleanup)
 
     # monitor command
