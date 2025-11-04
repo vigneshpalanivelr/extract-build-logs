@@ -1,0 +1,49 @@
+# Pylint Configuration
+# Comprehensive Python linting
+
+[MASTER]
+jobs=4
+suggestion-mode=yes
+unsafe-load-any-extension=no
+
+[MESSAGES CONTROL]
+disable=
+    C0114,  # missing-module-docstring
+    C0115,  # missing-class-docstring
+    C0116,  # missing-function-docstring
+    R0913,  # too-many-arguments
+    R0914,  # too-many-locals
+    R0915,  # too-many-statements
+    R0903,  # too-few-public-methods
+    W0212,  # protected-access (sometimes needed in tests)
+    C0103,  # invalid-name (for short variable names)
+    R0801,  # duplicate-code
+
+[FORMAT]
+max-line-length=120
+indent-string='    '
+max-module-lines=1500
+
+[BASIC]
+good-names=i,j,k,ex,Run,_,id,db,pk,ip,df
+
+[DESIGN]
+max-args=8
+max-attributes=10
+max-bool-expr=5
+max-branches=15
+max-locals=20
+max-parents=7
+max-public-methods=25
+max-returns=6
+max-statements=60
+min-public-methods=0
+
+[TYPECHECK]
+ignored-modules=requests,docker,fastapi,pytest
+
+[SIMILARITIES]
+min-similarity-lines=4
+ignore-comments=yes
+ignore-docstrings=yes
+ignore-imports=yes

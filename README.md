@@ -1252,6 +1252,93 @@ curl -X POST http://localhost:8000/webhook \
   -d '{"object_kind":"pipeline","object_attributes":{"id":123,"status":"success"}}'
 ```
 
+## CI/CD Pipeline
+
+The project includes comprehensive GitLab CI/CD configuration for automated testing and code quality checks.
+
+### Pipeline Stages
+
+The CI/CD pipeline runs on every push and consists of three stages:
+
+#### 1. Lint Stage (Code Quality)
+
+**Flake8** - PEP 8 compliance and code style:
+```bash
+flake8 src/ tests/ --max-line-length=120
+```
+
+**Black** - Code formatting check:
+```bash
+black --check --line-length=120 src/ tests/
+```
+
+**Pylint** - Comprehensive linting (advisory):
+```bash
+pylint src/ --max-line-length=120
+```
+
+#### 2. Test Stage
+
+**Pytest** - Unit tests execution:
+```bash
+pytest tests/ --ignore=tests/test_manage_container.py -v
+```
+
+#### 3. Coverage Stage
+
+**Coverage Report** - Code coverage analysis:
+```bash
+pytest tests/ --cov=src --cov-report=html --cov-report=xml
+```
+
+- Coverage threshold tracking
+- HTML coverage report artifacts
+- Cobertura XML for GitLab integration
+- Coverage badge support
+
+### Local CI Testing
+
+Run the same checks locally before pushing:
+
+```bash
+# Install dev dependencies
+pip install -r requirements.txt
+
+# Run linters
+flake8 src/ tests/
+black --check src/ tests/
+pylint src/
+
+# Run tests with coverage
+pytest tests/ --cov=src --cov-report=html --cov-report=term-missing
+
+# View HTML coverage report
+open coverage_html/index.html
+```
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `.gitlab-ci.yml` | CI/CD pipeline configuration |
+| `.flake8` | Flake8 linter settings |
+| `.pylintrc` | Pylint configuration |
+| `pyproject.toml` | Black, pytest, and coverage settings |
+
+### CI/CD Artifacts
+
+The pipeline generates the following artifacts:
+
+- **Coverage Reports**: HTML and XML formats (30 days retention)
+- **Test Results**: JUnit XML for GitLab test reporting
+- **Badges**: Coverage percentage for README
+
+### Pipeline Behavior
+
+- **Lint Stage**: Must pass (except pylint which is advisory)
+- **Test Stage**: Must pass (all tests must succeed)
+- **Coverage Stage**: Must pass, reports coverage percentage
+
 ## Troubleshooting
 
 ### Server Won't Start

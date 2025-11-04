@@ -216,6 +216,14 @@ logs/
 # Webhook server logs
 webhook_server.log
 
+# CI/CD artifacts
+coverage_html/
+report.xml
+coverage.xml
+.coverage*
+bandit-report.json
+*.junit.xml
+
 # IDE specific
 .vscode/
 .idea/

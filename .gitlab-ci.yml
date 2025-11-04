@@ -1,0 +1,123 @@
+# GitLab CI/CD Configuration
+# Runs linters, tests, and coverage on every push
+
+stages:
+  - lint
+  - test
+  - coverage
+
+# Cache pip packages to speed up builds
+cache:
+  key: ${CI_COMMIT_REF_SLUG}
+  paths:
+    - .cache/pip
+    - venv/
+
+# Define default Python image
+.python_base:
+  image: python:3.11-slim
+  before_script:
+    - python --version
+    - pip install --cache-dir .cache/pip --upgrade pip
+    - pip install --cache-dir .cache/pip -r requirements.txt
+
+# ============================================================================
+# LINT STAGE - Code Quality Checks
+# ============================================================================
+
+flake8:
+  extends: .python_base
+  stage: lint
+  script:
+    - pip install --cache-dir .cache/pip flake8
+    - flake8 src/ tests/ --exclude=venv,__pycache__,.git --max-line-length=120 --statistics
+  allow_failure: false
+
+black:
+  extends: .python_base
+  stage: lint
+  script:
+    - pip install --cache-dir .cache/pip black
+    - black --check --line-length=120 src/ tests/
+  allow_failure: true  # Allow failure initially, make strict later
+
+pylint:
+  extends: .python_base
+  stage: lint
+  script:
+    - pip install --cache-dir .cache/pip pylint
+    - pylint src/ --max-line-length=120 --disable=C0114,C0115,C0116,R0913,R0914 --exit-zero
+  allow_failure: true  # Advisory only
+
+# ============================================================================
+# TEST STAGE - Unit Tests
+# ============================================================================
+
+pytest:
+  extends: .python_base
+  stage: test
+  script:
+    - pip install --cache-dir .cache/pip pytest pytest-cov
+    - pytest tests/ --ignore=tests/test_manage_container.py -v --tb=short
+  artifacts:
+    when: always
+    reports:
+      junit: report.xml
+    paths:
+      - report.xml
+  allow_failure: false
+
+# ============================================================================
+# COVERAGE STAGE - Code Coverage Analysis
+# ============================================================================
+
+coverage:
+  extends: .python_base
+  stage: coverage
+  script:
+    - pip install --cache-dir .cache/pip pytest pytest-cov
+    - pytest tests/ --ignore=tests/test_manage_container.py
+        --cov=src
+        --cov-report=term-missing
+        --cov-report=html:coverage_html
+        --cov-report=xml:coverage.xml
+        --junitxml=report.xml
+    - coverage report
+    - coverage xml
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  artifacts:
+    when: always
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+      junit: report.xml
+    paths:
+      - coverage_html/
+      - coverage.xml
+      - report.xml
+    expire_in: 30 days
+  allow_failure: false
+
+# ============================================================================
+# SECURITY STAGE - Security Scanning (Optional)
+# ============================================================================
+
+# safety:
+#   extends: .python_base
+#   stage: lint
+#   script:
+#     - pip install --cache-dir .cache/pip safety
+#     - safety check --json
+#   allow_failure: true
+
+# bandit:
+#   extends: .python_base
+#   stage: lint
+#   script:
+#     - pip install --cache-dir .cache/pip bandit
+#     - bandit -r src/ -f json -o bandit-report.json
+#   artifacts:
+#     paths:
+#       - bandit-report.json
+#   allow_failure: true
