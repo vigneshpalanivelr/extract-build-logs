@@ -205,3 +205,21 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# ============================================================================
+# Project Specific - GitLab Pipeline Log Extractor
+# ============================================================================
+
+# Extracted logs (uncomment to track logs in git)
+logs/
+
+# Webhook server logs
+webhook_server.log
+
+# IDE specific
+.vscode/
+.idea/
+
+# OS specific
+.DS_Store
+Thumbs.db
