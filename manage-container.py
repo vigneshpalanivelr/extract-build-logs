@@ -426,6 +426,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
                 container = client.containers.get(CONTAINER_NAME)
                 container.start()
                 console.print("[bold green]✓ Container started![/bold green]")
+                console.print(f"[dim]Shell equivalent: docker start {CONTAINER_NAME}[/dim]")
                 show_endpoints(port)
                 return True
 
@@ -449,6 +450,21 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         )
 
         console.print("[bold green]✓ Container started successfully![/bold green]")
+
+        # Show shell equivalent
+        logs_path = Path.cwd() / LOGS_DIR
+        env_path = Path.cwd() / ENV_FILE
+        shell_cmd = (
+            f"docker run -d --name {CONTAINER_NAME} "
+            f"-p {port}:{port} "
+            f"-v {logs_path}:/app/logs "
+            f"-v {env_path}:/app/.env:ro "
+            f"--restart unless-stopped "
+            f"{IMAGE_NAME}"
+        )
+        console.print(f"[dim]Shell equivalent:[/dim]")
+        console.print(f"[dim]{shell_cmd}[/dim]\n")
+
         show_endpoints(port)
         return True
 
@@ -503,6 +519,7 @@ def stop_container(client: docker.DockerClient) -> bool:
         container = client.containers.get(CONTAINER_NAME)
         container.stop()
         console.print("[bold green]✓ Container stopped![/bold green]")
+        console.print(f"[dim]Shell equivalent: docker stop {CONTAINER_NAME}[/dim]")
         return True
 
     except NotFound:
@@ -525,6 +542,8 @@ def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bo
         True if successful, False otherwise
     """
     console.print(f"[bold blue]Restarting container:[/bold blue] {CONTAINER_NAME}")
+    console.print(f"[dim]Shell equivalent: docker restart {CONTAINER_NAME}[/dim]")
+    console.print(f"[dim]Or: docker stop {CONTAINER_NAME} && docker start {CONTAINER_NAME}[/dim]\n")
 
     if not stop_container(client):
         return False
@@ -749,6 +768,10 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         container.remove(force=force_remove)
 
         console.print("[bold green]✓ Container removed![/bold green]")
+        if force_remove:
+            console.print(f"[dim]Shell equivalent: docker rm -f {CONTAINER_NAME}[/dim]")
+        else:
+            console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
         return True
 
     except NotFound:
