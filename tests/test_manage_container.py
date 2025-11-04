@@ -1,5 +1,5 @@
 """
-Unit tests for manage-container.py
+Unit tests for manage_container.py
 
 Comprehensive test coverage for the container management script including:
 - Configuration loading and validation
@@ -15,18 +15,11 @@ from pathlib import Path
 import sys
 import io
 import argparse
-import importlib.util
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import manage-container.py using importlib (since it has a hyphen in the name)
-spec = importlib.util.spec_from_file_location(
-    "manage_container",
-    Path(__file__).parent.parent / "manage-container.py"
-)
-manage_container = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(manage_container)
+import manage_container
 
 
 class TestMaskValue(unittest.TestCase):
@@ -687,7 +680,7 @@ class TestCLICommands(unittest.TestCase):
 class TestMain(unittest.TestCase):
     """Test cases for main function."""
 
-    @patch('sys.argv', ['manage-container.py', '--version'])
+    @patch('sys.argv', ['manage_container.py', '--version'])
     def test_main_version(self):
         """Test --version flag."""
         with self.assertRaises(SystemExit) as cm:
@@ -695,7 +688,7 @@ class TestMain(unittest.TestCase):
 
         self.assertEqual(cm.exception.code, 0)
 
-    @patch('sys.argv', ['manage-container.py', 'build'])
+    @patch('sys.argv', ['manage_container.py', 'build'])
     @patch('manage_container.cmd_build')
     def test_main_build_command(self, mock_cmd):
         """Test main calls build command."""

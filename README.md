@@ -717,13 +717,13 @@ nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
 **Build and Run:**
 ```bash
 # Build Docker image
-./manage-container.py build
+./manage_container.py build
 
 # Start container
-./manage-container.py start
+./manage_container.py start
 
 # Verify it's running
-./manage-container.py status
+./manage_container.py status
 ```
 
 **Your webhook is now available at:** `http://your-server:8000/webhook`
@@ -733,46 +733,46 @@ nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
 **Container Lifecycle:**
 ```bash
 # Build/rebuild image
-./manage-container.py build
+./manage_container.py build
 
 # Start container (creates if doesn't exist)
-./manage-container.py start
+./manage_container.py start
 
 # Stop container
-./manage-container.py stop
+./manage_container.py stop
 
 # Restart container
-./manage-container.py restart
+./manage_container.py restart
 
 # Remove container (keeps logs)
-./manage-container.py remove
+./manage_container.py remove
 ```
 
 **Monitoring:**
 ```bash
 # View status and resource usage
-./manage-container.py status
+./manage_container.py status
 
 # View live logs
-./manage-container.py logs
+./manage_container.py logs
 
 # View monitoring dashboard
-./manage-container.py monitor
+./manage_container.py monitor
 
 # Export monitoring data
-./manage-container.py export data.csv
+./manage_container.py export data.csv
 ```
 
 **Maintenance:**
 ```bash
 # Open shell in container
-./manage-container.py shell
+./manage_container.py shell
 
 # Test webhook endpoint
-./manage-container.py test
+./manage_container.py test
 
 # View all commands
-./manage-container.py --help
+./manage_container.py --help
 ```
 
 ### Docker Monitoring
@@ -786,10 +786,10 @@ curl http://localhost:8000/health
 **View Statistics:**
 ```bash
 # Container resource usage
-./manage-container.py status
+./manage_container.py status
 
 # Monitoring dashboard
-./manage-container.py monitor --hours 24
+./manage_container.py monitor --hours 24
 
 # API endpoints (same as non-Docker)
 curl http://localhost:8000/monitor/summary

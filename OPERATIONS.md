@@ -78,14 +78,14 @@ python src/webhook_listener.py
 
 ```bash
 # Build and start
-./manage-container.py build
-./manage-container.py start
+./manage_container.py build
+./manage_container.py start
 
 # Check status
-./manage-container.py status
+./manage_container.py status
 
 # View logs
-./manage-container.py logs
+./manage_container.py logs
 ```
 
 **Benefits:** Isolated environment, automatic restarts, persistent storage, easy deployment
@@ -121,36 +121,36 @@ sudo systemctl status gitlab-log-extractor
 **Quick Start:**
 ```bash
 # Build and start
-./manage-container.py build
-./manage-container.py start
-./manage-container.py status
+./manage_container.py build
+./manage_container.py start
+./manage_container.py status
 ```
 
 **Common Commands:**
 ```bash
-./manage-container.py build      # Build/rebuild image
-./manage-container.py start      # Start container
-./manage-container.py stop       # Stop container
-./manage-container.py restart    # Restart container
-./manage-container.py status     # View status and resource usage
-./manage-container.py logs       # View live logs
-./manage-container.py shell      # Open shell inside container
-./manage-container.py monitor    # View monitoring dashboard
-./manage-container.py test       # Send test webhook
-./manage-container.py remove     # Remove container
-./manage-container.py cleanup    # Remove container and image
+./manage_container.py build      # Build/rebuild image
+./manage_container.py start      # Start container
+./manage_container.py stop       # Stop container
+./manage_container.py restart    # Restart container
+./manage_container.py status     # View status and resource usage
+./manage_container.py logs       # View live logs
+./manage_container.py shell      # Open shell inside container
+./manage_container.py monitor    # View monitoring dashboard
+./manage_container.py test       # Send test webhook
+./manage_container.py remove     # Remove container
+./manage_container.py cleanup    # Remove container and image
 ```
 
 **Monitoring & Testing:**
 ```bash
 # View monitoring dashboard
-./manage-container.py monitor --hours 24
+./manage_container.py monitor --hours 24
 
 # Export monitoring data
-./manage-container.py export data.csv
+./manage_container.py export data.csv
 
 # Send test webhook
-./manage-container.py test
+./manage_container.py test
 
 # Access API endpoints
 curl http://localhost:8000/health
@@ -163,7 +163,7 @@ curl http://localhost:8000/monitor/summary?hours=24
 ```bash
 # Container won't start
 docker logs bfa-gitlab-pipeline-extractor
-./manage-container.py remove && ./manage-container.py start
+./manage_container.py remove && ./manage_container.py start
 
 # Port already in use
 sudo lsof -i :8000
@@ -173,7 +173,7 @@ sudo kill <PID>
 sudo chown -R 1000:1000 ./logs
 
 # Update after code changes
-./manage-container.py build && ./manage-container.py restart
+./manage_container.py build && ./manage_container.py restart
 
 # Backup logs
 tar -czf backup_$(date +%Y%m%d).tar.gz ./logs
@@ -216,7 +216,7 @@ pytest tests/ -k "test_config" -v
 ### Test Container Management Script
 
 ```bash
-# Run all tests for manage-container.py
+# Run all tests for manage_container.py
 pytest tests/test_manage_container.py -v
 
 # Run with coverage
@@ -291,14 +291,14 @@ curl -X POST http://localhost:8000/webhook \
 
 ```bash
 # End-to-end Docker workflow
-./manage-container.py build
-./manage-container.py start --yes
-./manage-container.py status
-./manage-container.py test
-./manage-container.py logs --no-follow | tail -20
-./manage-container.py monitor
-./manage-container.py export test_data.csv
-./manage-container.py cleanup --force
+./manage_container.py build
+./manage_container.py start --yes
+./manage_container.py status
+./manage_container.py test
+./manage_container.py logs --no-follow | tail -20
+./manage_container.py monitor
+./manage_container.py export test_data.csv
+./manage_container.py cleanup --force
 ```
 
 ### Debugging Tests
@@ -508,7 +508,7 @@ find logs/ -name "*.log" | wc -l
 **System Resources:**
 ```bash
 # Docker
-./manage-container.py status
+./manage_container.py status
 
 # Direct Python
 top -p $(pgrep -f webhook_listener)
@@ -781,7 +781,7 @@ View logs in real-time from Docker console:
 
 ```bash
 # Follow live logs
-./manage-container.py logs
+./manage_container.py logs
 
 # Or directly with Docker
 docker logs -f bfa-gitlab-pipeline-extractor
@@ -817,7 +817,7 @@ tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
 
 ```bash
 # Enter container
-./manage-container.py shell
+./manage_container.py shell
 
 # Inside container
 tail -f /app/logs/application.log
@@ -1139,7 +1139,7 @@ LOG_LEVEL=WARNING        # Only warnings and errors
 
 **Restart required:**
 ```bash
-./manage-container.py restart
+./manage_container.py restart
 ```
 
 #### Modify Rotation Settings
@@ -1159,8 +1159,8 @@ app_handler = logging.handlers.RotatingFileHandler(
 **After changes:**
 ```bash
 # Rebuild and restart container
-./manage-container.py build
-./manage-container.py restart
+./manage_container.py build
+./manage_container.py restart
 ```
 
 #### Disable Specific Logs
@@ -1317,7 +1317,7 @@ cat .env | grep LOG_DIR
 docker inspect bfa-gitlab-pipeline-extractor | grep -A 5 Mounts
 
 # Verify inside container
-./manage-container.py shell
+./manage_container.py shell
 ls -la /app/logs
 ```
 

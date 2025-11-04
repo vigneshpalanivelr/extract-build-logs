@@ -25,11 +25,11 @@ Testing:
     Run with coverage: pytest tests/test_manage_container.py --cov=. --cov-report=html
 
 Usage:
-    ./manage-container.py --help
-    ./manage-container.py build
-    ./manage-container.py start
-    ./manage-container.py status
-    ./manage-container.py logs
+    ./manage_container.py --help
+    ./manage_container.py build
+    ./manage_container.py start
+    ./manage_container.py status
+    ./manage_container.py logs
 """
 
 import sys
@@ -955,7 +955,7 @@ def test_webhook() -> bool:
         console.print("[bold green]✓ Test webhook sent successfully![/bold green]")
         console.print("\n[bold]Response:[/bold]")
         console.print(json.dumps(result, indent=2))
-        console.print("\n[dim]Check logs with: ./manage-container.py logs[/dim]")
+        console.print("\n[dim]Check logs with: ./manage_container.py logs[/dim]")
 
         return True
 
@@ -1166,7 +1166,7 @@ def main():
     """Main CLI entry point using argparse."""
 
     parser = argparse.ArgumentParser(
-        prog='manage-container.py',
+        prog='manage_container.py',
         description='GitLab Pipeline Log Extractor - Container Management Script',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
