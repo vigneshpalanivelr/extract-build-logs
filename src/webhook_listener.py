@@ -42,6 +42,7 @@ from .log_fetcher import LogFetcher
 from .storage_manager import StorageManager
 from .error_handler import RetryExhaustedError
 from .monitoring import PipelineMonitor, RequestStatus
+from .api_poster import ApiPoster
 from .logging_config import (
     setup_logging,
     get_logger,
@@ -70,6 +71,7 @@ log_fetcher: Optional[LogFetcher] = None
 storage_manager: Optional[StorageManager] = None
 pipeline_extractor: Optional[PipelineExtractor] = None
 monitor: Optional[PipelineMonitor] = None
+api_poster: Optional[ApiPoster] = None
 
 
 def init_app():
@@ -86,7 +88,7 @@ def init_app():
 
     Should be called before starting the server.
     """
-    global config, log_fetcher, storage_manager, pipeline_extractor, monitor
+    global config, log_fetcher, storage_manager, pipeline_extractor, monitor, api_poster
 
     try:
         # Load configuration first
@@ -127,6 +129,19 @@ def init_app():
 
         monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
         logger.debug("Pipeline monitor initialized")
+
+        # Initialize API poster if enabled
+        if config.api_post_enabled:
+            logger.info("API posting is ENABLED")
+            logger.debug(f"API endpoint: {config.api_post_url}")
+            logger.debug(f"API timeout: {config.api_post_timeout}s")
+            logger.debug(f"API retry enabled: {config.api_post_retry_enabled}")
+            logger.debug(f"Save to file: {config.api_post_save_to_file}")
+            api_poster = ApiPoster(config)
+            logger.debug("API poster initialized")
+        else:
+            logger.info("API posting is DISABLED (file storage only)")
+            api_poster = None
 
         logger.info("All components initialized successfully")
         logger.info("=" * 70)
@@ -680,61 +695,130 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             'duration_ms': fetch_duration_ms
         })
 
-        # Save each job log (with filtering)
+        # Process logs based on API posting configuration
         success_count = 0
         error_count = 0
         skipped_count = 0
         save_start = time.time()
+        api_post_success = False
 
-        for job_id, job_data in all_logs.items():
+        # Try API posting if enabled
+        if config.api_post_enabled and api_poster:
+            logger.info(f"Posting pipeline logs to API for '{project_name}'")
+            api_start = time.time()
+
             try:
-                job_details = job_data['details']
-                log_content = job_data['log']
-                log_size = len(log_content)
+                api_post_success = api_poster.post_pipeline_logs(pipeline_info, all_logs)
+                api_duration_ms = int((time.time() - api_start) * 1000)
 
-                # Check if this job should be saved based on filtering
-                if not should_save_job_log(job_details, pipeline_info):
-                    skipped_count += 1
-                    continue
-
-                logger.debug("Saving job log", extra={
-                    'pipeline_id': pipeline_id,
-                    'job_id': job_id,
-                    'job_name': job_details['name'],
-                    'log_size_bytes': log_size
-                })
-
-                storage_manager.save_log(
-                    project_id=project_id,
-                    project_name=project_name,
-                    pipeline_id=pipeline_id,
-                    job_id=job_id,
-                    job_name=job_details['name'],
-                    log_content=log_content,
-                    job_details={
-                        "status": job_details.get('status'),
-                        "stage": job_details.get('stage'),
-                        "created_at": job_details.get('created_at'),
-                        "started_at": job_details.get('started_at'),
-                        "finished_at": job_details.get('finished_at'),
-                        "duration": job_details.get('duration'),
-                        "ref": job_details.get('ref')
-                    }
-                )
-                success_count += 1
-                logger.debug("Job log saved successfully", extra={
-                    'job_id': job_id,
-                    'job_name': job_details['name']
-                })
-
+                if api_post_success:
+                    logger.info(
+                        f"Successfully posted pipeline {pipeline_id} logs to API",
+                        extra={
+                            'pipeline_id': pipeline_id,
+                            'project_id': project_id,
+                            'project_name': project_name,
+                            'api_duration_ms': api_duration_ms,
+                            'job_count': job_count
+                        }
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to post pipeline {pipeline_id} logs to API",
+                        extra={
+                            'pipeline_id': pipeline_id,
+                            'project_id': project_id,
+                            'project_name': project_name
+                        }
+                    )
             except Exception as e:
-                error_count += 1
-                logger.error("Failed to save job log", extra={
-                    'pipeline_id': pipeline_id,
-                    'job_id': job_id,
-                    'error_type': type(e).__name__,
-                    'error': str(e)
-                })
+                api_duration_ms = int((time.time() - api_start) * 1000)
+                logger.error(
+                    f"Unexpected error posting to API: {e}",
+                    extra={
+                        'pipeline_id': pipeline_id,
+                        'project_id': project_id,
+                        'error_type': type(e).__name__
+                    },
+                    exc_info=True
+                )
+
+        # Determine if we should save to files
+        should_save_to_files = False
+
+        if not config.api_post_enabled:
+            # API posting disabled, always save to files
+            should_save_to_files = True
+            logger.debug("Saving to files (API posting disabled)")
+        elif config.api_post_save_to_file:
+            # Dual mode: save to files regardless of API result
+            should_save_to_files = True
+            logger.debug("Saving to files (dual mode enabled)")
+        elif not api_post_success:
+            # API posting failed, fallback to file storage
+            should_save_to_files = True
+            logger.info("Saving to files as fallback (API posting failed)")
+        else:
+            # API posting succeeded and save_to_file is false
+            should_save_to_files = False
+            logger.info("Skipping file storage (API posting succeeded, file storage disabled)")
+
+        # Save to files if needed
+        if should_save_to_files:
+            logger.debug("Starting file storage")
+
+            for job_id, job_data in all_logs.items():
+                try:
+                    job_details = job_data['details']
+                    log_content = job_data['log']
+                    log_size = len(log_content)
+
+                    # Check if this job should be saved based on filtering
+                    if not should_save_job_log(job_details, pipeline_info):
+                        skipped_count += 1
+                        continue
+
+                    logger.debug("Saving job log to file", extra={
+                        'pipeline_id': pipeline_id,
+                        'job_id': job_id,
+                        'job_name': job_details['name'],
+                        'log_size_bytes': log_size
+                    })
+
+                    storage_manager.save_log(
+                        project_id=project_id,
+                        project_name=project_name,
+                        pipeline_id=pipeline_id,
+                        job_id=job_id,
+                        job_name=job_details['name'],
+                        log_content=log_content,
+                        job_details={
+                            "status": job_details.get('status'),
+                            "stage": job_details.get('stage'),
+                            "created_at": job_details.get('created_at'),
+                            "started_at": job_details.get('started_at'),
+                            "finished_at": job_details.get('finished_at'),
+                            "duration": job_details.get('duration'),
+                            "ref": job_details.get('ref')
+                        }
+                    )
+                    success_count += 1
+                    logger.debug("Job log saved to file successfully", extra={
+                        'job_id': job_id,
+                        'job_name': job_details['name']
+                    })
+
+                except Exception as e:
+                    error_count += 1
+                    logger.error("Failed to save job log to file", extra={
+                        'pipeline_id': pipeline_id,
+                        'job_id': job_id,
+                        'error_type': type(e).__name__,
+                        'error': str(e)
+                    })
+        else:
+            # API posting succeeded, count all jobs as successful
+            success_count = job_count
 
         save_duration_ms = int((time.time() - save_start) * 1000)
         total_duration_ms = int((time.time() - start_time) * 1000)

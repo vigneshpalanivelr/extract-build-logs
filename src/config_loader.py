@@ -37,6 +37,12 @@ class Config:
         log_exclude_projects (List[str]): Blacklist of project IDs to exclude from logging
         log_save_job_status (List[str]): Which job statuses to save logs for
         log_save_metadata_always (bool): Whether to save metadata even if logs are filtered out
+        api_post_enabled (bool): Enable API POST for pipeline logs
+        api_post_url (Optional[str]): API endpoint URL for posting logs
+        api_post_auth_token (Optional[str]): Bearer token for API authentication
+        api_post_timeout (int): Request timeout in seconds for API calls
+        api_post_retry_enabled (bool): Enable retry logic for failed API requests
+        api_post_save_to_file (bool): Also save to file when API posting is enabled
     """
     gitlab_url: str
     gitlab_token: str
@@ -51,6 +57,12 @@ class Config:
     log_exclude_projects: List[str]
     log_save_job_status: List[str]
     log_save_metadata_always: bool
+    api_post_enabled: bool
+    api_post_url: Optional[str]
+    api_post_auth_token: Optional[str]
+    api_post_timeout: int
+    api_post_retry_enabled: bool
+    api_post_save_to_file: bool
 
 
 class ConfigLoader:
@@ -125,6 +137,20 @@ class ConfigLoader:
         log_save_metadata_always_str = os.getenv('LOG_SAVE_METADATA_ALWAYS', 'true').lower()
         log_save_metadata_always = log_save_metadata_always_str in ['true', '1', 'yes', 'on']
 
+        # API POST configuration
+        api_post_enabled_str = os.getenv('API_POST_ENABLED', 'false').lower()
+        api_post_enabled = api_post_enabled_str in ['true', '1', 'yes', 'on']
+
+        api_post_url = os.getenv('API_POST_URL')
+        api_post_auth_token = os.getenv('API_POST_AUTH_TOKEN')
+        api_post_timeout = int(os.getenv('API_POST_TIMEOUT', '30'))
+
+        api_post_retry_enabled_str = os.getenv('API_POST_RETRY_ENABLED', 'true').lower()
+        api_post_retry_enabled = api_post_retry_enabled_str in ['true', '1', 'yes', 'on']
+
+        api_post_save_to_file_str = os.getenv('API_POST_SAVE_TO_FILE', 'false').lower()
+        api_post_save_to_file = api_post_save_to_file_str in ['true', '1', 'yes', 'on']
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -133,6 +159,15 @@ class ConfigLoader:
         valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
         if log_level not in valid_levels:
             raise ValueError(f"Invalid LOG_LEVEL: {log_level}. Must be one of {valid_levels}")
+
+        # Validate API POST configuration
+        if api_post_enabled:
+            if not api_post_url:
+                raise ValueError("API_POST_URL is required when API_POST_ENABLED is true")
+            if not api_post_url.startswith(('http://', 'https://')):
+                raise ValueError(f"Invalid API_POST_URL: {api_post_url}. Must start with http:// or https://")
+            if api_post_timeout < 1 or api_post_timeout > 300:
+                raise ValueError(f"Invalid API_POST_TIMEOUT: {api_post_timeout}. Must be between 1 and 300 seconds")
 
         return Config(
             gitlab_url=gitlab_url,
@@ -147,7 +182,13 @@ class ConfigLoader:
             log_save_projects=log_save_projects,
             log_exclude_projects=log_exclude_projects,
             log_save_job_status=log_save_job_status,
-            log_save_metadata_always=log_save_metadata_always
+            log_save_metadata_always=log_save_metadata_always,
+            api_post_enabled=api_post_enabled,
+            api_post_url=api_post_url,
+            api_post_auth_token=api_post_auth_token,
+            api_post_timeout=api_post_timeout,
+            api_post_retry_enabled=api_post_retry_enabled,
+            api_post_save_to_file=api_post_save_to_file
         )
 
     @staticmethod

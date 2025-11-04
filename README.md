@@ -864,6 +864,17 @@ LOG_SAVE_JOB_STATUS=all
 # Options: true, false
 # Default: true
 LOG_SAVE_METADATA_ALWAYS=true
+
+# ============================================================================
+# API POSTING CONFIGURATION (New!)
+# ============================================================================
+# Enable API posting for pipeline logs (instead of or in addition to file storage)
+API_POST_ENABLED=false
+API_POST_URL=https://api.example.com/pipeline-logs
+API_POST_AUTH_TOKEN=your_api_token_here
+API_POST_TIMEOUT=30
+API_POST_RETRY_ENABLED=true
+API_POST_SAVE_TO_FILE=false  # false = API only, true = dual mode (API + file)
 ```
 
 **Common Filtering Scenarios:**
@@ -895,6 +906,98 @@ LOG_EXCLUDE_PROJECTS=999,888
 7. Test with **Test → Pipeline events**
 
 See [config/webhook_setup.md](config/webhook_setup.md) for detailed instructions.
+
+### API Posting (New!)
+
+Instead of (or in addition to) saving logs to files, you can configure the system to POST pipeline logs to an external API endpoint for centralized storage and processing.
+
+**Key Features:**
+- **Batched Requests**: One API POST per pipeline with all jobs included
+- **Authentication**: Bearer token authentication support
+- **Retry Logic**: Automatic retry with exponential backoff
+- **Fallback**: Falls back to file storage if API fails
+- **Dual Mode**: Can save to both API and files simultaneously
+- **Request Logging**: All API requests/responses logged to `logs/api-requests.log`
+
+**Configuration:**
+
+```bash
+# Enable API posting
+API_POST_ENABLED=true
+
+# Configure API endpoint
+API_POST_URL=https://api.example.com/pipeline-logs
+
+# Add authentication (optional)
+API_POST_AUTH_TOKEN=your_bearer_token_here
+
+# Set timeout (default: 30 seconds)
+API_POST_TIMEOUT=30
+
+# Enable retry logic (default: true)
+API_POST_RETRY_ENABLED=true
+
+# Dual mode: save to both API and files (default: false)
+API_POST_SAVE_TO_FILE=false
+```
+
+**Operating Modes:**
+
+1. **API Only** (default when `API_POST_ENABLED=true`):
+   - `API_POST_ENABLED=true`
+   - `API_POST_SAVE_TO_FILE=false`
+   - Logs are POSTed to API only (file storage as fallback if API fails)
+
+2. **Dual Mode** (API + File):
+   - `API_POST_ENABLED=true`
+   - `API_POST_SAVE_TO_FILE=true`
+   - Logs are saved to both API and files
+
+3. **File Only** (traditional):
+   - `API_POST_ENABLED=false`
+   - Logs are saved to files only
+
+**API Request Format:**
+
+The system POSTs JSON payloads with the following structure:
+
+```json
+{
+  "pipeline_id": 12345,
+  "project_id": 123,
+  "project_name": "my-app",
+  "status": "success",
+  "ref": "main",
+  "sha": "abc123...",
+  "pipeline_type": "main",
+  "created_at": "2024-01-01T00:00:00Z",
+  "duration": 120.5,
+  "user": {...},
+  "stages": ["build", "test", "deploy"],
+  "jobs": [
+    {
+      "job_id": 456,
+      "job_name": "build:production",
+      "log_content": "Full build logs...",
+      "status": "success",
+      "stage": "build",
+      "duration": 60.2,
+      ...
+    },
+    ...
+  ]
+}
+```
+
+**Request Logging:**
+
+All API requests and responses are logged to `logs/api-requests.log`:
+
+```
+[2024-01-01 00:02:05] PIPELINE_ID=12345 PROJECT_ID=123 URL=https://api.example.com/logs STATUS=200 DURATION=1250ms RESPONSE={"success": true}
+```
+
+**See also:** [API_POST_DESIGN.md](API_POST_DESIGN.md) for complete design documentation.
 
 ## Usage
 
