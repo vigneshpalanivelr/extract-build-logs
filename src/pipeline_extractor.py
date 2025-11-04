@@ -297,7 +297,7 @@ class PipelineExtractor:
 
         logger.info(
             f"Filtered {len(filtered_jobs)} jobs from {len(builds)} total jobs "
-            f"for pipeline {pipeline_info['pipeline_id']}"
+            f"for pipeline {pipeline_info.get('pipeline_id', 'unknown')}"
         )
 
         return filtered_jobs

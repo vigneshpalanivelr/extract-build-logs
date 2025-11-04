@@ -15,11 +15,18 @@ from pathlib import Path
 import sys
 import io
 import argparse
+import importlib.util
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import manage_container
+# Import manage-container.py using importlib (since it has a hyphen in the name)
+spec = importlib.util.spec_from_file_location(
+    "manage_container",
+    Path(__file__).parent.parent / "manage-container.py"
+)
+manage_container = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(manage_container)
 
 
 class TestMaskValue(unittest.TestCase):
