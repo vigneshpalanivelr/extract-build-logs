@@ -318,6 +318,7 @@ graph LR
 
 | File | Tests For | Coverage |
 |------|-----------|----------|
+| `tests/test_api_poster.py` | API posting functionality | - Payload formatting<br>- HTTP requests (success/error)<br>- Timeout handling<br>- Retry logic<br>- Authentication<br>- Request logging |
 | `tests/test_pipeline_extractor.py` | Pipeline extraction logic | - Type identification<br>- Job filtering<br>- Summary generation |
 | `tests/test_storage_manager.py` | Storage operations | - File creation<br>- Metadata handling<br>- Statistics |
 | `tests/test_error_handler.py` | Error handling | - Retry logic<br>- Backoff calculation<br>- Circuit breaker |
@@ -1183,21 +1184,62 @@ Get storage statistics.
 
 ## Testing
 
+### Test Suite Overview
+
+The project includes comprehensive unit tests covering core functionality:
+
+| Test Module | Tests | Coverage | Focus Area |
+|-------------|-------|----------|------------|
+| `test_api_poster.py` | 20 | 88% | API posting, timeouts, errors, retry logic |
+| `test_error_handler.py` | 12 | 84% | Retry with backoff, circuit breaker |
+| `test_pipeline_extractor.py` | 8 | 86% | Pipeline data extraction, filtering |
+| `test_storage_manager.py` | 10 | 78% | File storage, metadata management |
+| **Total** | **50** | **30%** | **Overall coverage** |
+
 ### Run All Tests
 
 ```bash
-# Run tests with pytest
+# Run all tests
 pytest tests/
 
-# Run with coverage
-pytest --cov=src tests/
+# Run with coverage report
+pytest --cov=src tests/ --cov-report=term-missing
 
 # Run specific test file
-pytest tests/test_pipeline_extractor.py
+pytest tests/test_api_poster.py -v
 
-# Run with verbose output
-pytest -v tests/
+# Run tests for API posting only
+pytest tests/test_api_poster.py
+
+# Run with coverage for specific module
+pytest tests/test_api_poster.py --cov=src/api_poster.py
 ```
+
+### API Poster Test Coverage
+
+The `test_api_poster.py` module includes comprehensive tests for:
+
+**Success Scenarios:**
+- ✅ Successful API POST with authentication
+- ✅ POST without authentication token
+- ✅ Large payload handling
+- ✅ Slow/late responses (within timeout)
+
+**Error Scenarios:**
+- ✅ 400 Bad Request errors
+- ✅ 500 Internal Server errors
+- ✅ 503 Service Unavailable errors
+- ✅ Connection errors
+- ✅ Timeout errors
+
+**Retry Logic:**
+- ✅ Retry with exponential backoff
+- ✅ Retry exhaustion handling
+
+**Data & Logging:**
+- ✅ Payload formatting and structure
+- ✅ Request/response logging
+- ✅ Long response truncation
 
 ### Manual Testing
 

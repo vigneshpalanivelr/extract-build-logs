@@ -30,7 +30,7 @@ except ImportError:
     requests = None
 
 from .config_loader import Config
-from .error_handler import retry_with_backoff, RetryExhaustedError
+from .error_handler import ErrorHandler, RetryExhaustedError
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -315,11 +315,15 @@ class ApiPoster:
             if self.config.api_post_retry_enabled:
                 # Use retry logic
                 logger.debug("Using retry logic for API POST")
-                status_code, response_body, duration_ms = retry_with_backoff(
+                error_handler = ErrorHandler(
+                    max_retries=self.config.retry_attempts,
+                    base_delay=self.config.retry_delay,
+                    exponential=True
+                )
+                status_code, response_body, duration_ms = error_handler.retry_with_backoff(
                     self._post_to_api,
                     payload,
-                    max_retries=self.config.retry_attempts,
-                    base_delay=self.config.retry_delay
+                    exceptions=(requests.exceptions.RequestException,)
                 )
             else:
                 # No retry, single attempt
