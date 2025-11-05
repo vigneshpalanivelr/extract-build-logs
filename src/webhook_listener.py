@@ -327,15 +327,15 @@ async def health_check():
     }
 
 
-@app.post('/webhook')
-async def webhook_handler(
+@app.post('/webhook/gitlab')
+async def webhook_gitlab_handler(
     request: Request,
     background_tasks: BackgroundTasks,
     x_gitlab_token: Optional[str] = Header(None, alias="X-Gitlab-Token"),
     x_gitlab_event: Optional[str] = Header(None, alias="X-Gitlab-Event")
 ):
     """
-    Main webhook endpoint for receiving GitLab events.
+    GitLab webhook endpoint for receiving pipeline events.
 
     This endpoint:
     1. Validates the webhook signature (if configured)

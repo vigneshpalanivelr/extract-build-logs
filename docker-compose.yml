@@ -1,0 +1,167 @@
+# Docker Compose Configuration for Pipeline Log Extractor with PostgreSQL
+#
+# This compose file sets up:
+# - PostgreSQL database for monitoring (replaces SQLite)
+# - Log extractor service (GitLab + Jenkins support)
+#
+# Usage:
+#   docker-compose up -d           # Start services
+#   docker-compose down            # Stop services
+#   docker-compose logs -f         # View logs
+#   docker-compose ps              # Check status
+
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: pipeline-logs-postgres
+    environment:
+      POSTGRES_DB: pipeline_logs
+      POSTGRES_USER: logextractor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_this_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U logextractor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - pipeline-logs-network
+
+  # Log Extractor Service
+  log-extractor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pipeline-log-extractor
+    environment:
+      # Database Configuration
+      DATABASE_URL: postgresql://logextractor:${POSTGRES_PASSWORD:-change_this_password}@postgres:5432/pipeline_logs
+
+      # GitLab Configuration
+      GITLAB_URL: ${GITLAB_URL}
+      GITLAB_TOKEN: ${GITLAB_TOKEN}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-}
+
+      # Jenkins Configuration (optional)
+      JENKINS_ENABLED: ${JENKINS_ENABLED:-false}
+      JENKINS_URL: ${JENKINS_URL:-}
+      JENKINS_USER: ${JENKINS_USER:-}
+      JENKINS_API_TOKEN: ${JENKINS_API_TOKEN:-}
+      JENKINS_WEBHOOK_SECRET: ${JENKINS_WEBHOOK_SECRET:-}
+
+      # API Posting Configuration
+      API_POST_ENABLED: ${API_POST_ENABLED:-false}
+      API_POST_URL: ${API_POST_URL:-}
+      API_POST_AUTH_TOKEN: ${API_POST_AUTH_TOKEN:-}
+      API_POST_TIMEOUT: ${API_POST_TIMEOUT:-30}
+      API_POST_RETRY_ENABLED: ${API_POST_RETRY_ENABLED:-true}
+      API_POST_SAVE_TO_FILE: ${API_POST_SAVE_TO_FILE:-false}
+
+      # General Configuration
+      WEBHOOK_PORT: 8000
+      LOG_OUTPUT_DIR: /app/logs
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RETRY_ATTEMPTS: ${RETRY_ATTEMPTS:-3}
+      RETRY_DELAY: ${RETRY_DELAY:-2}
+
+      # Log Filtering
+      LOG_SAVE_PIPELINE_STATUS: ${LOG_SAVE_PIPELINE_STATUS:-all}
+      LOG_SAVE_PROJECTS: ${LOG_SAVE_PROJECTS:-}
+      LOG_EXCLUDE_PROJECTS: ${LOG_EXCLUDE_PROJECTS:-}
+      LOG_SAVE_JOB_STATUS: ${LOG_SAVE_JOB_STATUS:-all}
+      LOG_SAVE_METADATA_ALWAYS: ${LOG_SAVE_METADATA_ALWAYS:-true}
+    volumes:
+      - ./logs:/app/logs
+    ports:
+      - "${WEBHOOK_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pipeline-logs-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  pipeline-logs-network:
+    driver: bridge
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. Create .env file with your configuration:
+#    cp .env.example .env
+#    # Edit .env and set GITLAB_URL, GITLAB_TOKEN, etc.
+#
+# 2. Set PostgreSQL password (required):
+#    echo "POSTGRES_PASSWORD=your_secure_password" >> .env
+#
+# 3. Start services:
+#    docker-compose up -d
+#
+# 4. Check status:
+#    docker-compose ps
+#    docker-compose logs -f log-extractor
+#
+# 5. Access service:
+#    - Health check: http://localhost:8000/health
+#    - API docs: http://localhost:8000/docs
+#    - GitLab webhook: http://localhost:8000/webhook/gitlab
+#    - Jenkins webhook: http://localhost:8000/webhook/jenkins
+#
+# 6. Stop services:
+#    docker-compose down
+#
+# 7. Stop and remove data (WARNING: deletes database):
+#    docker-compose down -v
+#
+# ============================================================================
+# DATABASE ACCESS
+# ============================================================================
+#
+# Connect to PostgreSQL:
+#   docker-compose exec postgres psql -U logextractor -d pipeline_logs
+#
+# Run SQL queries:
+#   docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "SELECT COUNT(*) FROM requests;"
+#
+# Backup database:
+#   docker-compose exec postgres pg_dump -U logextractor pipeline_logs > backup.sql
+#
+# Restore database:
+#   docker-compose exec -T postgres psql -U logextractor pipeline_logs < backup.sql
+#
+# ============================================================================
+# MONITORING
+# ============================================================================
+#
+# View logs:
+#   docker-compose logs -f log-extractor    # Application logs
+#   docker-compose logs -f postgres         # Database logs
+#
+# Check resource usage:
+#   docker-compose stats
+#
+# Restart service:
+#   docker-compose restart log-extractor
+#
+# Scale (if needed):
+#   docker-compose up -d --scale log-extractor=3  # 3 instances (requires load balancer)
+#

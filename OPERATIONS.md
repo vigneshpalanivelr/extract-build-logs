@@ -280,7 +280,7 @@ curl http://localhost:8000/health
 curl http://localhost:8000/stats
 
 # Test webhook endpoint (with sample payload)
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8000/webhook/gitlab \
   -H "Content-Type: application/json" \
   -H "X-Gitlab-Event: Pipeline Hook" \
   -H "X-Gitlab-Token: your_secret_token" \
@@ -1433,7 +1433,7 @@ EOF
 
 ```bash
 # Send test webhook
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8000/webhook/gitlab \
   -H "Content-Type: application/json" \
   -H "X-Gitlab-Event: Pipeline Hook" \
   -H "X-Gitlab-Token: your_secret" \
@@ -1441,7 +1441,7 @@ curl -X POST http://localhost:8000/webhook \
   -v
 
 # Test without secret
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8000/webhook/gitlab \
   -H "Content-Type: application/json" \
   -H "X-Gitlab-Event: Pipeline Hook" \
   -d @test_payload.json

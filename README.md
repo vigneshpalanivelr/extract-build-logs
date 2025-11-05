@@ -55,7 +55,7 @@ A production-ready webhook server that automatically extracts and stores pipelin
     - [Database Location](#database-location)
   - [API Documentation](#api-documentation)
     - [Webhook Events](#webhook-events)
-      - [POST /webhook](#post-webhook)
+      - [POST /webhook/gitlab](#post-webhookgitlab)
       - [GET /health](#get-health)
       - [GET /stats](#get-stats)
   - [Testing](#testing)
@@ -114,7 +114,7 @@ graph TB
         CONFIG[Config Loader<br/>Environment Variables]
     end
 
-    GL -->|POST /webhook| WH
+    GL -->|POST /webhook/gitlab| WH
     PIPE -.->|Pipeline Complete| GL
     WH --> VAL
     VAL -->|Valid| PARSE
@@ -147,7 +147,7 @@ sequenceDiagram
     participant Storage as Storage Manager
     participant FileSystem as File System
 
-    GitLab->>Webhook: POST /webhook (Pipeline Event)
+    GitLab->>Webhook: POST /webhook/gitlab (Pipeline Event)
     Webhook->>Webhook: Validate Secret Token
     Webhook->>Extractor: Extract Pipeline Info
     Extractor->>Extractor: Identify Pipeline Type
@@ -1141,7 +1141,7 @@ You can query it directly with SQL or use the provided CLI dashboard.
 
 ### Webhook Events
 
-#### POST /webhook
+#### POST /webhook/gitlab
 
 Receives GitLab pipeline webhook events.
 
@@ -1259,7 +1259,7 @@ The `test_api_poster.py` module includes comprehensive tests for:
 
 ```bash
 # Test webhook endpoint with curl
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8000/webhook/gitlab \
   -H "Content-Type: application/json" \
   -H "X-Gitlab-Event: Pipeline Hook" \
   -H "X-Gitlab-Token: your_secret" \

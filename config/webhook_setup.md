@@ -204,7 +204,7 @@ GitLab sends POST requests with this structure:
 You can test the webhook endpoint manually:
 
 ```bash
-curl -X POST http://localhost:8000/webhook \
+curl -X POST http://localhost:8000/webhook/gitlab \
   -H "Content-Type: application/json" \
   -H "X-Gitlab-Event: Pipeline Hook" \
   -H "X-Gitlab-Token: your_secret_token" \
