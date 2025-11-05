@@ -1,0 +1,46 @@
+# Example Crontab for Pipeline Logs Database Backups
+#
+# Installation:
+#   1. Copy this file: cp scripts/crontab.example /tmp/pipeline-logs-cron
+#   2. Update paths in the file to match your installation directory
+#   3. Install: crontab /tmp/pipeline-logs-cron
+#   4. Verify: crontab -l
+#
+# Note: Replace /path/to/extract-build-logs with your actual installation path
+
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+# Pipeline Logs Database Backups
+# ================================
+
+# Daily backup at 2:00 AM (keeps last 7 days)
+0 2 * * * cd /path/to/extract-build-logs && ./scripts/backup-database.sh daily >> /var/log/pipeline-logs-backup.log 2>&1
+
+# Weekly backup every Sunday at 3:00 AM (keeps last 4 weeks)
+0 3 * * 0 cd /path/to/extract-build-logs && ./scripts/backup-database.sh weekly >> /var/log/pipeline-logs-backup.log 2>&1
+
+# Monthly backup on the 1st at 4:00 AM (keeps last 6 months)
+0 4 1 * * cd /path/to/extract-build-logs && ./scripts/backup-database.sh monthly >> /var/log/pipeline-logs-backup.log 2>&1
+
+# Database health check every hour
+0 * * * * cd /path/to/extract-build-logs && ./scripts/check-db-health.sh >> /var/log/pipeline-logs-health.log 2>&1
+
+# Optional: Clean up old logs (keep last 30 days)
+# 0 5 * * * find /var/log/pipeline-logs-*.log -mtime +30 -delete
+
+
+# Alternative schedules (commented out - uncomment and modify as needed)
+# =======================================================================
+
+# Backup every 6 hours (for high-traffic systems)
+# 0 */6 * * * cd /path/to/extract-build-logs && ./scripts/backup-database.sh hourly >> /var/log/pipeline-logs-backup.log 2>&1
+
+# Backup every 15 minutes (for critical systems - not recommended)
+# */15 * * * * cd /path/to/extract-build-logs && ./scripts/backup-database.sh frequent >> /var/log/pipeline-logs-backup.log 2>&1
+
+# Health check every 5 minutes (for critical monitoring)
+# */5 * * * * cd /path/to/extract-build-logs && ./scripts/check-db-health.sh >> /var/log/pipeline-logs-health.log 2>&1
+
+# Backup to cloud storage (requires aws cli configured)
+# 0 6 * * * cd /path/to/extract-build-logs && ./scripts/backup-database.sh daily && aws s3 sync backups/ s3://your-bucket/pipeline-logs-backups/
