@@ -43,6 +43,11 @@ class Config:
         api_post_timeout (int): Request timeout in seconds for API calls
         api_post_retry_enabled (bool): Enable retry logic for failed API requests
         api_post_save_to_file (bool): Also save to file when API posting is enabled
+        jenkins_enabled (bool): Enable Jenkins webhook support
+        jenkins_url (Optional[str]): Jenkins instance URL (e.g., https://jenkins.example.com)
+        jenkins_user (Optional[str]): Jenkins username for API authentication
+        jenkins_api_token (Optional[str]): Jenkins API token for authentication
+        jenkins_webhook_secret (Optional[str]): Secret token for Jenkins webhook validation
     """
     gitlab_url: str
     gitlab_token: str
@@ -63,6 +68,11 @@ class Config:
     api_post_timeout: int
     api_post_retry_enabled: bool
     api_post_save_to_file: bool
+    jenkins_enabled: bool
+    jenkins_url: Optional[str]
+    jenkins_user: Optional[str]
+    jenkins_api_token: Optional[str]
+    jenkins_webhook_secret: Optional[str]
 
 
 class ConfigLoader:
@@ -151,6 +161,18 @@ class ConfigLoader:
         api_post_save_to_file_str = os.getenv('API_POST_SAVE_TO_FILE', 'false').lower()
         api_post_save_to_file = api_post_save_to_file_str in ['true', '1', 'yes', 'on']
 
+        # Jenkins configuration
+        jenkins_enabled_str = os.getenv('JENKINS_ENABLED', 'false').lower()
+        jenkins_enabled = jenkins_enabled_str in ['true', '1', 'yes', 'on']
+
+        jenkins_url = os.getenv('JENKINS_URL')
+        if jenkins_url:
+            jenkins_url = jenkins_url.rstrip('/')
+
+        jenkins_user = os.getenv('JENKINS_USER')
+        jenkins_api_token = os.getenv('JENKINS_API_TOKEN')
+        jenkins_webhook_secret = os.getenv('JENKINS_WEBHOOK_SECRET')
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -168,6 +190,17 @@ class ConfigLoader:
                 raise ValueError(f"Invalid API_POST_URL: {api_post_url}. Must start with http:// or https://")
             if api_post_timeout < 1 or api_post_timeout > 300:
                 raise ValueError(f"Invalid API_POST_TIMEOUT: {api_post_timeout}. Must be between 1 and 300 seconds")
+
+        # Validate Jenkins configuration
+        if jenkins_enabled:
+            if not jenkins_url:
+                raise ValueError("JENKINS_URL is required when JENKINS_ENABLED is true")
+            if not jenkins_url.startswith(('http://', 'https://')):
+                raise ValueError(f"Invalid JENKINS_URL: {jenkins_url}. Must start with http:// or https://")
+            if not jenkins_user:
+                raise ValueError("JENKINS_USER is required when JENKINS_ENABLED is true")
+            if not jenkins_api_token:
+                raise ValueError("JENKINS_API_TOKEN is required when JENKINS_ENABLED is true")
 
         return Config(
             gitlab_url=gitlab_url,
@@ -188,7 +221,12 @@ class ConfigLoader:
             api_post_auth_token=api_post_auth_token,
             api_post_timeout=api_post_timeout,
             api_post_retry_enabled=api_post_retry_enabled,
-            api_post_save_to_file=api_post_save_to_file
+            api_post_save_to_file=api_post_save_to_file,
+            jenkins_enabled=jenkins_enabled,
+            jenkins_url=jenkins_url,
+            jenkins_user=jenkins_user,
+            jenkins_api_token=jenkins_api_token,
+            jenkins_webhook_secret=jenkins_webhook_secret
         )
 
     @staticmethod

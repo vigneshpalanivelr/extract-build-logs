@@ -1,26 +1,5 @@
 # Python Project Configuration
-# Used by black, pytest, coverage, and other tools
-
-[tool.black]
-line-length = 120
-target-version = ['py311']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+# Used by pytest, coverage, and other tools
 
 [tool.pytest.ini_options]
 minversion = "7.0"

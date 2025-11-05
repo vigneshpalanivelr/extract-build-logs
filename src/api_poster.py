@@ -381,6 +381,123 @@ class ApiPoster:
             )
             return False
 
+    def post_jenkins_logs(self, jenkins_payload: Dict[str, Any]) -> bool:
+        """
+        Post Jenkins build logs to the API endpoint.
+
+        Formats and sends Jenkins build data including stages and parallel blocks.
+
+        Args:
+            jenkins_payload (Dict[str, Any]): Jenkins build data with structure:
+                {
+                    'source': 'jenkins',
+                    'job_name': str,
+                    'build_number': int,
+                    'build_url': str,
+                    'status': str,
+                    'duration_ms': int,
+                    'timestamp': str,
+                    'stages': List[Dict]
+                }
+
+        Returns:
+            bool: True if successfully posted, False otherwise
+        """
+        if not self.config.api_post_enabled:
+            logger.warning("API posting is disabled, cannot post Jenkins logs")
+            return False
+
+        if not self.config.api_post_url:
+            logger.error("API_POST_URL is not configured")
+            return False
+
+        logger.info(
+            f"Posting Jenkins build to API: {jenkins_payload['job_name']} #{jenkins_payload['build_number']}"
+        )
+
+        try:
+            # Jenkins payload is already in the correct format
+            payload = jenkins_payload
+
+            # Use retry logic if enabled
+            if self.config.api_post_retry_enabled:
+                logger.debug("Using retry logic for Jenkins API POST")
+                error_handler = ErrorHandler(
+                    max_retries=self.config.retry_attempts,
+                    base_delay=self.config.retry_delay
+                )
+
+                try:
+                    status_code, response_body, duration_ms = error_handler.retry_with_backoff(
+                        self._post_to_api,
+                        payload,
+                        exceptions=(requests.exceptions.RequestException,)
+                    )
+                except RetryExhaustedError as e:
+                    logger.error(f"Retry exhausted posting Jenkins logs to API: {e}")
+                    self._log_api_request(
+                        payload=payload,
+                        status_code=None,
+                        response_body=str(e),
+                        duration_ms=0,
+                        error=str(e)
+                    )
+                    return False
+            else:
+                # Single attempt without retry
+                status_code, response_body, duration_ms = self._post_to_api(payload)
+
+            # Log the request/response
+            self._log_api_request(
+                payload=payload,
+                status_code=status_code,
+                response_body=response_body,
+                duration_ms=duration_ms
+            )
+
+            # Check if successful
+            if 200 <= status_code < 300:
+                logger.info(
+                    f"Successfully posted Jenkins build {jenkins_payload['job_name']} #{jenkins_payload['build_number']} to API",
+                    extra={
+                        'job_name': jenkins_payload['job_name'],
+                        'build_number': jenkins_payload['build_number'],
+                        'status_code': status_code,
+                        'duration_ms': duration_ms
+                    }
+                )
+                return True
+            else:
+                logger.warning(
+                    f"API returned non-success status code for Jenkins build: {status_code}",
+                    extra={
+                        'job_name': jenkins_payload['job_name'],
+                        'build_number': jenkins_payload['build_number'],
+                        'status_code': status_code
+                    }
+                )
+                return False
+
+        except Exception as e:
+            logger.error(
+                f"Unexpected error posting Jenkins logs to API: {e}",
+                extra={
+                    'job_name': jenkins_payload.get('job_name', 'unknown'),
+                    'build_number': jenkins_payload.get('build_number', 0),
+                    'error_type': type(e).__name__,
+                    'error': str(e)
+                },
+                exc_info=True
+            )
+            self._log_api_request(
+                payload=jenkins_payload,
+                status_code=None,
+                response_body="",
+                duration_ms=0,
+                error=f"{type(e).__name__}: {str(e)}"
+            )
+            return False
+
 
 if __name__ == "__main__":
     # Example usage

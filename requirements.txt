@@ -24,5 +24,4 @@ rich>=13.0.0  # Rich terminal output with colors, tables, and progress bars
 
 # Code quality tools (for CI/CD)
 flake8==7.0.0           # Code style checker
-black==24.1.1           # Code formatter
 pylint==3.0.3           # Comprehensive linting

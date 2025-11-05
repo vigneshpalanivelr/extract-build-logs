@@ -1,6 +1,6 @@
-# GitLab Pipeline Log Extraction System
+# GitLab & Jenkins Pipeline Log Extraction System
 
-A production-ready webhook server that automatically extracts and stores GitLab pipeline logs with comprehensive error handling, retry logic, and structured metadata.
+A production-ready webhook server that automatically extracts and stores pipeline logs from GitLab and Jenkins with comprehensive error handling, retry logic, and structured metadata. Supports parallel execution blocks and API posting.
 
 ## Table of Contents
 
@@ -73,11 +73,14 @@ A production-ready webhook server that automatically extracts and stores GitLab 
 ## Overview
 
 This system provides a complete solution for:
-- Receiving GitLab webhook events for pipeline completion
-- Automatically extracting logs from all pipeline jobs
+- **GitLab Integration**: Receiving webhook events for pipeline completion
+- **Jenkins Integration**: Extracting build logs with parallel stage support ([Setup Guide](JENKINS_INTEGRATION.md))
+- Automatically extracting logs from all pipeline jobs/stages
+- **API Posting**: Send structured logs to external API endpoints
 - Storing logs with structured metadata for easy retrieval
 - Handling failures with exponential backoff retry logic
 - Supporting multiple pipeline types (main, child, merge request)
+- **Parallel Execution**: Parse and extract parallel stage logs (Jenkins)
 
 ## Architecture
 
@@ -176,6 +179,9 @@ sequenceDiagram
 
 ## Features
 
+- **Multi-Source Support**:
+  - **GitLab**: Full webhook integration for pipeline events
+  - **Jenkins**: Build log extraction with parallel stage parsing ([Setup Guide](JENKINS_INTEGRATION.md))
 - **Modern Async Server**: FastAPI-based async server with automatic API documentation
 - **Interactive API Docs**: Automatic Swagger UI and ReDoc documentation at `/docs` and `/redoc`
 - **Event Processing**: Identifies and processes different pipeline types (main, child, merge request)
@@ -185,7 +191,15 @@ sequenceDiagram
   - Project whitelist/blacklist (save specific projects or exclude noisy ones)
   - Job status (all, failed, success, canceled, skipped)
   - Optional metadata-only mode for tracking without storing logs
-- **Log Extraction**: Fetches logs for all jobs in a pipeline via GitLab API
+- **Log Extraction**:
+  - GitLab: Fetches logs for all jobs in a pipeline via GitLab API
+  - Jenkins: Fetches console logs and Blue Ocean stage data via Jenkins REST API
+  - **Parallel Stage Support**: Automatically parses and extracts parallel execution blocks (Jenkins)
+- **API Posting**: Send extracted logs to external API endpoints
+  - Configurable modes: API only, dual (API + file), or file only
+  - Bearer token authentication
+  - Retry logic with exponential backoff
+  - Request/response logging
 - **Advanced Logging System**:
   - **Aligned log columns** for easy reading
   - **Project names** in logs instead of just IDs
@@ -1267,11 +1281,6 @@ The CI/CD pipeline runs on every push and consists of three stages:
 flake8 src/ tests/ --max-line-length=120
 ```
 
-**Black** - Code formatting check:
-```bash
-black --check --line-length=120 src/ tests/
-```
-
 **Pylint** - Comprehensive linting (advisory):
 ```bash
 pylint src/ --max-line-length=120
@@ -1306,7 +1315,6 @@ pip install -r requirements.txt
 
 # Run linters
 flake8 src/ tests/
-black --check src/ tests/
 pylint src/
 
 # Run tests with coverage
@@ -1323,7 +1331,7 @@ open coverage_html/index.html
 | `.gitlab-ci.yml` | CI/CD pipeline configuration |
 | `.flake8` | Flake8 linter settings |
 | `.pylintrc` | Pylint configuration |
-| `pyproject.toml` | Black, pytest, and coverage settings |
+| `pyproject.toml` | pytest and coverage settings |
 
 ### CI/CD Artifacts
 

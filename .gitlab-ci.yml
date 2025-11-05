@@ -33,14 +33,6 @@ flake8:
     - flake8 src/ tests/ --exclude=venv,__pycache__,.git --max-line-length=120 --statistics
   allow_failure: false
 
-black:
-  extends: .python_base
-  stage: lint
-  script:
-    - pip install --cache-dir .cache/pip black
-    - black --check --line-length=120 src/ tests/
-  allow_failure: true  # Allow failure initially, make strict later
-
 pylint:
   extends: .python_base
   stage: lint

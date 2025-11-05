@@ -43,6 +43,8 @@ from .storage_manager import StorageManager
 from .error_handler import RetryExhaustedError
 from .monitoring import PipelineMonitor, RequestStatus
 from .api_poster import ApiPoster
+from .jenkins_extractor import JenkinsExtractor
+from .jenkins_log_fetcher import JenkinsLogFetcher
 from .logging_config import (
     setup_logging,
     get_logger,
@@ -72,6 +74,8 @@ storage_manager: Optional[StorageManager] = None
 pipeline_extractor: Optional[PipelineExtractor] = None
 monitor: Optional[PipelineMonitor] = None
 api_poster: Optional[ApiPoster] = None
+jenkins_extractor: Optional[JenkinsExtractor] = None
+jenkins_log_fetcher: Optional[JenkinsLogFetcher] = None
 
 
 def init_app():
@@ -89,6 +93,7 @@ def init_app():
     Should be called before starting the server.
     """
     global config, log_fetcher, storage_manager, pipeline_extractor, monitor, api_poster
+    global jenkins_extractor, jenkins_log_fetcher
 
     try:
         # Load configuration first
@@ -142,6 +147,19 @@ def init_app():
         else:
             logger.info("API posting is DISABLED (file storage only)")
             api_poster = None
+
+        # Initialize Jenkins components if enabled
+        if config.jenkins_enabled:
+            logger.info("Jenkins integration is ENABLED")
+            logger.debug(f"Jenkins URL: {config.jenkins_url}")
+            logger.debug(f"Jenkins User: {config.jenkins_user}")
+            jenkins_extractor = JenkinsExtractor()
+            jenkins_log_fetcher = JenkinsLogFetcher(config)
+            logger.debug("Jenkins components initialized")
+        else:
+            logger.info("Jenkins integration is DISABLED")
+            jenkins_extractor = None
+            jenkins_log_fetcher = None
 
         logger.info("All components initialized successfully")
         logger.info("=" * 70)
@@ -580,6 +598,307 @@ async def webhook_handler(
         )
     finally:
         # Clear request ID from context
+        clear_request_id()
+
+
+@app.post('/webhook/jenkins')
+async def webhook_jenkins_handler(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_jenkins_token: Optional[str] = Header(None, alias="X-Jenkins-Token")
+):
+    """
+    Jenkins webhook endpoint for receiving build completion events.
+
+    This endpoint:
+    1. Validates the webhook secret (if configured)
+    2. Extracts build information from payload
+    3. Fetches console logs and Blue Ocean stage data
+    4. Posts to API (in background)
+
+    Request Headers:
+        - X-Jenkins-Token: Webhook secret token (optional)
+
+    Request Body:
+        JSON payload from Jenkins (custom format):
+        {
+            "job_name": "my-pipeline",
+            "build_number": 123,
+            "build_url": "https://jenkins.example.com/job/my-pipeline/123/",
+            "status": "FAILURE",
+            "jenkins_url": "https://jenkins.example.com"
+        }
+
+    Returns:
+        JSON response with processing status
+        - 200: Successfully queued for processing
+        - 400: Invalid request
+        - 401: Authentication failed
+        - 503: Jenkins integration not enabled
+    """
+    # Generate unique request ID
+    req_id = str(uuid.uuid4())[:8]
+    set_request_id(req_id)
+
+    start_time = time.time()
+    client_host = request.client.host if request.client else "unknown"
+
+    logger.info("Jenkins webhook received", extra={
+        'source_ip': client_host,
+        'source': 'jenkins'
+    })
+
+    try:
+        # Check if Jenkins is enabled
+        if not config.jenkins_enabled or not jenkins_extractor or not jenkins_log_fetcher:
+            logger.warning("Jenkins webhook received but Jenkins integration is disabled")
+            raise HTTPException(
+                status_code=503,
+                detail={"status": "error", "message": "Jenkins integration is not enabled"}
+            )
+
+        # Get request body
+        body = await request.body()
+        logger.debug(f"Request body size: {len(body)} bytes")
+
+        # Validate webhook secret if configured
+        if config.jenkins_webhook_secret:
+            if not x_jenkins_token:
+                logger.warning("Jenkins webhook secret configured but no token provided")
+                raise HTTPException(
+                    status_code=401,
+                    detail={"status": "error", "message": "Authentication required"}
+                )
+            if not hmac.compare_digest(x_jenkins_token, config.jenkins_webhook_secret):
+                logger.warning("Jenkins webhook authentication failed")
+                raise HTTPException(
+                    status_code=401,
+                    detail={"status": "error", "message": "Authentication failed"}
+                )
+
+        # Parse JSON payload
+        try:
+            payload = await request.json()
+            if not payload:
+                raise HTTPException(
+                    status_code=400,
+                    detail={"status": "error", "message": "Invalid JSON payload"}
+                )
+        except Exception as e:
+            logger.error(f"Failed to parse JSON payload: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": "Failed to parse JSON"}
+            )
+
+        # Extract build information
+        try:
+            build_info = jenkins_extractor.extract_webhook_data(payload)
+            job_name = build_info['job_name']
+            build_number = build_info['build_number']
+            status = build_info['status']
+
+            logger.info(
+                f"Jenkins build extracted: {job_name} #{build_number} - {status}",
+                extra={
+                    'job_name': job_name,
+                    'build_number': build_number,
+                    'status': status,
+                    'source': 'jenkins'
+                }
+            )
+
+            # Track request in monitoring
+            db_request_id = monitor.track_request(
+                pipeline_info={'pipeline_id': build_number, 'project_name': job_name},
+                status=RequestStatus.QUEUED,
+                event_type='Jenkins Build',
+                client_ip=client_host
+            )
+
+            # Queue background processing
+            background_tasks.add_task(
+                process_jenkins_build,
+                build_info,
+                db_request_id,
+                req_id
+            )
+
+            duration_ms = int((time.time() - start_time) * 1000)
+            logger.info(
+                f"Jenkins build queued for processing: {job_name} #{build_number}",
+                extra={
+                    'job_name': job_name,
+                    'build_number': build_number,
+                    'duration_ms': duration_ms
+                }
+            )
+
+            return {
+                "status": "success",
+                "message": "Jenkins build logs queued for extraction",
+                "job_name": job_name,
+                "build_number": build_number,
+                "request_id": req_id,
+                "db_request_id": db_request_id
+            }
+
+        except ValueError as e:
+            logger.error(f"Failed to extract build info: {e}")
+            raise HTTPException(
+                status_code=400,
+                detail={"status": "error", "message": f"Invalid payload: {str(e)}"}
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        duration_ms = int((time.time() - start_time) * 1000)
+        logger.error(f"Failed to process Jenkins webhook: {e}", extra={
+            'error_type': type(e).__name__,
+            'duration_ms': duration_ms
+        }, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail={"status": "error", "message": f"Processing failed: {str(e)}"}
+        )
+    finally:
+        clear_request_id()
+
+
+def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id: str):
+    """
+    Process a Jenkins build: fetch logs and post to API.
+
+    This function:
+    1. Fetches console log from Jenkins
+    2. Fetches Blue Ocean stage information (if available)
+    3. Parses logs to extract parallel blocks
+    4. Posts structured data to API
+
+    Args:
+        build_info (Dict[str, Any]): Extracted build information
+        db_request_id (int): Monitoring database request ID
+        req_id (str): Request correlation ID
+    """
+    set_request_id(req_id)
+
+    job_name = build_info['job_name']
+    build_number = build_info['build_number']
+    status = build_info['status']
+
+    logger.info(f"Processing Jenkins build: {job_name} #{build_number}", extra={
+        'job_name': job_name,
+        'build_number': build_number,
+        'status': status,
+        'db_request_id': db_request_id
+    })
+
+    start_time = time.time()
+    monitor.update_request(db_request_id, RequestStatus.PROCESSING)
+
+    try:
+        # Fetch build metadata
+        logger.debug("Fetching build metadata from Jenkins")
+        try:
+            metadata = jenkins_log_fetcher.fetch_build_info(job_name, build_number)
+            build_info['duration_ms'] = metadata.get('duration', 0)
+            build_info['timestamp'] = metadata.get('timestamp')
+            build_info['result'] = metadata.get('result', status)
+        except Exception as e:
+            logger.warning(f"Failed to fetch build metadata (non-critical): {e}")
+
+        # Fetch console log
+        logger.info("Fetching console log from Jenkins")
+        console_log = jenkins_log_fetcher.fetch_console_log(job_name, build_number)
+        logger.info(f"Console log fetched: {len(console_log)} bytes")
+
+        # Fetch Blue Ocean stages (if available)
+        logger.debug("Fetching Blue Ocean stage information")
+        blue_ocean_stages = jenkins_log_fetcher.fetch_stages(job_name, build_number)
+
+        if blue_ocean_stages:
+            logger.info(f"Blue Ocean API available: {len(blue_ocean_stages)} stages")
+        else:
+            logger.info("Blue Ocean API not available, will parse console log only")
+
+        # Parse console log to extract stages and parallel blocks
+        logger.info("Parsing console log for stages and parallel blocks")
+        stages = jenkins_extractor.parse_console_log(console_log, blue_ocean_stages)
+        logger.info(f"Parsed {len(stages)} stages from console log")
+
+        # Count parallel blocks
+        parallel_count = sum(1 for s in stages if s.get('is_parallel'))
+        logger.info(f"Found {parallel_count} parallel stages")
+
+        # Post to API if enabled
+        if config.api_post_enabled and api_poster:
+            logger.info("Posting Jenkins build logs to API")
+            api_start = time.time()
+
+            try:
+                # Format Jenkins-specific payload
+                jenkins_payload = {
+                    'source': 'jenkins',
+                    'job_name': job_name,
+                    'build_number': build_number,
+                    'build_url': build_info.get('build_url', ''),
+                    'status': status,
+                    'duration_ms': build_info.get('duration_ms', 0),
+                    'timestamp': build_info.get('timestamp', ''),
+                    'stages': stages
+                }
+
+                api_success = api_poster.post_jenkins_logs(jenkins_payload)
+                api_duration_ms = int((time.time() - api_start) * 1000)
+
+                if api_success:
+                    logger.info(f"Successfully posted Jenkins build to API", extra={
+                        'job_name': job_name,
+                        'build_number': build_number,
+                        'api_duration_ms': api_duration_ms,
+                        'stage_count': len(stages)
+                    })
+                else:
+                    logger.warning(f"Failed to post Jenkins build to API", extra={
+                        'job_name': job_name,
+                        'build_number': build_number
+                    })
+            except Exception as e:
+                logger.error(f"Error posting to API: {e}", exc_info=True)
+
+        # Update monitoring status
+        processing_time = time.time() - start_time
+        monitor.update_request(
+            request_id=db_request_id,
+            status=RequestStatus.COMPLETED,
+            processing_time=processing_time,
+            success_count=len(stages),
+            error_count=0
+        )
+
+        logger.info(f"Jenkins build processing completed: {job_name} #{build_number}", extra={
+            'job_name': job_name,
+            'build_number': build_number,
+            'processing_time_ms': int(processing_time * 1000),
+            'stage_count': len(stages)
+        })
+
+    except Exception as e:
+        processing_time = time.time() - start_time
+        logger.error(f"Failed to process Jenkins build: {e}", extra={
+            'job_name': job_name,
+            'build_number': build_number,
+            'error_type': type(e).__name__
+        }, exc_info=True)
+
+        monitor.update_request(
+            request_id=db_request_id,
+            status=RequestStatus.ERROR,
+            processing_time=processing_time,
+            error_message=str(e)
+        )
+    finally:
         clear_request_id()
 
 
