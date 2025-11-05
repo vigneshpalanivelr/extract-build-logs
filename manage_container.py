@@ -6,7 +6,7 @@ This script manages the Docker container lifecycle with beautiful CLI output,
 configuration validation, and comprehensive error handling.
 
 Features:
-- Docker container operations (build, start, stop, restart, logs, status, shell, remove, cleanup)
+- Docker container operations (build, start, stop, restart, logs, status, remove)
 - Configuration display and validation from .env file
 - Monitoring dashboard integration
 - Test webhook functionality
@@ -49,6 +49,7 @@ try:
     from rich.table import Table
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.prompt import Prompt
     from rich import print as rprint
     from dotenv import dotenv_values
 except ImportError as e:
@@ -339,8 +340,15 @@ def build_image(client: docker.DockerClient) -> bool:
     Returns:
         True if successful, False otherwise
     """
+    import time
+
     try:
         console.print(f"[bold blue]Building Docker image:[/bold blue] {IMAGE_NAME}")
+
+        # Show shell equivalent
+        console.print("[dim]Shell equivalent: docker build -t gitlab-log-extractor:latest --rm .[/dim]\n")
+
+        start_time = time.time()
 
         with Progress(
             SpinnerColumn(),
@@ -358,7 +366,10 @@ def build_image(client: docker.DockerClient) -> bool:
 
             progress.update(task, completed=True)
 
+        elapsed_time = time.time() - start_time
+
         console.print(f"[bold green]✓ Image built successfully![/bold green]")
+        console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
         return True
 
     except APIError as e:
@@ -492,7 +503,8 @@ def show_endpoints(port: int, host: Optional[str] = None) -> None:
     endpoints_table.add_column("Endpoint", style="yellow")
     endpoints_table.add_column("URL", style="green")
 
-    endpoints_table.add_row("Webhook", f"http://{host}:{port}/webhook")
+    endpoints_table.add_row("GitLab Webhook", f"http://{host}:{port}/webhook/gitlab")
+    endpoints_table.add_row("Jenkins Webhook", f"http://{host}:{port}/webhook/jenkins")
     endpoints_table.add_row("Health Check", f"http://{host}:{port}/health")
     endpoints_table.add_row("API Docs", f"http://{host}:{port}/docs")
     endpoints_table.add_row("Monitoring", f"http://{host}:{port}/monitor/summary")
@@ -624,9 +636,27 @@ def show_status(client: docker.DockerClient) -> bool:
             info_table.add_column("Property", style="yellow")
             info_table.add_column("Value", style="green")
 
+            info_table.add_row("Container Name", container.name)
             info_table.add_row("Container ID", container.short_id)
             info_table.add_row("Status", container.status)
             info_table.add_row("Created", container.attrs['Created'][:19])
+
+            # Calculate uptime
+            from datetime import datetime, timezone
+            started_at = container.attrs['State'].get('StartedAt')
+            if started_at:
+                start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                uptime = datetime.now(timezone.utc) - start_time
+                days = uptime.days
+                hours, remainder = divmod(uptime.seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                if days > 0:
+                    uptime_str = f"{days}d {hours}h {minutes}m"
+                elif hours > 0:
+                    uptime_str = f"{hours}h {minutes}m"
+                else:
+                    uptime_str = f"{minutes}m {seconds}s"
+                info_table.add_row("Uptime", uptime_str)
 
             # Ports
             ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
@@ -658,9 +688,38 @@ def show_status(client: docker.DockerClient) -> bool:
                 resource_table.add_row("Memory", f"{mem_usage:.1f} MB / {mem_limit:.1f} MB")
 
                 console.print(resource_table)
+                console.print()
 
             except Exception as e:
                 console.print(f"[yellow]!  Could not fetch resource usage: {str(e)}[/yellow]")
+
+            # Recent errors
+            try:
+                # Get last 100 lines of logs
+                logs = container.logs(tail=100, timestamps=True).decode('utf-8', errors='ignore')
+                error_lines = []
+                for line in logs.split('\n'):
+                    # Look for ERROR, CRITICAL, or exception patterns
+                    line_lower = line.lower()
+                    if any(pattern in line_lower for pattern in ['error', 'critical', 'exception', 'traceback', 'failed']):
+                        # Limit line length for display
+                        if len(line) > 100:
+                            line = line[:97] + '...'
+                        error_lines.append(line)
+
+                if error_lines:
+                    console.print("[bold yellow]Recent Errors (last 100 log lines):[/bold yellow]")
+                    # Show up to 5 most recent errors
+                    for error_line in error_lines[-5:]:
+                        console.print(f"[red]  {error_line}[/red]")
+                    if len(error_lines) > 5:
+                        console.print(f"[yellow]  ... and {len(error_lines) - 5} more errors[/yellow]")
+                    console.print()
+                else:
+                    console.print("[green]✓ No recent errors found[/green]\n")
+
+            except Exception as e:
+                console.print(f"[yellow]!  Could not fetch recent logs: {str(e)}[/yellow]\n")
         else:
             console.print(f"[yellow]!  Container exists but is NOT RUNNING[/yellow]")
             console.print(f"Status: {container.status}\n")
@@ -697,39 +756,9 @@ def calculate_cpu_percent(stats: dict) -> float:
     return 0.0
 
 
-def open_shell(client: docker.DockerClient) -> bool:
-    """
-    Open interactive shell in container.
-
-    Args:
-        client: Docker client
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        if not container_running(client):
-            console.print("[bold red]✗ Container is not running.[/bold red]")
-            return False
-
-        console.print("[blue]Opening shell in container...[/blue]")
-        console.print("[dim]Type 'exit' to close the shell[/dim]\n")
-
-        # Use subprocess to run interactive shell
-        subprocess.run([
-            'docker', 'exec', '-it', CONTAINER_NAME, '/bin/bash'
-        ])
-
-        return True
-
-    except Exception as e:
-        console.print(f"[bold red]✗ Failed to open shell:[/bold red] {str(e)}", style="red")
-        return False
-
-
 def remove_container(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:
     """
-    Remove container.
+    Remove container and optionally image with user confirmation.
 
     Args:
         client: Docker client
@@ -740,84 +769,95 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         True if successful, False otherwise
     """
     try:
-        if not container_exists(client):
-            console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
+        # Check what exists
+        container_exists_flag = container_exists(client)
+
+        try:
+            client.images.get(IMAGE_NAME)
+            image_exists_flag = True
+        except ImageNotFound:
+            image_exists_flag = False
+
+        if not container_exists_flag and not image_exists_flag:
+            console.print(f"[yellow]!  Neither container nor image exist.[/yellow]")
             return True
 
+        # Ask user what to remove (if not forced)
+        remove_image = False
         if not force:
-            console.print(f"[yellow]!  This will remove the container (logs will be preserved in {LOGS_DIR})[/yellow]")
-            if not confirm_action("Are you sure?", False):
-                console.print("[blue]Cancelled.[/blue]")
+            console.print(f"[bold yellow]What would you like to remove?[/bold yellow]")
+            console.print(f"  Logs will be preserved in {LOGS_DIR}")
+            console.print()
+
+            if container_exists_flag and image_exists_flag:
+                console.print("[cyan]1.[/cyan] Container only")
+                console.print("[cyan]2.[/cyan] Container and image")
+                console.print("[cyan]3.[/cyan] Cancel")
+
+                choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="3")
+
+                if choice == "3":
+                    console.print("[blue]Cancelled.[/blue]")
+                    return False
+                elif choice == "2":
+                    remove_image = True
+            elif container_exists_flag:
+                console.print("[cyan]Container exists, image does not.[/cyan]")
+                if not confirm_action("Remove container?", False):
+                    console.print("[blue]Cancelled.[/blue]")
+                    return False
+            elif image_exists_flag:
+                console.print("[cyan]Image exists, container does not.[/cyan]")
+                if not confirm_action("Remove image?", False):
+                    console.print("[blue]Cancelled.[/blue]")
+                    return False
+
+        # Remove container if it exists
+        if container_exists_flag:
+            console.print(f"[blue]Removing container:[/blue] {CONTAINER_NAME}")
+            container = client.containers.get(CONTAINER_NAME)
+
+            # Try to stop first (if not force_remove)
+            if not force_remove:
+                try:
+                    if container.status in ['running', 'restarting']:
+                        console.print("[blue]Stopping container first...[/blue]")
+                        container.stop(timeout=10)
+                except Exception as e:
+                    console.print(f"[yellow]!  Could not stop container: {e}[/yellow]")
+                    console.print("[yellow]Attempting force removal...[/yellow]")
+                    force_remove = True
+
+            # Remove container (with force if needed)
+            container.remove(force=force_remove)
+
+            console.print("[bold green]✓ Container removed![/bold green]")
+            if force_remove:
+                console.print(f"[dim]Shell equivalent: docker rm -f {CONTAINER_NAME}[/dim]")
+            else:
+                console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
+
+        # Remove image if requested and it exists
+        if remove_image and image_exists_flag:
+            try:
+                console.print(f"[blue]Removing image:[/blue] {IMAGE_NAME}")
+                client.images.remove(IMAGE_NAME, force=force_remove)
+                console.print("[bold green]✓ Image removed![/bold green]")
+                console.print(f"[dim]Shell equivalent: docker rmi {IMAGE_NAME}[/dim]")
+            except APIError as e:
+                console.print(f"[bold red]✗ Failed to remove image:[/bold red] {str(e)}", style="red")
+                if not force_remove:
+                    console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
                 return False
 
-        console.print(f"[blue]Removing container:[/blue] {CONTAINER_NAME}")
-        container = client.containers.get(CONTAINER_NAME)
-
-        # Try to stop first (if not force_remove)
-        if not force_remove:
-            try:
-                if container.status in ['running', 'restarting']:
-                    console.print("[blue]Stopping container first...[/blue]")
-                    container.stop(timeout=10)
-            except Exception as e:
-                console.print(f"[yellow]!  Could not stop container: {e}[/yellow]")
-                console.print("[yellow]Attempting force removal...[/yellow]")
-                force_remove = True
-
-        # Remove container (with force if needed)
-        container.remove(force=force_remove)
-
-        console.print("[bold green]✓ Container removed![/bold green]")
-        if force_remove:
-            console.print(f"[dim]Shell equivalent: docker rm -f {CONTAINER_NAME}[/dim]")
-        else:
-            console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
         return True
 
     except NotFound:
         console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
         return True
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to remove container:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red]✗ Failed to remove:[/bold red] {str(e)}", style="red")
         console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
-        return False
-
-
-def cleanup(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:
-    """
-    Remove container and image.
-
-    Args:
-        client: Docker client
-        force: If True, skip confirmation
-        force_remove: If True, force remove even if container is running/restarting
-
-    Returns:
-        True if successful, False otherwise
-    """
-    if not force:
-        console.print(f"[yellow]!  This will remove both container and image (logs will be preserved in {LOGS_DIR})[/yellow]")
-        if not confirm_action("Are you sure?", False):
-            console.print("[blue]Cancelled.[/blue]")
-            return False
-
-    # Remove container first (with force_remove flag)
-    remove_container(client, force=True, force_remove=force_remove)
-
-    # Remove image
-    try:
-        console.print(f"[blue]Removing image:[/blue] {IMAGE_NAME}")
-        # Force remove image if needed
-        client.images.remove(IMAGE_NAME, force=force_remove)
-        console.print("[bold green]✓ Image removed![/bold green]")
-        return True
-    except ImageNotFound:
-        console.print(f"[yellow]!  Image '{IMAGE_NAME}' does not exist.[/yellow]")
-        return True
-    except APIError as e:
-        console.print(f"[bold red]✗ Failed to remove image:[/bold red] {str(e)}", style="red")
-        if not force_remove:
-            console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
         return False
 
 
@@ -1102,17 +1142,6 @@ def cmd_status(args):
     sys.exit(EXIT_SUCCESS if success else EXIT_DOCKER_ERROR)
 
 
-def cmd_shell(args):
-    """Open interactive shell in container."""
-
-    client = get_docker_client()
-    if not client:
-        sys.exit(EXIT_DOCKER_ERROR)
-
-    success = open_shell(client)
-    sys.exit(EXIT_SUCCESS if success else EXIT_DOCKER_ERROR)
-
-
 def cmd_remove(args):
     """Remove the container (keeps logs)."""
 
@@ -1123,18 +1152,6 @@ def cmd_remove(args):
     force_remove = getattr(args, 'force_remove', False)
     success = remove_container(client, args.force, force_remove=force_remove)
     sys.exit(EXIT_SUCCESS if success else EXIT_DOCKER_ERROR)
-
-
-def cmd_cleanup(args):
-    """Remove container and image (keeps logs)."""
-
-    client = get_docker_client()
-    if not client:
-        sys.exit(EXIT_DOCKER_ERROR)
-
-    force_remove = getattr(args, 'force_remove', False)
-    success_result = cleanup(client, args.force, force_remove=force_remove)
-    sys.exit(EXIT_SUCCESS if success_result else EXIT_DOCKER_ERROR)
 
 
 def cmd_monitor(args):
@@ -1180,8 +1197,7 @@ Examples:
   %(prog)s monitor --hours 24       # Show monitoring dashboard
   %(prog)s export data.csv          # Export monitoring data
   %(prog)s test                     # Send test webhook
-  %(prog)s remove --force           # Remove container without confirmation
-  %(prog)s cleanup                  # Remove container and image
+  %(prog)s remove                   # Remove container/image (interactive)
 
 For more information, see OPERATIONS.md
         """
@@ -1228,21 +1244,11 @@ For more information, see OPERATIONS.md
     parser_status = subparsers.add_parser('status', help='Show container status and resource usage')
     parser_status.set_defaults(func=cmd_status)
 
-    # shell command
-    parser_shell = subparsers.add_parser('shell', help='Open interactive shell in container')
-    parser_shell.set_defaults(func=cmd_shell)
-
     # remove command
-    parser_remove = subparsers.add_parser('remove', help='Remove the container (keeps logs)')
+    parser_remove = subparsers.add_parser('remove', help='Remove container and/or image (interactive)')
     parser_remove.add_argument('-f', '--force', action='store_true', help='Skip confirmation')
     parser_remove.add_argument('--force-remove', action='store_true', help='Force remove even if container is running/restarting')
     parser_remove.set_defaults(func=cmd_remove)
-
-    # cleanup command
-    parser_cleanup = subparsers.add_parser('cleanup', help='Remove container and image (keeps logs)')
-    parser_cleanup.add_argument('-f', '--force', action='store_true', help='Skip confirmation')
-    parser_cleanup.add_argument('--force-remove', action='store_true', help='Force remove even if container is running/restarting')
-    parser_cleanup.set_defaults(func=cmd_cleanup)
 
     # monitor command
     parser_monitor = subparsers.add_parser('monitor', help='View monitoring dashboard')

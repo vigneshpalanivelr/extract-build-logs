@@ -779,11 +779,11 @@ nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
 
 **Maintenance:**
 ```bash
-# Open shell in container
-./manage_container.py shell
-
 # Test webhook endpoint
 ./manage_container.py test
+
+# Execute commands inside container
+docker exec bfa-gitlab-pipeline-extractor <command>
 
 # View all commands
 ./manage_container.py --help

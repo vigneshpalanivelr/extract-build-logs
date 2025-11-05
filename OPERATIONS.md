@@ -105,13 +105,60 @@ nohup python src/webhook_listener.py > server.log 2>&1 &
 
 ### Option 3: Systemd Service (Linux)
 
+**Setup:**
 ```bash
-# Create service file at /etc/systemd/system/gitlab-log-extractor.service
-# See README.md for full configuration
+# 1. Clone/copy the repository to /opt
+sudo mkdir -p /opt
+sudo cp -r . /opt/extract-build-logs
+cd /opt/extract-build-logs
 
+# 2. Configure environment
+sudo cp .env.example .env
+sudo nano .env  # Edit GITLAB_URL, GITLAB_TOKEN, etc.
+
+# 3. Build Docker image
+sudo ./manage_container.py build
+
+# 4. Install systemd service
+sudo cp gitlab-log-extractor.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 5. Start and enable service
 sudo systemctl start gitlab-log-extractor
 sudo systemctl enable gitlab-log-extractor
+
+# 6. Verify it's running
 sudo systemctl status gitlab-log-extractor
+curl http://localhost:8000/health
+```
+
+**Manage the service:**
+```bash
+# View status
+sudo systemctl status gitlab-log-extractor
+
+# View logs
+sudo journalctl -u gitlab-log-extractor -f
+
+# View application logs
+sudo docker logs -f bfa-gitlab-pipeline-extractor
+
+# Restart service
+sudo systemctl restart gitlab-log-extractor
+
+# Stop service
+sudo systemctl stop gitlab-log-extractor
+
+# Disable autostart
+sudo systemctl disable gitlab-log-extractor
+```
+
+**Update after code changes:**
+```bash
+cd /opt/extract-build-logs
+sudo git pull  # Or copy new files
+sudo ./manage_container.py build
+sudo systemctl restart gitlab-log-extractor
 ```
 
 ---
@@ -126,11 +173,9 @@ sudo systemctl status gitlab-log-extractor
 ./manage_container.py restart    # Restart container
 ./manage_container.py status     # View status and resource usage
 ./manage_container.py logs       # View live logs
-./manage_container.py shell      # Open shell inside container
 ./manage_container.py monitor    # View monitoring dashboard
 ./manage_container.py test       # Send test webhook
-./manage_container.py remove     # Remove container
-./manage_container.py cleanup    # Remove container and image
+./manage_container.py remove     # Remove container/image (interactive)
 ```
 
 **Monitoring & Testing:**
@@ -290,7 +335,7 @@ curl -X POST http://localhost:8000/webhook/gitlab \
 ./manage_container.py logs --no-follow | tail -20
 ./manage_container.py monitor
 ./manage_container.py export test_data.csv
-./manage_container.py cleanup --force
+./manage_container.py remove --force
 ```
 
 ### Debugging Tests
@@ -811,13 +856,10 @@ tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
 #### Method 3: Inside Container
 
 ```bash
-# Enter container
-./manage_container.py shell
-
-# Inside container
-tail -f /app/logs/application.log
-grep ERROR /app/logs/application.log
-cat /app/logs/performance.log
+# View logs inside container using docker exec
+docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/application.log
+docker exec bfa-gitlab-pipeline-extractor grep ERROR /app/logs/application.log
+docker exec bfa-gitlab-pipeline-extractor cat /app/logs/performance.log
 ```
 
 #### Method 4: Watch Mode (Auto-refresh)
@@ -1310,8 +1352,7 @@ cat .env | grep LOG_DIR
 docker inspect bfa-gitlab-pipeline-extractor | grep -A 5 Mounts
 
 # Verify inside container
-./manage_container.py shell
-ls -la /app/logs
+docker exec bfa-gitlab-pipeline-extractor ls -la /app/logs
 ```
 
 #### Problem: Logs filling up disk

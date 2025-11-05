@@ -336,7 +336,7 @@ class JenkinsExtractor:
         block_log = []
 
         for line in log_lines:
-            if f'{ ({block_name})' in line or f'Branch: {block_name}' in line:
+            if f'{{ ({block_name})' in line or f'Branch: {block_name}' in line:
                 in_block = True
                 continue
 

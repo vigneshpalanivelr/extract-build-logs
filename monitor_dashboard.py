@@ -205,12 +205,4 @@ Examples:
 
 
 if __name__ == "__main__":
-    # Check if tabulate is available
-    try:
-        import tabulate
-    except ImportError:
-        print("\n✗ Error: Required module 'tabulate' not found.")
-        print("   Install it with: pip install tabulate\n")
-        sys.exit(1)
-
     main()
