@@ -155,9 +155,32 @@ sudo systemctl disable gitlab-log-extractor
 
 **Update after code changes:**
 ```bash
+# 1. Navigate to installation directory
 cd /opt/extract-build-logs
-sudo git pull  # Or copy new files
+
+# 2. Pull latest code
+sudo git pull origin main  # Or: sudo git pull origin your-branch
+
+# 3. Rebuild Docker image with new code
 sudo ./manage_container.py build
+
+# 4. Restart the service (stops old container, starts new one)
+sudo systemctl restart gitlab-log-extractor
+
+# 5. Verify it's running with new code
+sudo systemctl status gitlab-log-extractor
+sudo docker ps | grep bfa-gitlab-pipeline-extractor
+
+# 6. Check logs to ensure no errors
+sudo journalctl -u gitlab-log-extractor -f
+# Or view application logs:
+tail -f /opt/extract-build-logs/logs/application.log
+```
+
+**Quick restart (without rebuild):**
+```bash
+# If you only changed .env or want to restart without code changes:
+cd /opt/extract-build-logs
 sudo systemctl restart gitlab-log-extractor
 ```
 

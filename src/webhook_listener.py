@@ -67,6 +67,45 @@ app = FastAPI(
     version="1.0.0"
 )
 
+
+# Custom access logging middleware
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """
+    Middleware to log HTTP requests in our custom format.
+    Replaces Uvicorn's default access logger.
+    """
+    import time
+    start_time = time.time()
+
+    # Get request ID from context if available
+    request_id = getattr(request.state, 'request_id', '-')
+
+    # Process request
+    response = await call_next(request)
+
+    # Calculate duration
+    duration_ms = int((time.time() - start_time) * 1000)
+
+    # Get access logger (defined in logging_config.py)
+    access_logger = logging.getLogger('access')
+
+    # Log in our custom format with context
+    access_logger.info(
+        f"HTTP request",
+        extra={
+            'request_id': request_id,
+            'method': request.method,
+            'path': request.url.path,
+            'status': response.status_code,
+            'duration_ms': duration_ms,
+            'client_ip': request.client.host if request.client else '-'
+        }
+    )
+
+    return response
+
+
 # Global configuration and components
 config: Optional[Config] = None
 log_fetcher: Optional[LogFetcher] = None
@@ -1471,11 +1510,15 @@ def main():
     logger.info("Press Ctrl+C to stop")
 
     try:
+        # Configure uvicorn to use our custom logging
+        # access_log=False disables Uvicorn's default access logger
+        # We use our custom middleware instead
         uvicorn.run(
             app,
             host='0.0.0.0',
             port=config.webhook_port,
-            log_level=config.log_level.lower()
+            log_level=config.log_level.lower(),
+            access_log=False  # Disable Uvicorn's access logger, use our middleware
         )
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
