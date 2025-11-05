@@ -4,11 +4,10 @@ After=docker.service
 Requires=docker.service
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=forking
 WorkingDirectory=/opt/extract-build-logs
-ExecStartPre=-/usr/bin/docker stop bfa-gitlab-pipeline-extractor
-ExecStartPre=-/usr/bin/docker rm bfa-gitlab-pipeline-extractor
+ExecStartPre=/bin/sh -c '/usr/bin/docker stop bfa-gitlab-pipeline-extractor 2>/dev/null || true'
+ExecStartPre=/bin/sh -c '/usr/bin/docker rm bfa-gitlab-pipeline-extractor 2>/dev/null || true'
 ExecStart=/usr/bin/docker run -d \
     --name bfa-gitlab-pipeline-extractor \
     --restart unless-stopped \
@@ -17,7 +16,7 @@ ExecStart=/usr/bin/docker run -d \
     -v /opt/extract-build-logs/.env:/app/.env:ro \
     gitlab-log-extractor:latest
 ExecStop=/usr/bin/docker stop bfa-gitlab-pipeline-extractor
-ExecStopPost=-/usr/bin/docker rm bfa-gitlab-pipeline-extractor
+ExecStopPost=/bin/sh -c '/usr/bin/docker rm bfa-gitlab-pipeline-extractor 2>/dev/null || true'
 Restart=on-failure
 RestartSec=10s
 

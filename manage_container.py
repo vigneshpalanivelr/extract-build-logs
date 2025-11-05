@@ -544,7 +544,7 @@ def stop_container(client: docker.DockerClient) -> bool:
 
 def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bool:
     """
-    Restart container.
+    Restart container. Container must exist and be running.
 
     Args:
         client: Docker client
@@ -553,6 +553,18 @@ def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bo
     Returns:
         True if successful, False otherwise
     """
+    # Check if container exists first
+    if not container_exists(client):
+        console.print(f"[bold red]✗ Container '{CONTAINER_NAME}' does not exist.[/bold red]")
+        console.print("[yellow]Use 'start' command to create and start the container.[/yellow]")
+        return False
+
+    # Check if container is running
+    if not container_running(client):
+        console.print(f"[yellow]!  Container exists but is not running.[/yellow]")
+        console.print("[yellow]Use 'start' command to start it.[/yellow]")
+        return False
+
     console.print(f"[bold blue]Restarting container:[/bold blue] {CONTAINER_NAME}")
     console.print(f"[dim]Shell equivalent: docker restart {CONTAINER_NAME}[/dim]")
     console.print(f"[dim]Or: docker stop {CONTAINER_NAME} && docker start {CONTAINER_NAME}[/dim]\n")

@@ -996,15 +996,50 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             )
             return
 
-        # Fetch all logs for the pipeline
-        logger.info(f"Fetching pipeline logs for '{project_name}'", extra={
+        # Fetch job list first (lightweight API call)
+        logger.info(f"Fetching job list for pipeline in '{project_name}'", extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
             'project_name': project_name
         })
 
         fetch_start = time.time()
-        all_logs = log_fetcher.fetch_all_logs_for_pipeline(project_id, pipeline_id)
+        all_jobs = log_fetcher.fetch_pipeline_jobs(project_id, pipeline_id)
+
+        # Filter jobs BEFORE fetching logs (optimization)
+        jobs_to_fetch = []
+        skipped_before_fetch = 0
+
+        for job in all_jobs:
+            if should_save_job_log(job, pipeline_info):
+                jobs_to_fetch.append(job)
+            else:
+                skipped_before_fetch += 1
+
+        logger.info(f"Job filtering: {len(jobs_to_fetch)} jobs to fetch, {skipped_before_fetch} jobs skipped by filter", extra={
+            'pipeline_id': pipeline_id,
+            'jobs_to_fetch': len(jobs_to_fetch),
+            'jobs_skipped': skipped_before_fetch,
+            'total_jobs': len(all_jobs)
+        })
+
+        # Now fetch logs only for filtered jobs
+        all_logs = {}
+        for job in jobs_to_fetch:
+            job_id = job['id']
+            try:
+                log_content = log_fetcher.fetch_job_log(project_id, job_id)
+                all_logs[job_id] = {
+                    'details': job,
+                    'log': log_content
+                }
+            except Exception as e:
+                logger.error(f"Failed to fetch log for job {job_id}: {str(e)}")
+                all_logs[job_id] = {
+                    'details': job,
+                    'log': f"[Error fetching log: {str(e)}]"
+                }
+
         fetch_duration_ms = int((time.time() - fetch_start) * 1000)
 
         job_count = len(all_logs)
@@ -1092,11 +1127,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                     log_content = job_data['log']
                     log_size = len(log_content)
 
-                    # Check if this job should be saved based on filtering
-                    if not should_save_job_log(job_details, pipeline_info):
-                        skipped_count += 1
-                        continue
-
+                    # Note: Jobs are already filtered before fetching, so all jobs in all_logs should be saved
                     logger.debug("Saving job log to file", extra={
                         'pipeline_id': pipeline_id,
                         'job_id': job_id,
