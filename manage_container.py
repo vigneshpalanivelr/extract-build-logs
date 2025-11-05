@@ -643,8 +643,12 @@ def show_status(client: docker.DockerClient) -> bool:
 
             # Calculate uptime
             from datetime import datetime, timezone
+            import re
             started_at = container.attrs['State'].get('StartedAt')
             if started_at:
+                # Docker returns nanosecond precision, but Python only handles microseconds
+                # Truncate to 6 decimal places: 2025-11-05T09:40:28.666285451+00:00 -> 2025-11-05T09:40:28.666285+00:00
+                started_at = re.sub(r'(\.\d{6})\d+', r'\1', started_at)
                 start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
                 uptime = datetime.now(timezone.utc) - start_time
                 days = uptime.days
@@ -944,8 +948,8 @@ def test_webhook() -> bool:
         port = get_port_from_config()
         host = get_host_ip()
 
-        console.print("[blue]Testing webhook endpoint with sample payload...[/blue]")
-        console.print(f"[blue]Target:[/blue] http://{host}:{port}/webhook\n")
+        console.print("[blue]Testing GitLab webhook endpoint with sample payload...[/blue]")
+        console.print(f"[blue]Target:[/blue] http://{host}:{port}/webhook/gitlab\n")
 
         # Sample GitLab pipeline webhook payload
         sample_payload = {
@@ -980,7 +984,7 @@ def test_webhook() -> bool:
 
         import requests
         response = requests.post(
-            f"http://{host}:{port}/webhook",
+            f"http://{host}:{port}/webhook/gitlab",
             json=sample_payload,
             headers={
                 "Content-Type": "application/json",

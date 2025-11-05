@@ -555,180 +555,75 @@ top -p $(pgrep -f webhook_listener)
 
 ## Application Logging System
 
-The system includes a comprehensive logging infrastructure that tracks all operations, errors, and performance metrics with automatic rotation and retention management.
+Comprehensive logging system with automatic rotation, request ID tracking, and project name visibility.
 
-### Logging Overview
+### Features
 
-**Features:**
-- ✓ **Aligned columns** for easy reading
-- ✓ **Project names** in logs instead of just IDs
-- ✓ **Request ID tracking** with project and pipeline information
-- ✓ Pipe-delimited plain text format for easy parsing
-- ✓ Multiple specialized log files (application, access, performance)
-- ✓ Request ID correlation across all logs
-- ✓ Automatic sensitive data masking (tokens, secrets)
-- ✓ Automatic log rotation with size limits
-- ✓ DEBUG level logging for detailed troubleshooting
-- ✓ **Flexible log filtering** by pipeline/job status and project
-- ✓ Both console and file output
-- ✓ Logs visible in Docker container output
-- ✓ Persistent storage across container restarts
+- ✓ **Request ID tracking** - Trace single pipeline across all log entries
+- ✓ **Project names** - Human-readable logs showing project names instead of just IDs
+- ✓ **Aligned columns** - Pipe-delimited format for easy reading and parsing
+- ✓ **Multiple log files** - Separate application, access, and performance logs
+- ✓ **Automatic rotation** - Size-based rotation with configurable backups
+- ✓ **Sensitive data masking** - Tokens and secrets automatically redacted
+- ✓ **DEBUG level logging** - Detailed troubleshooting information
+- ✓ **Persistent storage** - Logs survive container restarts via volume mount
 
-**Log Format (Aligned Columns):**
+### Example (Request ID Tracking)
+
+Trace a single pipeline request across the entire processing flow:
+
 ```
-timestamp              | level    | logger                          | req_id   | message                   | context
-2025-10-31 06:15:13.670 | INFO     | src.webhook_listener           | 4729a324 | Webhook received          | event_type=Pipeline Hook source_ip=192.168.1.100
+2025-10-31 06:15:13.670 | INFO  | webhook_listener    | 4729a324 | Request ID 4729a324 tracking pipeline 1061175 from project 'my-app'
+2025-10-31 06:15:13.670 | INFO  | pipeline_extractor  | 4729a324 | Extracted info for pipeline 1061175 from project 'my-app' (type: main, status: success)
+2025-10-31 06:15:13.700 | INFO  | webhook_listener    | 4729a324 | Starting pipeline log extraction for 'my-app'
+2025-10-31 06:15:13.925 | INFO  | log_fetcher         | 4729a324 | Successfully fetched logs for 5 jobs
+2025-10-31 06:15:13.926 | INFO  | webhook_listener    | 4729a324 | Pipeline processing completed for 'my-app'
 ```
-
-**Column Widths:**
-- Timestamp: 23 chars (fixed)
-- Level: 8 chars (padded)
-- Logger: 30 chars (padded/truncated)
-- Request ID: 8 chars (padded)
-- Message: Variable
-- Context: Variable
-
-**Example (Showing Request ID Tracking):**
-```
-2025-10-31 06:15:13.670 | INFO     | src.webhook_listener           | 4729a324 | Request ID 4729a324 tracking pipeline 1061175 from project 'my-app' (ID: 123)
-2025-10-31 06:15:13.670 | INFO     | src.pipeline_extractor         | 4729a324 | Extracted info for pipeline 1061175 from project 'my-app' (type: main, status: success)
-2025-10-31 06:15:13.700 | INFO     | src.webhook_listener           | 4729a324 | Starting pipeline log extraction for 'my-app'
-2025-10-31 06:15:13.925 | INFO     | src.log_fetcher                | 4729a324 | Successfully fetched logs for 0 jobs
-2025-10-31 06:15:13.926 | INFO     | src.webhook_listener           | 4729a324 | Pipeline processing completed for 'my-app'
-```
-
-**Benefits:**
-- Easy to trace a single pipeline across all log entries using Request ID
-- Project names make logs human-readable
-- Aligned columns improve readability for manual review
-- Pipe-delimited format allows easy parsing with grep, awk, or log analysis tools
-
----
 
 ### Log Files and Formats
 
-The system maintains **3 specialized log files**, all stored in the `logs/` directory:
+Three specialized log files in `logs/` directory:
 
-#### 1. application.log
-**Purpose:** All application logs including errors, warnings, info, and debug messages
+| File | Purpose | Size Limit | Backups | Total Storage |
+|------|---------|------------|---------|---------------|
+| **application.log** | All application logs (DEBUG+) | 100 MB | 10 | ~1.1 GB |
+| **access.log** | HTTP requests and webhooks | 50 MB | 20 | ~1.05 GB |
+| **performance.log** | Performance metrics and timing | 50 MB | 10 | ~550 MB |
 
-**Settings:**
-- Level: DEBUG and above
-- Size Limit: 100 MB per file
-- Backups: 10 rotated files
-- Total Storage: ~1.1 GB (100 MB × 11 files)
+**Example logs:**
 
-**What's logged:**
-- Webhook processing flow
-- Pipeline extraction steps
-- API calls to GitLab
-- File operations
-- Errors with full stack traces
-- Configuration loading
-- Background task execution
-
-**Example:**
-```
-2025-10-29 17:52:05.836 | INFO | webhook_listener | a1b2c3d4 | Webhook received | event_type=Pipeline Hook source_ip=192.168.1.100
+```bash
+# application.log - Full application activity
+2025-10-29 17:52:05.836 | INFO  | webhook_listener | a1b2c3d4 | Webhook received | event_type=Pipeline Hook
 2025-10-29 17:52:05.842 | DEBUG | webhook_listener | a1b2c3d4 | Validating webhook payload | pipeline_id=12345
-2025-10-29 17:52:05.845 | INFO | webhook_listener | a1b2c3d4 | Pipeline event queued | pipeline_id=12345 project_id=100
-2025-10-29 17:52:06.000 | INFO | webhook_listener | a1b2c3d4 | Starting pipeline log extraction | pipeline_id=12345
-2025-10-29 17:52:06.287 | INFO | webhook_listener | a1b2c3d4 | Pipeline logs fetched | job_count=5 duration_ms=287
-2025-10-29 17:52:06.450 | ERROR | storage_manager | a1b2c3d4 | Failed to save log | job_id=789 error_type=IOError
+2025-10-29 17:52:06.450 | ERROR | storage_manager  | a1b2c3d4 | Failed to save log | job_id=789 error=IOError
+
+# access.log - HTTP requests
+2025-10-29 17:52:05.837 | INFO | access | a1b2c3d4 | Webhook request | source_ip=192.168.1.100 path=/webhook/gitlab
+
+# performance.log - Timing metrics
+2025-10-29 17:52:06.500 | INFO | performance | a1b2c3d4 | Webhook processed | duration_ms=664 job_count=5
 ```
-
-#### 2. access.log
-**Purpose:** HTTP request logging for all webhook requests
-
-**Settings:**
-- Level: INFO and above
-- Size Limit: 50 MB per file
-- Backups: 20 rotated files
-- Total Storage: ~1.05 GB (50 MB × 21 files)
-
-**What's logged:**
-- All incoming webhook requests
-- Source IP addresses
-- Event types
-- Request paths
-- Processing outcomes
-
-**Example:**
-```
-2025-10-29 17:52:05.837 | INFO | access | a1b2c3d4 | Webhook request | source_ip=192.168.1.100 event_type=Pipeline Hook path=/webhook
-2025-10-29 17:52:15.123 | INFO | access | b2c3d4e5 | Webhook request | source_ip=10.0.0.50 event_type=Pipeline Hook path=/webhook
-```
-
-#### 3. performance.log
-**Purpose:** Performance metrics and timing information
-
-**Settings:**
-- Level: INFO and above
-- Size Limit: 50 MB per file
-- Backups: 10 rotated files
-- Total Storage: ~550 MB (50 MB × 11 files)
-
-**What's logged:**
-- Request processing times
-- API call durations
-- File operation times
-- Job processing metrics
-- Background task performance
-
-**Example:**
-```
-2025-10-29 17:52:06.500 | INFO | performance | a1b2c3d4 | Webhook processed | pipeline_id=12345 duration_ms=664 operation=webhook_handler
-2025-10-29 17:52:15.234 | INFO | performance | a1b2c3d4 | Pipeline processing metrics | pipeline_id=12345 total_duration_ms=9234 fetch_duration_ms=287 save_duration_ms=8947 job_count=5 success_count=5 error_count=0
-```
-
-**Total Storage Capacity:** ~2.7 GB across all log files
-
----
 
 ### Log Rotation Behavior
 
-Logs automatically rotate when they reach their size limit. **No data is lost** until the backup count is exceeded.
+Logs automatically rotate when they reach size limits. Old files are numbered sequentially (`.1`, `.2`, etc.) with oldest being deleted when backup count exceeded.
 
-#### How Rotation Works
-
-When `application.log` reaches 100 MB:
-
-```
-Before rotation:
-./logs/
-├── application.log (100 MB)        ← Full, needs rotation
-├── application.log.1 (100 MB)
-├── application.log.2 (100 MB)
-└── ...
-
-After rotation:
-./logs/
-├── application.log (0 KB)          ← New empty file, logging continues here
-├── application.log.1 (100 MB)      ← Was application.log
-├── application.log.2 (100 MB)      ← Was application.log.1
-├── application.log.3 (100 MB)      ← Was application.log.2
-└── ...
-└── application.log.10 (100 MB)     ← Oldest kept
-    application.log.11              ← DELETED (exceeded backupCount)
+**Rotation example:**
+```bash
+# When application.log reaches 100 MB:
+application.log (100 MB)     →  application.log.1 (100 MB)  # Rotated
+application.log (0 KB)       ←  New file created, logging continues
+application.log.10           →  DELETED (exceeded backup count)
 ```
 
-**Key Points:**
-- ✓ Rotation happens automatically in real-time
-- ✓ No application restart required
-- ✓ No interruption to logging
-- ✓ Old files are numbered sequentially
-- ✓ Oldest file (beyond backup count) is deleted
-- ✓ You always have current file + N backups
+**Key points:**
+- Happens automatically in real-time
+- No restart required
+- No data loss until backup count exceeded
+- Logs persist across container restarts (volume mount)
 
-#### Rotation Settings
-
-| Log File | Size Limit | Backups | Total Files | Total Storage |
-|----------|------------|---------|-------------|---------------|
-| application.log | 100 MB | 10 | 11 | 1.1 GB |
-| access.log | 50 MB | 20 | 21 | 1.05 GB |
-| performance.log | 50 MB | 10 | 11 | 550 MB |
-
-#### Accessing Rotated Logs
+### Accessing Rotated Logs
 
 ```bash
 # View current log
@@ -750,677 +645,6 @@ cat logs/application.log* | wc -l
 cat logs/application.log.10
 ```
 
----
-
-### Application Restart Behavior
-
-**Important:** Log files persist across application restarts. No data is lost.
-
-#### What Happens During Restart
-
-1. **Application stops** (container restart, server reboot, manual stop)
-2. **Existing log files are preserved** - NOT deleted or truncated
-3. **Application starts**
-4. **Logging resumes appending** to existing files at current size
-5. **Rotation continues** from where it left off
-
-#### Example Timeline
-
-```
-Day 1, 10:00 AM - Application starts
-                - application.log created (0 KB)
-
-Day 1, 5:00 PM  - application.log grows to 45 MB
-
-Day 1, 6:00 PM  - Container/server restarts
-
-Day 1, 6:01 PM  - Application starts again
-                - Finds existing application.log (45 MB)
-                - Appends new logs to it (continues from 45 MB)
-
-Day 2, 3:00 PM  - application.log reaches 100 MB → rotates automatically
-                - Creates new application.log (0 KB)
-                - Renames old to application.log.1 (100 MB)
-```
-
-#### Docker Volume Mount
-
-Logs persist because they're mounted to the host:
-
-```bash
-# In manage-container.sh:
-docker run -d \
-  -v "$(pwd)/logs:/app/logs" \  # Host directory mapped to container
-  ...
-```
-
-**This means:**
-- ✓ Logs survive container deletion
-- ✓ Logs survive container recreation
-- ✓ Logs survive host reboots
-- ✓ You can access logs from host even when container is stopped
-
-```bash
-# View logs from host (even when container is stopped)
-cat ./logs/application.log
-
-# Backup logs (container can be running or stopped)
-tar -czf logs_backup_$(date +%Y%m%d).tar.gz ./logs
-```
-
----
-
-### Viewing Logs
-
-#### Method 1: Docker Logs (Console Output)
-
-View logs in real-time from Docker console:
-
-```bash
-# Follow live logs
-./manage_container.py logs
-
-# Or directly with Docker
-docker logs -f bfa-gitlab-pipeline-extractor
-
-# Last 100 lines
-docker logs --tail 100 bfa-gitlab-pipeline-extractor
-
-# Monitor 100 lines
-docker logs -f --tail 100 bfa-gitlab-pipeline-extractor
-
-# Logs since specific time
-docker logs --since "2025-10-29T10:00:00" bfa-gitlab-pipeline-extractor
-```
-
-**What you see:** Console handler output (respects LOG_LEVEL from .env configuration)
-
-#### Method 2: Log Files (Most Detailed)
-
-Read log files directly for complete DEBUG-level information:
-
-```bash
-# Tail application log (real-time)
-tail -f ./logs/application.log
-
-# Last 100 lines
-tail -n 100 ./logs/application.log
-
-# View with less (scrollable)
-less ./logs/application.log
-
-# Real-time with color highlighting
-tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
-```
-
-#### Method 3: Inside Container
-
-```bash
-# View logs inside container using docker exec
-docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/application.log
-docker exec bfa-gitlab-pipeline-extractor grep ERROR /app/logs/application.log
-docker exec bfa-gitlab-pipeline-extractor cat /app/logs/performance.log
-```
-
-#### Method 4: Watch Mode (Auto-refresh)
-
-```bash
-# Refresh every 2 seconds
-watch -n 2 'tail -20 ./logs/application.log'
-
-# Monitor multiple logs
-watch -n 5 'echo "=== APPLICATION ===" && tail -10 ./logs/application.log && echo && echo "=== PERFORMANCE ===" && tail -10 ./logs/performance.log'
-```
-
----
-
-### Searching Logs
-
-#### Search by Request ID
-
-Track a complete request flow:
-
-```bash
-# Find all logs for specific request
-grep "a1b2c3d4" logs/application.log
-
-# Search across all rotated files
-grep "a1b2c3d4" logs/application.log*
-
-# With context (5 lines before/after)
-grep -C 5 "a1b2c3d4" logs/application.log
-```
-
-#### Search by Pipeline ID
-
-```bash
-# Find all logs for pipeline
-grep "pipeline_id=12345" logs/application.log*
-
-# Count occurrences
-grep -c "pipeline_id=12345" logs/application.log
-
-# Extract only those lines
-grep "pipeline_id=12345" logs/application.log > pipeline_12345_logs.txt
-```
-
-#### Search by Project Name
-
-```bash
-# Find all logs for a specific project
-grep "project_name=my-app" logs/application.log
-
-# Search with project name in message
-grep "from project 'my-app'" logs/application.log
-
-# Extract all project names
-grep -oP "project_name=\K[^' |]+" logs/application.log | sort -u
-
-# Count logs by project
-grep -oP "project_name=\K[^' |]+" logs/application.log | sort | uniq -c | sort -rn
-```
-
-#### Search by Log Level
-
-```bash
-# All errors
-grep "| ERROR |" logs/application.log
-
-# All errors and warnings
-grep -E "| ERROR | | WARN |" logs/application.log
-
-# Count errors in last hour (assuming recent log)
-grep "| ERROR |" logs/application.log | tail -1000 | wc -l
-```
-
-#### Search by Time Range
-
-```bash
-# Logs from specific date
-grep "2025-10-29" logs/application.log
-
-# Logs from specific hour
-grep "2025-10-29 17:" logs/application.log
-
-# Logs from specific time range
-grep "2025-10-29 17:5[0-9]" logs/application.log
-```
-
-#### Complex Searches
-
-```bash
-# Failed requests with error details
-grep "| ERROR |" logs/application.log | grep "pipeline_id"
-
-# Performance issues (> 10 seconds)
-awk -F'|' '$6 ~ /duration_ms/ && $6 ~ /[0-9]{5,}/ {print}' logs/performance.log
-
-# Extract all pipeline IDs
-grep -oP 'pipeline_id=\K[0-9]+' logs/application.log | sort -u
-
-# Top 10 most logged pipelines
-grep -oP 'pipeline_id=\K[0-9]+' logs/application.log | sort | uniq -c | sort -rn | head -10
-```
-
-#### Search with jq (if logs were JSON)
-
-For pipe-delimited logs, use awk:
-
-```bash
-# Extract specific fields
-awk -F'|' '{print $1, $2, $5}' logs/application.log | tail -20
-
-# Filter by level
-awk -F'|' '$2 ~ /ERROR/ {print}' logs/application.log
-
-# Count by level
-awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' logs/application.log | sort | uniq -c
-```
-
----
-
-### Request ID Tracking
-
-Every webhook request gets a unique **Request ID** that appears in all related logs.
-
-#### How It Works
-
-```python
-# 1. Webhook receives request
-request_id = str(uuid.uuid4())[:8]  # e.g., "a1b2c3d4"
-set_request_id(request_id)
-
-# 2. Request ID automatically added to ALL logs in this context
-logger.info("Webhook received")        # Includes request_id=a1b2c3d4
-logger.info("Processing pipeline")     # Includes request_id=a1b2c3d4
-logger.error("Error occurred")         # Includes request_id=a1b2c3d4
-
-# 3. Request ID propagates to background tasks
-background_tasks.add_task(process_pipeline, request_id)
-
-# 4. Cleared after request completes
-clear_request_id()
-```
-
-#### Benefits
-
-**1. Complete Request Tracing**
-```bash
-# See everything that happened for one request
-grep "a1b2c3d4" logs/application.log
-```
-
-**2. Cross-File Correlation**
-```bash
-# Find request in all log files
-grep "a1b2c3d4" logs/application.log logs/access.log logs/performance.log
-```
-
-**3. Debugging Async Operations**
-```bash
-# Track background task execution
-grep "a1b2c3d4" logs/application.log | grep "background\|async\|task"
-```
-
-#### Example: Tracing a Complete Request
-
-```bash
-$ grep "a1b2c3d4" logs/*.log
-
-logs/access.log:
-2025-10-29 17:52:05.837 | INFO | access | a1b2c3d4 | Webhook request | source_ip=192.168.1.100
-
-logs/application.log:
-2025-10-29 17:52:05.836 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345
-2025-10-29 17:52:05.845 | INFO | webhook_listener | a1b2c3d4 | Pipeline event queued | pipeline_id=12345
-2025-10-29 17:52:06.000 | INFO | webhook_listener | a1b2c3d4 | Starting pipeline log extraction
-2025-10-29 17:52:06.287 | INFO | log_fetcher | a1b2c3d4 | Pipeline logs fetched | job_count=5
-2025-10-29 17:52:15.234 | INFO | storage_manager | a1b2c3d4 | All logs saved successfully
-
-logs/performance.log:
-2025-10-29 17:52:06.500 | INFO | performance | a1b2c3d4 | Webhook processed | duration_ms=664
-2025-10-29 17:52:15.234 | INFO | performance | a1b2c3d4 | Pipeline processing metrics | total_duration_ms=9234
-```
-
----
-
-### Log Storage and Retention
-
-#### Current Storage
-
-```bash
-# Check log directory size
-du -sh ./logs
-
-# Check each log file
-ls -lh ./logs/*.log
-
-# Check with backups
-ls -lh ./logs/application.log*
-ls -lh ./logs/access.log*
-ls -lh ./logs/performance.log*
-
-# Detailed breakdown
-du -h ./logs/* | sort -h
-```
-
-#### Storage Capacity Planning
-
-**Maximum storage (if all files reach max size):**
-- application.log: 1.1 GB (100MB × 11)
-- access.log: 1.05 GB (50MB × 21)
-- performance.log: 550 MB (50MB × 11)
-- **Total: ~2.7 GB**
-
-**Typical usage patterns:**
-- Low traffic (< 100 webhooks/day): ~100-200 MB/day
-- Medium traffic (100-1000 webhooks/day): ~500 MB - 1 GB/day
-- High traffic (> 1000 webhooks/day): ~2-5 GB/day
-
-#### Cleanup Strategies
-
-**Option 1: Manual Cleanup (Delete Old Rotations)**
-```bash
-# Delete all backups older than .3 (keeps newest 3)
-rm logs/application.log.{4..10}
-rm logs/access.log.{4..20}
-rm logs/performance.log.{4..10}
-
-# Delete all backups (keeps only current)
-rm logs/*.log.[0-9]*
-```
-
-**Option 2: Archive and Compress**
-```bash
-# Archive logs older than 7 days
-find ./logs -name "*.log.[5-9]" -o -name "*.log.1[0-9]" | \
-  tar -czf logs_archive_$(date +%Y%m%d).tar.gz -T -
-
-# Delete archived files
-find ./logs -name "*.log.[5-9]" -o -name "*.log.1[0-9]" -delete
-
-# Compression ratio typically 10:1 (1GB → 100MB)
-```
-
-**Option 3: Automated Cleanup Script**
-```bash
-# cleanup_logs.sh
-#!/bin/bash
-LOGS_DIR="./logs"
-ARCHIVE_DIR="./logs_archive"
-DAYS_TO_KEEP=30
-
-# Create archive directory
-mkdir -p "$ARCHIVE_DIR"
-
-# Archive and compress old rotated logs
-find "$LOGS_DIR" -name "*.log.[5-9]" -o -name "*.log.1[0-9]" | \
-  tar -czf "$ARCHIVE_DIR/logs_$(date +%Y%m%d_%H%M%S).tar.gz" -T - && \
-  find "$LOGS_DIR" -name "*.log.[5-9]" -o -name "*.log.1[0-9]" -delete
-
-# Delete archives older than specified days
-find "$ARCHIVE_DIR" -name "*.tar.gz" -mtime +$DAYS_TO_KEEP -delete
-
-echo "Cleanup complete!"
-```
-
-**Option 4: Reduce Backup Count**
-
-Edit `src/logging_config.py` to keep fewer backups:
-
-```python
-# Before (keeps 10 backups = 1.1 GB total)
-backupCount=10
-
-# After (keeps 5 backups = 600 MB total)
-backupCount=5
-```
-
-#### Backup Recommendations
-
-```bash
-# Daily backup (automated via cron)
-0 2 * * * tar -czf /backup/logs_$(date +\%Y\%m\%d).tar.gz ./logs
-
-# Weekly backup (keeps 4 weeks)
-0 3 * * 0 tar -czf /backup/weekly_logs_$(date +\%Y\%W).tar.gz ./logs && \
-  find /backup -name "weekly_logs_*.tar.gz" -mtime +28 -delete
-
-# Cloud backup (example with rclone)
-0 4 * * * rclone sync ./logs remote:backup/pipeline-logs
-```
-
----
-
-### Log Configuration
-
-Log behavior is configured in `src/logging_config.py` and controlled by environment variables.
-
-#### Environment Variables
-
-```bash
-# In .env file:
-LOG_LEVEL=DEBUG           # Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL
-LOG_DIR=./logs           # Directory for log files
-```
-
-#### Modify Log Levels
-
-**Change global log level:**
-```bash
-# In .env
-LOG_LEVEL=INFO           # Less verbose
-LOG_LEVEL=DEBUG          # More verbose (default)
-LOG_LEVEL=WARNING        # Only warnings and errors
-```
-
-**Restart required:**
-```bash
-./manage_container.py restart
-```
-
-#### Modify Rotation Settings
-
-Edit `src/logging_config.py`:
-
-```python
-# Application log settings
-app_handler = logging.handlers.RotatingFileHandler(
-    filename=self.log_dir / 'application.log',
-    maxBytes=100 * 1024 * 1024,  # Change size limit here
-    backupCount=10,               # Change backup count here
-    encoding='utf-8'
-)
-```
-
-**After changes:**
-```bash
-# Rebuild and restart container
-./manage_container.py build
-./manage_container.py restart
-```
-
-#### Disable Specific Logs
-
-**Disable performance logging:**
-```python
-# In src/logging_config.py, comment out performance logger setup
-# perf_logger.addHandler(perf_handler)
-```
-
-**Disable access logging:**
-```python
-# In src/logging_config.py, comment out access logger setup
-# access_logger.addHandler(access_handler)
-```
-
----
-
-### Log Filtering Configuration
-
-The system supports flexible filtering to control which logs are saved, reducing storage requirements while maintaining visibility into important events.
-
-#### Filtering Options
-
-All filtering is configured via environment variables in `.env`:
-
-```bash
-# ============================================================================
-# LOG FILTERING CONFIGURATION
-# ============================================================================
-
-# Which pipeline statuses to save logs for
-# Options: all, failed, success, running, canceled, skipped
-# Multiple values: failed,canceled,skipped
-LOG_SAVE_PIPELINE_STATUS=all
-
-# Which projects to save logs for (comma-separated project IDs)
-# Leave empty to save all projects
-LOG_SAVE_PROJECTS=
-
-# Which projects to exclude from logging
-LOG_EXCLUDE_PROJECTS=
-
-# Which job statuses to save logs for
-# Options: all, failed, success, canceled, skipped
-LOG_SAVE_JOB_STATUS=all
-
-# Save pipeline metadata even if logs are filtered
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-#### Common Filtering Scenarios
-
-**Scenario 1: Save only failed pipeline logs (90% storage reduction)**
-```bash
-LOG_SAVE_PIPELINE_STATUS=failed,canceled
-LOG_SAVE_JOB_STATUS=all
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-**Result:**
-- Only pipelines with status `failed` or `canceled` will have logs saved
-- Metadata for all pipelines is still saved (for tracking)
-- Logs show: "Pipeline X skipped - status 'success' not in filter [failed,canceled]"
-
-**Scenario 2: Save logs only for specific projects**
-```bash
-LOG_SAVE_PROJECTS=123,456,789
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=all
-```
-
-**Result:**
-- Only projects with IDs 123, 456, or 789 will have logs saved
-- All other projects are skipped
-- Logs show: "Pipeline X from 'other-project' (ID: 999) skipped - not in whitelist [123,456,789]"
-
-**Scenario 3: Exclude noisy test projects**
-```bash
-LOG_EXCLUDE_PROJECTS=999,888
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=all
-```
-
-**Result:**
-- All projects except 999 and 888 will have logs saved
-- Logs show: "Pipeline X from 'test-project' (ID: 999) skipped - in blacklist [999,888]"
-
-**Scenario 4: Save all pipelines, but only failed job logs**
-```bash
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=failed,canceled
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-**Result:**
-- All pipeline metadata is saved
-- Only job logs with status `failed` or `canceled` are saved
-- Successful jobs are skipped
-- Logs show: "Job 456 'test-job' from 'my-app' skipped - status 'success' not in filter [failed,canceled]"
-
-#### Filtering Benefits
-
-- **Storage Savings**: Reduce storage by 70-90% by saving only failed pipelines
-- **Focus on Failures**: Makes it easier to find and debug problems
-- **Multi-Project Support**: Easily add/remove projects without code changes
-- **Flexible**: Combine filters for fine-grained control
-- **Visibility**: Always know what's being filtered via logs
-
-#### Monitoring Filtered Logs
-
-Check how many logs are being filtered:
-
-```bash
-# Count filtered pipelines
-grep "skipped - status" logs/application.log | wc -l
-
-# See which projects are being filtered
-grep "skipped - not in whitelist" logs/application.log
-
-# Count skipped jobs
-grep "Job.*skipped" logs/application.log | wc -l
-```
-
----
-
-### Troubleshooting with Logs
-
-#### Problem: Container won't start
-
-```bash
-# Check Docker container logs
-# Check if log directory has permission issues
-ls -la ./logs
-chmod 755 ./logs
-
-# Check application log for startup errors
-cat ./logs/application.log | grep ERROR
-```
-
-#### Problem: No logs appearing in files
-
-```bash
-# Check log directory exists and is writable
-ls -la ./logs
-touch ./logs/test.txt && rm ./logs/test.txt
-
-# Check LOG_DIR setting
-cat .env | grep LOG_DIR
-
-# Check Docker volume mount
-docker inspect bfa-gitlab-pipeline-extractor | grep -A 5 Mounts
-
-# Verify inside container
-docker exec bfa-gitlab-pipeline-extractor ls -la /app/logs
-```
-
-#### Problem: Logs filling up disk
-
-```bash
-# Check current usage
-du -sh ./logs
-
-# Check disk space
-df -h .
-
-# Immediate cleanup (delete old rotations)
-rm ./logs/*.log.[5-9]* ./logs/*.log.1[0-9]*
-
-# Reduce backup counts in src/logging_config.py
-# Then rebuild container
-```
-
-#### Problem: Can't find specific request
-
-```bash
-# Search all log files including rotated
-grep "pipeline_id=12345" ./logs/*.log*
-
-# Search by date
-grep "2025-10-29" ./logs/application.log*
-
-# Search by request ID (returned in API response)
-grep "a1b2c3d4" ./logs/*.log*
-```
-
-#### Problem: Performance degradation
-
-```bash
-# Check log file sizes
-ls -lh ./logs/*.log
-
-# If files are huge, rotation might be failing
-# Force rotation by moving current log
-mv ./logs/application.log ./logs/application.log.backup
-# Container will create new file automatically
-
-# Check for I/O errors in system logs
-dmesg | grep -i error
-```
-
-#### Problem: Sensitive data in logs
-
-Tokens and secrets are automatically masked:
-
-```bash
-# Tokens are automatically masked
-grep "token" ./logs/application.log
-
-# Example output:
-# Using token: glpat-****
-# Authorization: ****
-```
-
-If you find unmasked sensitive data:
-
-```bash
-# Report it (add pattern to SensitiveDataFilter in src/logging_config.py)
-# Then remove from logs:
-sed -i 's/your-secret-token/****REDACTED****/g' ./logs/*.log*
-```
-
----
 
 ## Manual Testing
 
@@ -2008,41 +1232,63 @@ m.close()
 
 ## FAQ
 
+**Q: What are the webhook endpoints?**
+A:
+- GitLab: `http://your-host:8000/webhook/gitlab`
+- Jenkins: `http://your-host:8000/webhook/jenkins`
+- Use `./manage_container.py start` to see your actual endpoints
+
+**Q: How do I test the webhook?**
+A: Run `./manage_container.py test` to send a test GitLab webhook payload
+
+**Q: Where are logs stored?**
+A: In `logs/` directory:
+- `application.log` - All application logs (DEBUG level)
+- `access.log` - HTTP requests
+- `performance.log` - Performance metrics
+
 **Q: Where is monitoring data stored?**
-A: In `logs/monitoring.db` (SQLite database)
+A: In database (PostgreSQL or SQLite fallback):
+- PostgreSQL: As configured in `DB_*` environment variables
+- SQLite: `logs/monitoring.db` (fallback if PostgreSQL unavailable)
 
 **Q: Can I query the database while the server is running?**
-A: Yes, SQLite supports concurrent reads.
+A: Yes, both PostgreSQL and SQLite support concurrent reads.
 
 **Q: How long is data kept?**
-A: Forever, unless you manually clean it up. Run `monitor.cleanup_old_records(days=30)` periodically.
+A:
+- Logs: Automatically rotated based on size (see Log Rotation section)
+- Monitoring data: Forever, unless manually cleaned. Run `monitor.cleanup_old_records(days=30)` periodically.
 
-**Q: Can I export data for a specific project?**
-A: Yes, via SQL:
-```sql
-SELECT * FROM requests WHERE project_id = 123;
-```
+**Q: What does the remove command do?**
+A: It interactively asks what to remove:
+- Option 1: Container only (keeps image)
+- Option 2: Container and image
+- Logs are always preserved in `./logs/` directory
+
+**Q: How to backup data?**
+A:
+- Logs: `tar -czf logs_backup_$(date +%Y%m%d).tar.gz ./logs`
+- PostgreSQL: Use `./scripts/backup-database.sh` (see DATABASE_MAINTENANCE.md)
+- SQLite: Copy `logs/monitoring.db` file
 
 **Q: Does monitoring affect performance?**
 A: Minimal impact. Database writes are non-blocking and very fast.
-
-**Q: How to backup monitoring data?**
-A: Simply copy the `logs/monitoring.db` file.
 
 ---
 
 ## Getting Help
 
-1. **Check Logs**: Always check `webhook_server.log` first
-2. **Run Debug Scripts**: Use the debug scripts above
-3. **Test Endpoints**: Verify each endpoint works individually
+1. **Check Logs**: Always check `logs/application.log` first
+2. **View Container Status**: Run `./manage_container.py status`
+3. **Test Endpoints**: Run `./manage_container.py test`
 4. **Enable Debug Logging**: Set `LOG_LEVEL=DEBUG` in .env
 5. **Check GitHub Issues**: Look for similar problems
 6. **Provide Details**: When reporting issues, include:
    - Python version
    - Operating system
-   - Error messages
-   - Relevant log excerpts
+   - Error messages from `logs/application.log`
+   - Container status output
    - Configuration (with secrets redacted)
 
 ---
