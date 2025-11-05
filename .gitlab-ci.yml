@@ -90,26 +90,3 @@ coverage:
       - report.xml
     expire_in: 30 days
   allow_failure: false
-
-# ============================================================================
-# SECURITY STAGE - Security Scanning (Optional)
-# ============================================================================
-
-# safety:
-#   extends: .python_base
-#   stage: lint
-#   script:
-#     - pip install --cache-dir .cache/pip safety
-#     - safety check --json
-#   allow_failure: true
-
-# bandit:
-#   extends: .python_base
-#   stage: lint
-#   script:
-#     - pip install --cache-dir .cache/pip bandit
-#     - bandit -r src/ -f json -o bandit-report.json
-#   artifacts:
-#     paths:
-#       - bandit-report.json
-#   allow_failure: true

@@ -118,14 +118,6 @@ sudo systemctl status gitlab-log-extractor
 
 ## Docker Operations
 
-**Quick Start:**
-```bash
-# Build and start
-./manage_container.py build
-./manage_container.py start
-./manage_container.py status
-```
-
 **Common Commands:**
 ```bash
 ./manage_container.py build      # Build/rebuild image
@@ -789,6 +781,9 @@ docker logs -f bfa-gitlab-pipeline-extractor
 # Last 100 lines
 docker logs --tail 100 bfa-gitlab-pipeline-extractor
 
+# Monitor 100 lines
+docker logs -f --tail 100 bfa-gitlab-pipeline-extractor
+
 # Logs since specific time
 docker logs --since "2025-10-29T10:00:00" bfa-gitlab-pipeline-extractor
 ```
@@ -1293,8 +1288,6 @@ grep "Job.*skipped" logs/application.log | wc -l
 
 ```bash
 # Check Docker container logs
-docker logs bfa-gitlab-pipeline-extractor
-
 # Check if log directory has permission issues
 ls -la ./logs
 chmod 755 ./logs
