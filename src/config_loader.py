@@ -48,7 +48,7 @@ class Config:
         jenkins_user (Optional[str]): Jenkins username for API authentication
         jenkins_api_token (Optional[str]): Jenkins API token for authentication
         jenkins_webhook_secret (Optional[str]): Secret token for Jenkins webhook validation
-        bfa_server (Optional[str]): BFA server URL to obtain BFA_SECRET_KEY token
+        bfa_host (Optional[str]): BFA server hostname/IP (used to construct API endpoint)
         bfa_secret_key (Optional[str]): Secret key for BFA JWT token generation (required for /api/token endpoint)
     """
     gitlab_url: str
@@ -75,7 +75,7 @@ class Config:
     jenkins_user: Optional[str]
     jenkins_api_token: Optional[str]
     jenkins_webhook_secret: Optional[str]
-    bfa_server: Optional[str]
+    bfa_host: Optional[str]
     bfa_secret_key: Optional[str]
 
 
@@ -178,9 +178,9 @@ class ConfigLoader:
         jenkins_webhook_secret = os.getenv('JENKINS_WEBHOOK_SECRET')
 
         # BFA JWT configuration
-        # BFA_SERVER: API server to obtain BFA_SECRET_KEY token
+        # BFA_HOST: Hostname/IP of BFA server (used to construct http://BFA_HOST:8000/api/analyze)
         # BFA_SECRET_KEY: Required for JWT token generation (no fallback to GITLAB_TOKEN)
-        bfa_server = os.getenv('BFA_SERVER')
+        bfa_host = os.getenv('BFA_HOST')
         bfa_secret_key = os.getenv('BFA_SECRET_KEY')
 
         # Validate port number
@@ -237,7 +237,7 @@ class ConfigLoader:
             jenkins_user=jenkins_user,
             jenkins_api_token=jenkins_api_token,
             jenkins_webhook_secret=jenkins_webhook_secret,
-            bfa_server=bfa_server,
+            bfa_host=bfa_host,
             bfa_secret_key=bfa_secret_key
         )
 

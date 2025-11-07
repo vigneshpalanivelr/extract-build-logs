@@ -162,10 +162,10 @@ def init_app():
         logger.debug(f"GitLab Token: {masked_token}")
 
         # Log BFA configuration
-        if config.bfa_server:
-            logger.debug(f"BFA Server: {config.bfa_server}")
+        if config.bfa_host:
+            logger.debug(f"BFA Host: {config.bfa_host}")
         else:
-            logger.debug("BFA Server: Not Set")
+            logger.debug("BFA Host: Not Set")
 
         if config.bfa_secret_key:
             masked_bfa_key = mask_token(config.bfa_secret_key)
@@ -195,8 +195,8 @@ def init_app():
         else:
             token_manager = None
             logger.error("BFA_SECRET_KEY is not set - JWT token generation via /api/token endpoint will be disabled")
-            if not config.bfa_server:
-                logger.error("BFA_SERVER is also not set - cannot obtain BFA_SECRET_KEY from server")
+            if not config.bfa_host:
+                logger.error("BFA_HOST is also not set - cannot obtain BFA_SECRET_KEY from server")
 
         # Initialize API poster if enabled
         if config.api_post_enabled:
