@@ -100,55 +100,38 @@ grep "API posting" logs/application.log
 
 ## Payload Format
 
-### Current Format (v1.0)
+### Simplified Format (v2.0)
 
-The system sends a **complete pipeline snapshot** with all job logs:
+The system sends a **lightweight payload** focused on failed jobs and error extraction:
 
 ```json
 {
-  "pipeline": {
-    "id": 12345,
-    "project_id": 123,
-    "project_name": "my-app",
-    "status": "failed",
-    "ref": "main",
-    "sha": "abc123def456",
-    "source": "push",
-    "pipeline_type": "main",
-    "created_at": "2024-01-01T10:00:00Z",
-    "finished_at": "2024-01-01T10:05:00Z",
-    "duration": 300.5,
-    "user": {
-      "name": "John Doe",
-      "username": "jdoe",
-      "email": "jdoe@example.com"
-    },
-    "stages": ["build", "test", "deploy"]
-  },
-  "jobs": [
+  "repo": "api-backend",
+  "branch": "feature/user-auth",
+  "commit": "abc123d",
+  "job_name": ["build:docker", "test:unit", "test:integration", "deploy:staging"],
+  "pipeline_id": "12345",
+  "triggered_by": "john.doe",
+  "failed_steps": [
     {
-      "id": 456,
-      "name": "build",
-      "stage": "build",
-      "status": "success",
-      "created_at": "2024-01-01T10:00:05Z",
-      "started_at": "2024-01-01T10:00:10Z",
-      "finished_at": "2024-01-01T10:01:10Z",
-      "duration": 60.2,
-      "ref": "main",
-      "log": "$ npm install\nadded 234 packages...\n$ npm run build\nBuild successful!\n"
+      "step_name": "build:docker",
+      "error_lines": [
+        "npm ERR! code ERESOLVE",
+        "npm ERR! ERESOLVE unable to resolve dependency tree",
+        "npm ERR! Could not resolve dependency:",
+        "npm ERR! peer react@\"^17.0.0\" from react-dom@17.0.2",
+        "ERROR: npm install failed",
+        "ERROR: Build failed with exit code 1"
+      ]
     },
     {
-      "id": 457,
-      "name": "test",
-      "stage": "test",
-      "status": "failed",
-      "created_at": "2024-01-01T10:01:15Z",
-      "started_at": "2024-01-01T10:01:20Z",
-      "finished_at": "2024-01-01T10:02:05Z",
-      "duration": 45.8,
-      "ref": "main",
-      "log": "$ npm test\nRunning tests...\n  ✓ Test 1\n  ✗ Test 2 - FAILED\nError: Expected 5 but got 3\n"
+      "step_name": "test:integration",
+      "error_lines": [
+        "AssertionError: expected 401 but got 500",
+        "TypeError: Cannot read property 'id' of undefined",
+        "2 tests failed, 3 passed",
+        "ERROR: Test suite failed"
+      ]
     }
   ]
 }
@@ -156,45 +139,104 @@ The system sends a **complete pipeline snapshot** with all job logs:
 
 ### Field Descriptions
 
-**Pipeline Object:**
+| Field | Type | Description | Example |
+|-------|------|-------------|---------|
+| `repo` | string | Repository name (short form, without org/group) | `"api-backend"` |
+| `branch` | string | Git branch or tag name | `"main"`, `"feature/xyz"` |
+| `commit` | string | Short commit SHA (7 characters) | `"abc123d"` |
+| `job_name` | array of strings | List of **all** job names in pipeline | `["build", "test", "deploy"]` |
+| `pipeline_id` | string | Pipeline ID as string | `"12345"` |
+| `triggered_by` | string | Username who triggered pipeline, or source type | `"john.doe"`, `"push"`, `"schedule"` |
+| `failed_steps` | array of objects | **Only failed jobs** with extracted error lines | See below |
+
+**failed_steps Object:**
 | Field | Type | Description |
 |-------|------|-------------|
-| `id` | integer | GitLab pipeline ID |
-| `project_id` | integer | GitLab project ID |
-| `project_name` | string | Human-readable project name |
-| `status` | string | Pipeline status: `success`, `failed`, `canceled`, etc. |
-| `ref` | string | Git branch or tag name |
-| `sha` | string | Git commit SHA (full 40 characters) |
-| `source` | string | Trigger source: `push`, `web`, `schedule`, `api`, `trigger`, `parent_pipeline` |
-| `pipeline_type` | string | Type: `main`, `child`, `merge_request`, `unknown` |
-| `created_at` | string | ISO 8601 timestamp |
-| `finished_at` | string | ISO 8601 timestamp |
-| `duration` | float | Pipeline duration in seconds |
-| `user` | object | User who triggered the pipeline |
-| `stages` | array | List of pipeline stages |
+| `step_name` | string | Name of the failed job |
+| `error_lines` | array of strings | Extracted error lines from job log (max 50 lines per job) |
 
-**Job Object:**
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | integer | GitLab job ID |
-| `name` | string | Job name |
-| `stage` | string | Stage name |
-| `status` | string | Job status: `success`, `failed`, `canceled`, `skipped` |
-| `created_at` | string | ISO 8601 timestamp |
-| `started_at` | string | ISO 8601 timestamp |
-| `finished_at` | string | ISO 8601 timestamp |
-| `duration` | float | Job duration in seconds |
-| `ref` | string | Git branch/tag |
-| `log` | string | **Complete job log output** |
+### Error Line Extraction
 
-### Payload Size
+The system **automatically extracts error lines** from job logs by detecting these patterns (case-insensitive):
 
-**Typical sizes:**
-- Small pipeline (3 jobs, 10KB logs each): ~30 KB
-- Medium pipeline (10 jobs, 100KB logs each): ~1 MB
-- Large pipeline (50 jobs, 500KB logs each): ~25 MB
+**Error Keywords:**
+- `error`, `err!`, `failed`, `failure`, `exception`, `traceback`
+- `fatal`, `critical`, `exit code`
 
-**Note:** Very large payloads (>10MB) may need compression support (future enhancement).
+**Error Types:**
+- `SyntaxError`, `TypeError`, `AssertionError`, `ValueError`, `RuntimeError`
+- `AttributeError`, `ImportError`, `KeyError`, etc.
+
+**Test Failures:**
+- `tests failed`, `assertion failed`, `expected X but got Y`
+
+**Build Failures:**
+- `build failed`, `compilation error`, `npm ERR!`, `ERESOLVE`
+
+**Automatic Cleaning:**
+- ✓ Removes timestamps (e.g., `2024-01-01 10:00:00`)
+- ✓ Removes ANSI color codes
+- ✓ Trims whitespace
+- ✓ Removes duplicate lines
+- ✓ Limits to 50 error lines per job (configurable)
+
+### Example: Full Logs vs Error Extraction
+
+**Original Job Log (2.3 KB):**
+```
+Step 1/5 : FROM node:18-alpine
+ ---> abc123
+Step 2/5 : WORKDIR /app
+ ---> Using cache
+ ---> def456
+Step 3/5 : COPY package*.json ./
+ ---> 789ghi
+Step 4/5 : RUN npm ci
+npm ERR! code ERESOLVE
+npm ERR! ERESOLVE unable to resolve dependency tree
+npm ERR! Could not resolve dependency:
+npm ERR! peer react@"^17.0.0" from react-dom@17.0.2
+ERROR: npm install failed
+ERROR: Build failed with exit code 1
+The command '/bin/sh -c npm ci' returned a non-zero code: 1
+```
+
+**Extracted error_lines (0.2 KB):**
+```json
+[
+  "npm ERR! code ERESOLVE",
+  "npm ERR! ERESOLVE unable to resolve dependency tree",
+  "npm ERR! Could not resolve dependency:",
+  "npm ERR! peer react@\"^17.0.0\" from react-dom@17.0.2",
+  "ERROR: npm install failed",
+  "ERROR: Build failed with exit code 1"
+]
+```
+
+### Successful Pipelines
+
+If `LOG_SAVE_PIPELINE_STATUS=failed` (recommended):
+- ✓ **Successful pipelines are ignored** - no API call is made
+- ✓ Only failed pipelines trigger API posting
+- ✓ Reduces API traffic by 80-90% in typical environments
+
+If `LOG_SAVE_PIPELINE_STATUS=all`:
+- Successful pipelines will have `failed_steps: []` (empty array)
+
+### Payload Size Comparison
+
+| Pipeline Type | Old Format | New Format | Reduction |
+|--------------|------------|------------|-----------|
+| Small (3 jobs, 10KB logs) | ~30 KB | ~1 KB | **97%** |
+| Medium (10 jobs, 100KB logs) | ~1 MB | ~3 KB | **99.7%** |
+| Large (50 jobs, 500KB logs) | ~25 MB | ~15 KB | **99.9%** |
+
+**Benefits:**
+- ✓ 97-99% smaller payloads
+- ✓ Faster network transfer
+- ✓ Lower API endpoint processing cost
+- ✓ Easier to store and query
+- ✓ Focused on actionable error data
 
 ---
 
@@ -583,40 +625,64 @@ grep "falling back to file" logs/api-requests.log
 
 ### API Endpoint Implementation Example
 
-**Python Flask:**
+**Python FastAPI:**
 ```python
-from flask import Flask, request, jsonify
+from fastapi import FastAPI, HTTPException, Header
+from pydantic import BaseModel
+from typing import List, Optional
+from datetime import datetime
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI()
 
-@app.route('/pipeline-logs', methods=['POST'])
-def receive_logs():
+# Define payload models
+class FailedStep(BaseModel):
+    step_name: str
+    error_lines: List[str]
+
+class PipelinePayload(BaseModel):
+    repo: str
+    branch: str
+    commit: str
+    job_name: List[str]
+    pipeline_id: str
+    triggered_by: str
+    failed_steps: List[FailedStep]
+
+@app.post('/pipeline-logs')
+async def receive_logs(
+    payload: PipelinePayload,
+    authorization: Optional[str] = Header(None)
+):
     # Verify authentication
-    auth_header = request.headers.get('Authorization')
-    if auth_header != 'Bearer your_secret_token':
-        return jsonify({"error": "Unauthorized"}), 401
+    if authorization != 'Bearer your_secret_token':
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # Parse payload
-    data = request.get_json()
-    pipeline_id = data['pipeline']['id']
-    project_name = data['pipeline']['project_name']
-    jobs = data['jobs']
+    # Access payload fields
+    print(f"Pipeline {payload.pipeline_id} failed in {payload.repo}@{payload.branch} ({payload.commit})")
+    print(f"Triggered by: {payload.triggered_by}")
+    print(f"Failed steps: {len(payload.failed_steps)}")
 
-    # Process logs (your logic here)
-    print(f"Received pipeline {pipeline_id} from {project_name} with {len(jobs)} jobs")
+    # Log each failed step with errors
+    for step in payload.failed_steps:
+        print(f"  - {step.step_name}: {len(step.error_lines)} errors")
+        for error in step.error_lines[:3]:  # Show first 3 errors
+            print(f"    • {error}")
 
-    # Store in database, forward to analytics, etc.
-    # ...
+    # Store in database, send notifications, etc.
+    # Example: await store_in_database(payload)
+    # Example: await send_slack_notification(payload.repo, payload.branch, payload.failed_steps)
 
     # Return success
-    return jsonify({
+    return {
         "status": "success",
-        "message": f"Received {len(jobs)} job logs",
-        "pipeline_id": pipeline_id
-    }), 200
+        "message": f"Received {len(payload.failed_steps)} failed steps",
+        "pipeline_id": payload.pipeline_id,
+        "timestamp": datetime.utcnow().isoformat()
+    }
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    uvicorn.run(app, host='0.0.0.0', port=5000)
 ```
 
 **Node.js Express:**
@@ -624,7 +690,7 @@ if __name__ == '__main__':
 const express = require('express');
 const app = express();
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({ limit: '10mb' }));  // Smaller limit due to simplified format
 
 app.post('/pipeline-logs', (req, res) => {
     // Verify authentication
@@ -633,18 +699,31 @@ app.post('/pipeline-logs', (req, res) => {
         return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    // Parse payload
-    const { pipeline, jobs } = req.body;
-    console.log(`Received pipeline ${pipeline.id} with ${jobs.length} jobs`);
+    // Parse new simplified payload
+    const { repo, branch, commit, pipeline_id, triggered_by, failed_steps } = req.body;
+
+    console.log(`Pipeline ${pipeline_id} failed in ${repo}@${branch} (${commit})`);
+    console.log(`Triggered by: ${triggered_by}`);
+    console.log(`Failed steps: ${failed_steps.length}`);
+
+    // Log each failed step with errors
+    failed_steps.forEach(step => {
+        console.log(`  - ${step.step_name}: ${step.error_lines.length} errors`);
+        step.error_lines.slice(0, 3).forEach(error => {  // Show first 3 errors
+            console.log(`    • ${error}`);
+        });
+    });
 
     // Process logs (your logic here)
-    // ...
+    // Example: storeInDatabase(req.body)
+    // Example: sendSlackNotification(repo, branch, failed_steps)
 
     // Return success
     res.json({
         status: 'success',
-        message: `Received ${jobs.length} job logs`,
-        pipeline_id: pipeline.id
+        message: `Received ${failed_steps.length} failed steps`,
+        pipeline_id: pipeline_id,
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -673,28 +752,56 @@ sudo systemctl restart gitlab-log-extractor
 **Option B: Run Local Test Server**
 ```python
 # test_api_server.py
-from flask import Flask, request, jsonify
-import json
+from fastapi import FastAPI, Request
+from pydantic import BaseModel
+from typing import List
+import uvicorn
 
-app = Flask(__name__)
+app = FastAPI()
 
-@app.route('/logs', methods=['POST'])
-def receive():
+class FailedStep(BaseModel):
+    step_name: str
+    error_lines: List[str]
+
+class PipelinePayload(BaseModel):
+    repo: str
+    branch: str
+    commit: str
+    job_name: List[str]
+    pipeline_id: str
+    triggered_by: str
+    failed_steps: List[FailedStep]
+
+@app.post('/logs')
+async def receive_logs(payload: PipelinePayload, request: Request):
     print("="*80)
     print("Received API POST:")
     print(f"Headers: {dict(request.headers)}")
-    print(f"Body size: {len(request.data)} bytes")
-    data = request.get_json()
-    print(f"Pipeline ID: {data['pipeline']['id']}")
-    print(f"Jobs: {len(data['jobs'])}")
+    print(f"\nPayload:")
+    print(f"  Repo: {payload.repo}")
+    print(f"  Branch: {payload.branch}")
+    print(f"  Commit: {payload.commit}")
+    print(f"  Pipeline ID: {payload.pipeline_id}")
+    print(f"  Triggered by: {payload.triggered_by}")
+    print(f"  Failed steps: {len(payload.failed_steps)}")
+
+    for step in payload.failed_steps:
+        print(f"\n  Failed step: {step.step_name}")
+        print(f"    Errors: {len(step.error_lines)}")
+        for error in step.error_lines[:3]:
+            print(f"      - {error}")
+
     print("="*80)
-    return jsonify({"status": "success"}), 200
+    return {"status": "success"}
 
 if __name__ == '__main__':
-    app.run(port=5000, debug=True)
+    uvicorn.run(app, host='0.0.0.0', port=5000, log_level='info')
 ```
 
 ```bash
+# Install FastAPI and uvicorn:
+pip install fastapi uvicorn
+
 # Run test server:
 python test_api_server.py
 

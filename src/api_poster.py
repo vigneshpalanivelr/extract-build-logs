@@ -75,13 +75,84 @@ class ApiPoster:
         logger.info(f"API Poster initialized with endpoint: {config.api_post_url}")
         logger.debug(f"API log file: {self.api_log_file}")
 
+    def _extract_error_lines(self, log_content: str, max_lines: int = 50) -> list:
+        """
+        Extract error lines from job log content.
+
+        Searches for lines containing error indicators and extracts them.
+        Removes timestamps, color codes, and extra whitespace.
+
+        Args:
+            log_content (str): Raw job log content
+            max_lines (int): Maximum number of error lines to extract (default: 50)
+
+        Returns:
+            list: List of error lines (strings)
+
+        Error patterns detected:
+            - Lines containing: error, err!, failed, failure, exception, traceback
+            - Lines starting with: ERROR:, FATAL:, CRITICAL:
+            - Error types: SyntaxError, TypeError, AssertionError, etc.
+            - Test failures: "tests failed", "assertion failed"
+            - Build failures: "build failed", "exit code"
+        """
+        if not log_content:
+            return []
+
+        error_lines = []
+        seen_lines = set()  # Track duplicates
+
+        # Error patterns to search for (case-insensitive)
+        error_patterns = [
+            'error', 'err!', 'failed', 'failure', 'exception', 'traceback',
+            'syntaxerror', 'typeerror', 'assertionerror', 'valueerror',
+            'fatal', 'critical', 'exit code', 'tests failed',
+            'assertion failed', 'could not resolve', 'eresolve',
+            'compilation error', 'build failed'
+        ]
+
+        for line in log_content.split('\n'):
+            # Skip empty lines
+            if not line.strip():
+                continue
+
+            # Check if line contains error pattern
+            line_lower = line.lower()
+            if any(pattern in line_lower for pattern in error_patterns):
+                # Clean the line
+                cleaned = line.strip()
+
+                # Remove ANSI color codes
+                import re
+                cleaned = re.sub(r'\x1b\[[0-9;]*m', '', cleaned)
+
+                # Remove common timestamp patterns
+                # Examples: "2025-11-07 10:01:23", "[10:01:23]", "10:01:23.456"
+                cleaned = re.sub(r'^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}', '', cleaned)
+                cleaned = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]', '', cleaned)
+                cleaned = re.sub(r'^\d{2}:\d{2}:\d{2}\.\d+', '', cleaned)
+                cleaned = cleaned.strip()
+
+                # Skip if empty after cleaning or already seen
+                if not cleaned or cleaned in seen_lines:
+                    continue
+
+                seen_lines.add(cleaned)
+                error_lines.append(cleaned)
+
+                # Stop if we've reached max lines
+                if len(error_lines) >= max_lines:
+                    break
+
+        return error_lines
+
     def format_payload(
         self,
         pipeline_info: Dict[str, Any],
         all_logs: Dict[int, Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
-        Format pipeline and job data into API payload.
+        Format pipeline and job data into simplified API payload.
 
         Args:
             pipeline_info (Dict[str, Any]): Pipeline metadata
@@ -90,73 +161,80 @@ class ApiPoster:
         Returns:
             Dict[str, Any]: Formatted JSON payload
 
-        Payload Structure:
+        New Simplified Payload Structure:
             {
-                "pipeline_id": int,
-                "project_id": int,
-                "project_name": str,
-                "status": str,
-                "ref": str,
-                "sha": str,
-                "source": str,
-                "pipeline_type": str,
-                "created_at": str,
-                "finished_at": str,
-                "duration": float,
-                "user": dict,
-                "stages": list,
-                "jobs": [
+                "repo": str,              # Repository name (short form)
+                "branch": str,            # Branch/ref name
+                "commit": str,            # Short commit SHA (7 chars)
+                "job_name": [str],        # List of all job names
+                "pipeline_id": str,       # Pipeline ID as string
+                "triggered_by": str,      # Username or source
+                "failed_steps": [         # Only jobs with status="failed"
                     {
-                        "job_id": int,
-                        "job_name": str,
-                        "log_content": str,
-                        "status": str,
-                        "stage": str,
-                        "created_at": str,
-                        "started_at": str,
-                        "finished_at": str,
-                        "duration": float,
-                        "ref": str
-                    },
-                    ...
+                        "step_name": str,
+                        "error_lines": [str]
+                    }
                 ]
             }
         """
-        # Build jobs array
-        jobs = []
-        for job_id, job_data in all_logs.items():
-            job_details = job_data.get('details', {})
-            log_content = job_data.get('log', '')
+        # Extract repository name (short form)
+        # "my-org/demo-repo" -> "demo-repo"
+        project_name = pipeline_info.get('project_name', 'unknown')
+        repo = project_name.split('/')[-1] if '/' in project_name else project_name
 
-            jobs.append({
-                "job_id": job_id,
-                "job_name": job_details.get('name', 'unknown'),
-                "log_content": log_content,
-                "status": job_details.get('status'),
-                "stage": job_details.get('stage'),
-                "created_at": job_details.get('created_at'),
-                "started_at": job_details.get('started_at'),
-                "finished_at": job_details.get('finished_at'),
-                "duration": job_details.get('duration'),
-                "ref": job_details.get('ref')
-            })
+        # Extract branch
+        branch = pipeline_info.get('ref', 'unknown')
+
+        # Extract short commit SHA (first 7 characters)
+        sha = pipeline_info.get('sha', '')
+        commit = sha[:7] if sha else 'unknown'
+
+        # Build job_name list (all jobs)
+        job_names = []
+        for job_data in all_logs.values():
+            job_details = job_data.get('details', {})
+            job_name = job_details.get('name', 'unknown')
+            job_names.append(job_name)
+
+        # Extract triggered_by
+        # Priority: user.username -> user.name -> source
+        user_info = pipeline_info.get('user', {})
+        if isinstance(user_info, dict):
+            triggered_by = user_info.get('username') or user_info.get('name')
+        else:
+            triggered_by = None
+
+        if not triggered_by:
+            triggered_by = pipeline_info.get('source', 'unknown')
+
+        # Build failed_steps (only jobs with status="failed")
+        failed_steps = []
+        for job_data in all_logs.values():
+            job_details = job_data.get('details', {})
+            job_status = job_details.get('status', '')
+
+            # Only include failed jobs
+            if job_status == 'failed':
+                step_name = job_details.get('name', 'unknown')
+                log_content = job_data.get('log', '')
+
+                # Extract error lines from log
+                error_lines = self._extract_error_lines(log_content)
+
+                failed_steps.append({
+                    "step_name": step_name,
+                    "error_lines": error_lines
+                })
 
         # Build complete payload
         payload = {
-            "pipeline_id": pipeline_info['pipeline_id'],
-            "project_id": pipeline_info['project_id'],
-            "project_name": pipeline_info.get('project_name', 'unknown'),
-            "status": pipeline_info['status'],
-            "ref": pipeline_info.get('ref'),
-            "sha": pipeline_info.get('sha'),
-            "source": pipeline_info.get('source'),
-            "pipeline_type": pipeline_info.get('pipeline_type'),
-            "created_at": pipeline_info.get('created_at'),
-            "finished_at": pipeline_info.get('finished_at'),
-            "duration": pipeline_info.get('duration'),
-            "user": pipeline_info.get('user'),
-            "stages": pipeline_info.get('stages', []),
-            "jobs": jobs
+            "repo": repo,
+            "branch": branch,
+            "commit": commit,
+            "job_name": job_names,
+            "pipeline_id": str(pipeline_info['pipeline_id']),
+            "triggered_by": triggered_by,
+            "failed_steps": failed_steps
         }
 
         return payload
