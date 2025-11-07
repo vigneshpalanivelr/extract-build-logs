@@ -2,6 +2,80 @@
 
 This guide covers database maintenance, backup, and restore procedures for both PostgreSQL and SQLite.
 
+## Quick Start
+
+For common database operations, use the **`manage_database.sh` script** which simplifies most tasks:
+
+```bash
+# PostgreSQL Container Management
+./scripts/manage_database.sh start-postgres     # Start PostgreSQL
+./scripts/manage_database.sh stop-postgres      # Stop PostgreSQL
+./scripts/manage_database.sh status-postgres    # Check status
+
+# Database Operations
+./scripts/manage_database.sh backup daily       # Create backup
+./scripts/manage_database.sh restore <file>     # Restore from backup
+./scripts/manage_database.sh check              # Health check
+./scripts/manage_database.sh list               # List backups
+```
+
+**The rest of this document** provides detailed SQL commands and advanced operations for power users who need direct database access.
+
+## Debug Commands
+
+Useful commands for debugging PostgreSQL issues:
+
+```bash
+# Check if PostgreSQL container is running
+docker ps | grep pipeline-logs-postgres
+
+# View PostgreSQL logs
+docker logs pipeline-logs-postgres
+docker logs -f pipeline-logs-postgres --tail 100
+
+# Check PostgreSQL status and stats
+./scripts/manage_database.sh status-postgres
+
+# Connect to PostgreSQL interactively
+docker exec -it pipeline-logs-postgres psql -U logextractor -d pipeline_logs
+
+# Check PostgreSQL version
+docker exec pipeline-logs-postgres psql -U logextractor -c "SELECT version();"
+
+# Check active connections
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c \
+  "SELECT pid, usename, application_name, client_addr, state, query FROM pg_stat_activity;"
+
+# Check database size
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c \
+  "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));"
+
+# Check table sizes
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c \
+  "SELECT tablename, pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
+   FROM pg_tables WHERE schemaname='public' ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC;"
+
+# Check for long-running queries
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c \
+  "SELECT pid, now() - query_start AS duration, query FROM pg_stat_activity
+   WHERE state = 'active' AND now() - query_start > interval '5 seconds';"
+
+# Check PostgreSQL configuration
+docker exec pipeline-logs-postgres psql -U logextractor -c "SHOW ALL;"
+
+# Restart PostgreSQL container
+docker restart pipeline-logs-postgres
+
+# View PostgreSQL container resource usage
+docker stats pipeline-logs-postgres --no-stream
+
+# Inspect PostgreSQL container configuration
+docker inspect pipeline-logs-postgres
+
+# Check PostgreSQL port binding
+docker port pipeline-logs-postgres
+```
+
 ## Table of Contents
 - [PostgreSQL Maintenance](#postgresql-maintenance)
 - [SQLite Maintenance](#sqlite-maintenance)
@@ -22,7 +96,7 @@ This guide covers database maintenance, backup, and restore procedures for both 
 **Manual Backup:**
 ```bash
 # Using docker-compose
-docker-compose exec postgres pg_dump -U logextractor pipeline_logs > backup_$(date +%Y%m%d).sql
+docker exec pipeline-logs-postgres pg_dump -U logextractor pipeline_logs > backup_$(date +%Y%m%d).sql
 
 # Or if using external PostgreSQL
 pg_dump -U logextractor -h localhost pipeline_logs > backup_$(date +%Y%m%d).sql
@@ -30,19 +104,19 @@ pg_dump -U logextractor -h localhost pipeline_logs > backup_$(date +%Y%m%d).sql
 
 **Compressed Backup (recommended for large databases):**
 ```bash
-docker-compose exec postgres pg_dump -U logextractor pipeline_logs | gzip > backup_$(date +%Y%m%d).sql.gz
+docker exec pipeline-logs-postgres pg_dump -U logextractor pipeline_logs | gzip > backup_$(date +%Y%m%d).sql.gz
 ```
 
 **Custom Format (faster restore, parallel support):**
 ```bash
-docker-compose exec postgres pg_dump -U logextractor -F c pipeline_logs > backup_$(date +%Y%m%d).dump
+docker exec pipeline-logs-postgres pg_dump -U logextractor -F c pipeline_logs > backup_$(date +%Y%m%d).dump
 ```
 
 #### 2. Check Database Size
 
 ```bash
 # Via docker-compose
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 SELECT
     pg_size_pretty(pg_database_size('pipeline_logs')) as total_size,
     pg_size_pretty(pg_total_relation_size('requests')) as requests_table_size;
@@ -57,7 +131,7 @@ SELECT
 #### 3. Monitor Table Growth
 
 ```bash
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 SELECT
     COUNT(*) as total_requests,
     COUNT(*) FILTER (WHERE timestamp > NOW() - INTERVAL '24 hours') as last_24h,
@@ -72,10 +146,10 @@ FROM requests;
 
 ```bash
 # Analyze and vacuum (non-blocking)
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "VACUUM ANALYZE requests;"
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "VACUUM ANALYZE requests;"
 
 # Full vacuum (requires table lock - do during low traffic)
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "VACUUM FULL requests;"
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "VACUUM FULL requests;"
 ```
 
 **What VACUUM does:**
@@ -86,7 +160,7 @@ docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "VACUUM FU
 #### 2. Reindex Tables (Improve Query Performance)
 
 ```bash
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "REINDEX TABLE requests;"
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "REINDEX TABLE requests;"
 ```
 
 **When to reindex:**
@@ -97,7 +171,7 @@ docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "REINDEX T
 #### 3. Check for Bloat
 
 ```bash
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 SELECT
     schemaname,
     tablename,
@@ -133,13 +207,13 @@ VACUUM ANALYZE requests;
 **Or export to CSV and delete:**
 ```bash
 # Export old data
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 COPY (SELECT * FROM requests WHERE timestamp < NOW() - INTERVAL '90 days')
 TO STDOUT WITH CSV HEADER
 " > archive_$(date +%Y%m%d).csv
 
 # Delete old data
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 DELETE FROM requests WHERE timestamp < NOW() - INTERVAL '90 days';
 VACUUM ANALYZE requests;
 "
@@ -148,7 +222,7 @@ VACUUM ANALYZE requests;
 #### 2. Update Statistics
 
 ```bash
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "ANALYZE requests;"
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "ANALYZE requests;"
 ```
 
 ### Automated Maintenance (PostgreSQL Auto-Vacuum)
@@ -156,7 +230,7 @@ docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "ANALYZE r
 PostgreSQL has built-in autovacuum. Check if it's working:
 
 ```bash
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 SELECT
     schemaname,
     tablename,
@@ -169,7 +243,7 @@ WHERE tablename = 'requests';
 
 **Enable/configure autovacuum** (if needed):
 ```bash
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 ALTER TABLE requests SET (
     autovacuum_enabled = true,
     autovacuum_vacuum_scale_factor = 0.1,
@@ -331,7 +405,7 @@ mkdir -p $BACKUP_DIR
 
 # PostgreSQL
 if [ "$DATABASE_URL" ]; then
-    docker-compose exec -T postgres pg_dump -U logextractor pipeline_logs | \
+    docker exec -i pipeline-logs-postgres pg_dump -U logextractor pipeline_logs | \
         gzip > $BACKUP_DIR/postgres_$(date +%Y%m%d).sql.gz
 else
     # SQLite
@@ -355,17 +429,25 @@ echo "Backup completed: $(date)"
 
 **Using WAL archiving:**
 
+To enable WAL archiving, modify the PostgreSQL container startup command in `scripts/manage_database.sh`:
+
 ```bash
-# In docker-compose.yml, add to postgres service:
-command: postgres -c wal_level=replica -c archive_mode=on -c archive_command='cp %p /archive/%f'
-volumes:
-  - ./wal_archive:/archive
+# Edit start_postgres() function in scripts/manage_database.sh
+# Add custom postgres command:
+docker run -d \
+    --name "$POSTGRES_CONTAINER" \
+    ...existing options... \
+    postgres:15-alpine \
+    postgres -c wal_level=replica -c archive_mode=on -c archive_command='cp %p /archive/%f'
+
+# Also add archive volume mount:
+-v ./wal_archive:/archive \
 ```
 
 **Base backup + WAL files:**
 ```bash
 # Take base backup
-docker-compose exec postgres pg_basebackup -U logextractor -D /backup/base -Fp -Xs -P
+docker exec pipeline-logs-postgres pg_basebackup -U logextractor -D /backup/base -Fp -Xs -P
 
 # WAL files are continuously archived to ./wal_archive/
 # Can restore to any point in time
@@ -382,7 +464,7 @@ docker-compose exec postgres pg_basebackup -U logextractor -D /backup/base -Fp -
 BACKUP_FILE="backup_$(date +%Y%m%d_%H%M%S).sql.gz"
 
 # Create backup
-docker-compose exec -T postgres pg_dump -U logextractor pipeline_logs | gzip > /tmp/$BACKUP_FILE
+docker exec -i pipeline-logs-postgres pg_dump -U logextractor pipeline_logs | gzip > /tmp/$BACKUP_FILE
 
 # Upload to S3 (requires aws cli)
 aws s3 cp /tmp/$BACKUP_FILE s3://your-bucket/pipeline-logs/
@@ -409,36 +491,36 @@ echo "Backup uploaded to S3: $BACKUP_FILE"
 
 ```bash
 # Stop service
-docker-compose stop log-extractor
+python3 manage_container.py stop
 
 # Drop and recreate database
-docker-compose exec postgres psql -U logextractor -c "DROP DATABASE pipeline_logs;"
-docker-compose exec postgres psql -U logextractor -c "CREATE DATABASE pipeline_logs;"
+docker exec pipeline-logs-postgres psql -U logextractor -c "DROP DATABASE pipeline_logs;"
+docker exec pipeline-logs-postgres psql -U logextractor -c "CREATE DATABASE pipeline_logs;"
 
 # Restore
-docker-compose exec -T postgres psql -U logextractor pipeline_logs < backup_20250105.sql
+docker exec -i pipeline-logs-postgres psql -U logextractor pipeline_logs < backup_20250105.sql
 
 # Or from gzip
-gunzip -c backup_20250105.sql.gz | docker-compose exec -T postgres psql -U logextractor pipeline_logs
+gunzip -c backup_20250105.sql.gz | docker exec -i pipeline-logs-postgres psql -U logextractor pipeline_logs
 
 # Start service
-docker-compose start log-extractor
+python3 manage_container.py start
 ```
 
 #### 2. From Custom Format
 
 ```bash
-docker-compose exec postgres pg_restore -U logextractor -d pipeline_logs -c /backup/backup_20250105.dump
+docker exec pipeline-logs-postgres pg_restore -U logextractor -d pipeline_logs -c /backup/backup_20250105.dump
 ```
 
 #### 3. Point-in-Time Recovery (if WAL archiving enabled)
 
 ```bash
 # Restore base backup
-docker-compose exec postgres pg_basebackup restore...
+docker exec pipeline-logs-postgres pg_basebackup restore...
 
 # Specify recovery target
-docker-compose exec postgres psql -U logextractor -c "
+docker exec pipeline-logs-postgres psql -U logextractor -c "
 SELECT pg_create_restore_point('before_error');
 "
 
@@ -447,7 +529,7 @@ SELECT pg_create_restore_point('before_error');
 # recovery_target_time = '2025-01-05 14:30:00'
 
 # Restart PostgreSQL
-docker-compose restart postgres
+./scripts/manage_database.sh stop-postgres && ./scripts/manage_database.sh start-postgres
 ```
 
 ### SQLite Restore
@@ -498,23 +580,23 @@ sed -i 's/AUTOINCREMENT//' sqlite_export.sql
 sed -i 's/INTEGER PRIMARY KEY/SERIAL PRIMARY KEY/' sqlite_export.sql
 
 # 3. Import to PostgreSQL
-docker-compose exec -T postgres psql -U logextractor pipeline_logs < sqlite_export.sql
+docker exec -i pipeline-logs-postgres psql -U logextractor pipeline_logs < sqlite_export.sql
 
 # 4. Update .env
 echo "DATABASE_URL=postgresql://logextractor:password@postgres:5432/pipeline_logs" >> .env
 
 # 5. Restart
-docker-compose restart log-extractor
+python3 manage_container.py restart
 ```
 
 ### PostgreSQL → SQLite
 
 ```bash
 # 1. Export from PostgreSQL
-docker-compose exec postgres pg_dump -U logextractor pipeline_logs > postgres_export.sql
+docker exec pipeline-logs-postgres pg_dump -U logextractor pipeline_logs > postgres_export.sql
 
 # 2. Stop service
-docker-compose stop log-extractor
+python3 manage_container.py stop
 
 # 3. Remove DATABASE_URL from .env
 sed -i '/DATABASE_URL/d' .env
@@ -663,10 +745,10 @@ Last autovacuum: ✓ 2025-01-07 09:15:23
 **Problem**: "too many connections"
 ```bash
 # Check connection limit
-docker-compose exec postgres psql -U logextractor -c "SHOW max_connections;"
+docker exec pipeline-logs-postgres psql -U logextractor -c "SHOW max_connections;"
 
 # Kill idle connections
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "
 SELECT pg_terminate_backend(pid)
 FROM pg_stat_activity
 WHERE datname = 'pipeline_logs'
@@ -678,12 +760,12 @@ AND state_change < now() - interval '1 hour';
 **Problem**: Slow queries
 ```bash
 # Enable slow query logging
-docker-compose exec postgres psql -U logextractor -c "
+docker exec pipeline-logs-postgres psql -U logextractor -c "
 ALTER DATABASE pipeline_logs SET log_min_duration_statement = 1000;
 "
 
 # Check logs
-docker-compose logs postgres | grep "duration"
+docker logs pipeline-logs-postgres | grep "duration"
 ```
 
 ### SQLite Issues
@@ -712,16 +794,16 @@ sqlite3 logs/pipeline-logs/monitoring.db ".recover" | sqlite3 recovered.db
 ### PostgreSQL
 ```bash
 # Backup
-docker-compose exec postgres pg_dump -U logextractor pipeline_logs | gzip > backup.sql.gz
+docker exec pipeline-logs-postgres pg_dump -U logextractor pipeline_logs | gzip > backup.sql.gz
 
 # Restore
-gunzip -c backup.sql.gz | docker-compose exec -T postgres psql -U logextractor pipeline_logs
+gunzip -c backup.sql.gz | docker exec -i pipeline-logs-postgres psql -U logextractor pipeline_logs
 
 # Size
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));"
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));"
 
 # Vacuum
-docker-compose exec postgres psql -U logextractor -d pipeline_logs -c "VACUUM ANALYZE;"
+docker exec pipeline-logs-postgres psql -U logextractor -d pipeline_logs -c "VACUUM ANALYZE;"
 ```
 
 ### SQLite

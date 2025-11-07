@@ -6,9 +6,12 @@
 #   ./scripts/manage_database.sh restore <backup-file>
 #   ./scripts/manage_database.sh check
 #   ./scripts/manage_database.sh list
+#   ./scripts/manage_database.sh start-postgres
+#   ./scripts/manage_database.sh stop-postgres
+#   ./scripts/manage_database.sh status-postgres
 #
-# This script manages database backup, restore, and health checks
-# for both PostgreSQL and SQLite databases.
+# This script manages database backup, restore, health checks,
+# and PostgreSQL container lifecycle for both PostgreSQL and SQLite databases.
 
 set -e
 
@@ -18,6 +21,23 @@ RETENTION_DAILY=7
 RETENTION_WEEKLY=4
 RETENTION_MONTHLY=6
 
+# PostgreSQL Container Configuration
+POSTGRES_CONTAINER="pipeline-logs-postgres"
+POSTGRES_IMAGE="postgres:15-alpine"
+POSTGRES_NETWORK="pipeline-logs-network"
+POSTGRES_VOLUME="postgres_data"
+POSTGRES_DB="pipeline_logs"
+POSTGRES_USER="logextractor"
+
+# Get PostgreSQL password from .env or use default
+get_postgres_password() {
+    if [ -f .env ] && grep -q "^POSTGRES_PASSWORD=" .env; then
+        grep "^POSTGRES_PASSWORD=" .env | cut -d'=' -f2-
+    else
+        echo "change_this_password"
+    fi
+}
+
 # Detect database type
 detect_db_type() {
     DB_TYPE="sqlite"  # default
@@ -26,6 +46,172 @@ detect_db_type() {
             DB_TYPE="postgresql"
         fi
     fi
+}
+
+# ============================================================================
+# POSTGRESQL CONTAINER MANAGEMENT
+# ============================================================================
+
+start_postgres() {
+    echo "==================================="
+    echo "Starting PostgreSQL Container"
+    echo "==================================="
+
+    # Check if container already exists and is running
+    if docker ps -a --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+        if docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+            echo "✓ PostgreSQL container is already running"
+            return 0
+        else
+            echo "Starting existing PostgreSQL container..."
+            docker start "$POSTGRES_CONTAINER"
+            echo "✓ PostgreSQL container started"
+            return 0
+        fi
+    fi
+
+    # Create docker network if it doesn't exist
+    if ! docker network ls --format '{{.Name}}' | grep -q "^${POSTGRES_NETWORK}$"; then
+        echo "Creating docker network: $POSTGRES_NETWORK"
+        docker network create "$POSTGRES_NETWORK"
+        echo "✓ Network created"
+    fi
+
+    # Get password
+    POSTGRES_PASSWORD=$(get_postgres_password)
+
+    echo "Creating and starting PostgreSQL container..."
+    docker run -d \
+        --name "$POSTGRES_CONTAINER" \
+        --network "$POSTGRES_NETWORK" \
+        -e POSTGRES_DB="$POSTGRES_DB" \
+        -e POSTGRES_USER="$POSTGRES_USER" \
+        -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+        -v "${POSTGRES_VOLUME}:/var/lib/postgresql/data" \
+        -p 5432:5432 \
+        --restart unless-stopped \
+        --health-cmd "pg_isready -U $POSTGRES_USER" \
+        --health-interval 10s \
+        --health-timeout 5s \
+        --health-retries 5 \
+        "$POSTGRES_IMAGE"
+
+    echo ""
+    echo "Waiting for PostgreSQL to be ready..."
+    sleep 5
+
+    # Wait for health check
+    for i in {1..30}; do
+        if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
+            echo "✓ PostgreSQL is ready!"
+            echo ""
+            echo "Connection details:"
+            echo "  Host: localhost"
+            echo "  Port: 5432"
+            echo "  Database: $POSTGRES_DB"
+            echo "  User: $POSTGRES_USER"
+            echo "  Password: (from .env or default)"
+            echo ""
+            echo "==================================="
+            return 0
+        fi
+        echo -n "."
+        sleep 1
+    done
+
+    echo ""
+    echo "⚠ PostgreSQL started but health check timed out"
+    echo "Check logs with: docker logs $POSTGRES_CONTAINER"
+}
+
+stop_postgres() {
+    echo "==================================="
+    echo "Stopping PostgreSQL Container"
+    echo "==================================="
+
+    if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+        echo "PostgreSQL container is not running"
+        return 0
+    fi
+
+    echo "Stopping PostgreSQL container..."
+    docker stop "$POSTGRES_CONTAINER"
+    echo "✓ PostgreSQL container stopped"
+    echo ""
+    echo "Note: Container still exists. Use 'docker rm $POSTGRES_CONTAINER' to remove it completely."
+    echo "Note: Data is preserved in volume: $POSTGRES_VOLUME"
+    echo "==================================="
+}
+
+status_postgres() {
+    echo "==================================="
+    echo "PostgreSQL Container Status"
+    echo "==================================="
+    echo ""
+
+    # Check if container exists
+    if ! docker ps -a --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+        echo "Status: NOT CREATED"
+        echo ""
+        echo "To create and start: ./scripts/manage_database.sh start-postgres"
+        echo "==================================="
+        return 1
+    fi
+
+    # Check if running
+    if docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+        echo "Status: RUNNING ✓"
+    else
+        echo "Status: STOPPED ✗"
+        echo ""
+        echo "To start: ./scripts/manage_database.sh start-postgres"
+        echo "==================================="
+        return 1
+    fi
+
+    # Get container details
+    echo ""
+    echo "Container Details:"
+    echo "------------------"
+    docker inspect "$POSTGRES_CONTAINER" --format \
+        'Image: {{.Config.Image}}
+Created: {{.Created}}
+Started: {{.State.StartedAt}}
+Health: {{.State.Health.Status}}'
+
+    echo ""
+    echo "Network:"
+    echo "--------"
+    docker inspect "$POSTGRES_CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}'
+
+    echo ""
+    echo "Ports:"
+    echo "------"
+    docker port "$POSTGRES_CONTAINER" 2>/dev/null || echo "No ports exposed"
+
+    echo ""
+    echo "Volume:"
+    echo "-------"
+    echo "$POSTGRES_VOLUME"
+
+    # Try to connect and get stats
+    echo ""
+    echo "Database Stats:"
+    echo "---------------"
+    if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
+        DB_SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
+            "SELECT pg_size_pretty(pg_database_size('$POSTGRES_DB'));" 2>/dev/null | tr -d '[:space:]')
+        CONNECTIONS=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
+            "SELECT count(*) FROM pg_stat_activity WHERE datname='$POSTGRES_DB';" 2>/dev/null | tr -d '[:space:]')
+
+        echo "Database size: $DB_SIZE"
+        echo "Active connections: $CONNECTIONS"
+    else
+        echo "⚠ Cannot connect to database"
+    fi
+
+    echo ""
+    echo "==================================="
 }
 
 # ============================================================================
@@ -55,18 +241,20 @@ backup_database() {
 
         echo "Backing up PostgreSQL database..."
 
-        if command -v docker-compose &> /dev/null; then
-            # Using docker-compose
-            docker-compose exec -T postgres pg_dump -U logextractor pipeline_logs | \
-                gzip > "$BACKUP_FILE"
-
-            # Get database size
-            DB_SIZE=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
-                "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));" | tr -d '[:space:]')
-        else
-            echo "Error: docker-compose not found"
+        # Check if PostgreSQL container is running
+        if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+            echo "Error: PostgreSQL container is not running"
+            echo "Start it with: ./scripts/manage_database.sh start-postgres"
             exit 1
         fi
+
+        # Backup using docker exec
+        docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | \
+            gzip > "$BACKUP_FILE"
+
+        # Get database size
+        DB_SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
+            "SELECT pg_size_pretty(pg_database_size('$POSTGRES_DB'));" | tr -d '[:space:]')
 
     else
         # SQLite backup
@@ -207,35 +395,48 @@ restore_database() {
         echo "Restoring PostgreSQL database..."
         echo ""
 
+        # Check if PostgreSQL container is running
+        if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+            echo "Error: PostgreSQL container is not running"
+            echo "Start it with: ./scripts/manage_database.sh start-postgres"
+            exit 1
+        fi
+
         # Stop the application
-        echo "1. Stopping log-extractor service..."
-        if command -v docker-compose &> /dev/null; then
-            docker-compose stop log-extractor
+        echo "1. Stopping application container..."
+        if [ -f manage_container.py ]; then
+            python3 manage_container.py stop || ./manage_container.py stop
+        else
+            echo "   (manage_container.py not found, skipping)"
         fi
 
         # Drop and recreate database
         echo "2. Dropping existing database..."
-        docker-compose exec -T postgres psql -U logextractor -c "DROP DATABASE IF EXISTS pipeline_logs;"
+        docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -c "DROP DATABASE IF EXISTS $POSTGRES_DB;"
 
         echo "3. Creating fresh database..."
-        docker-compose exec -T postgres psql -U logextractor -c "CREATE DATABASE pipeline_logs;"
+        docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -c "CREATE DATABASE $POSTGRES_DB;"
 
         # Restore from backup
         echo "4. Restoring from backup..."
         if [[ "$BACKUP_FILE" == *.gz ]]; then
-            gunzip -c "$BACKUP_FILE" | docker-compose exec -T postgres psql -U logextractor pipeline_logs
+            gunzip -c "$BACKUP_FILE" | docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" "$POSTGRES_DB"
         else
-            docker-compose exec -T postgres psql -U logextractor pipeline_logs < "$BACKUP_FILE"
+            docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"
         fi
 
         # Verify restore
         echo "5. Verifying restore..."
-        ROW_COUNT=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c "SELECT COUNT(*) FROM requests;" | tr -d '[:space:]')
+        ROW_COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM requests;" | tr -d '[:space:]')
         echo "   Restored $ROW_COUNT requests"
 
         # Start the application
-        echo "6. Starting log-extractor service..."
-        docker-compose start log-extractor
+        echo "6. Starting application container..."
+        if [ -f manage_container.py ]; then
+            python3 manage_container.py start || ./manage_container.py start
+        else
+            echo "   (manage_container.py not found, skipping)"
+        fi
 
     else
         # SQLite restore
@@ -291,9 +492,10 @@ restore_database() {
     echo "==================================="
     echo ""
     echo "Next steps:"
-    echo "1. Check application logs: docker-compose logs -f log-extractor"
+    echo "1. Check application logs: docker logs -f bfa-gitlab-pipeline-extractor"
     echo "2. Verify health: curl http://localhost:8000/health"
     echo "3. Check data: Query the database to verify data is correct"
+    echo "4. Check database: ./scripts/manage_database.sh check"
 }
 
 # ============================================================================
@@ -316,9 +518,18 @@ check_database() {
         echo "PostgreSQL Health Check"
         echo "-----------------------"
 
+        # Check if container is running
+        if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
+            echo "✗ PostgreSQL container is not running"
+            echo ""
+            echo "Start it with: ./scripts/manage_database.sh start-postgres"
+            EXIT_CODE=1
+            return $EXIT_CODE
+        fi
+
         # Connection test
         echo -n "Database connection: "
-        if docker-compose exec -T postgres pg_isready -U logextractor > /dev/null 2>&1; then
+        if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
             echo "✓ OK"
         else
             echo "✗ FAILED"
@@ -327,9 +538,9 @@ check_database() {
 
         # Table exists
         echo -n "Requests table: "
-        if docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
+        if docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
             "SELECT COUNT(*) FROM requests;" > /dev/null 2>&1; then
-            ROW_COUNT=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
+            ROW_COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
                 "SELECT COUNT(*) FROM requests;" | tr -d '[:space:]')
             echo "✓ OK ($ROW_COUNT rows)"
         else
@@ -339,25 +550,25 @@ check_database() {
 
         # Recent activity
         echo -n "Recent activity (last hour): "
-        RECENT=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
+        RECENT=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
             "SELECT COUNT(*) FROM requests WHERE timestamp > NOW() - INTERVAL '1 hour';" | tr -d '[:space:]')
         echo "✓ $RECENT requests"
 
         # Database size
         echo -n "Database size: "
-        DB_SIZE=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
-            "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));" | tr -d '[:space:]')
+        DB_SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
+            "SELECT pg_size_pretty(pg_database_size('$POSTGRES_DB'));" | tr -d '[:space:]')
         echo "✓ $DB_SIZE"
 
         # Active connections
         echo -n "Active connections: "
-        CONNECTIONS=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
-            "SELECT count(*) FROM pg_stat_activity WHERE datname='pipeline_logs';" | tr -d '[:space:]')
+        CONNECTIONS=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
+            "SELECT count(*) FROM pg_stat_activity WHERE datname='$POSTGRES_DB';" | tr -d '[:space:]')
         echo "✓ $CONNECTIONS"
 
         # Autovacuum status
         echo -n "Last autovacuum: "
-        LAST_VACUUM=$(docker-compose exec -T postgres psql -U logextractor -d pipeline_logs -t -c \
+        LAST_VACUUM=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
             "SELECT COALESCE(last_autovacuum::text, 'never') FROM pg_stat_user_tables WHERE tablename='requests';" | tr -d '[:space:]')
         echo "✓ $LAST_VACUUM"
 
@@ -483,12 +694,17 @@ show_usage() {
     echo "  $0 restore <backup-file>           - Restore database from backup"
     echo "  $0 check                           - Run health check"
     echo "  $0 list                            - List available backups"
+    echo "  $0 start-postgres                  - Start PostgreSQL container"
+    echo "  $0 stop-postgres                   - Stop PostgreSQL container"
+    echo "  $0 status-postgres                 - Show PostgreSQL status and stats"
     echo ""
     echo "Examples:"
     echo "  $0 backup daily"
     echo "  $0 restore backups/daily/postgres_daily_20250107_020000.sql.gz"
     echo "  $0 check"
     echo "  $0 list"
+    echo "  $0 start-postgres"
+    echo "  $0 status-postgres"
     echo ""
 }
 
@@ -509,6 +725,15 @@ case "$COMMAND" in
         ;;
     list)
         list_backups
+        ;;
+    start-postgres)
+        start_postgres
+        ;;
+    stop-postgres)
+        stop_postgres
+        ;;
+    status-postgres)
+        status_postgres
         ;;
     -h|--help|help)
         show_usage
