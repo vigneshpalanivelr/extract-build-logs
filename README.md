@@ -1162,7 +1162,7 @@ DEBUG | Webhook Port: 8000
 DEBUG | Log Output Directory: ./logs
 DEBUG | Log Level: DEBUG
 DEBUG | GitLab Token: glpat-xxxx...xxxx
-DEBUG | BFA Server: https://bfa-server.example.com
+DEBUG | BFA Server: http://bfa-host:8000
 DEBUG | BFA Secret Key: secret-xxxx...xxxx
 INFO  | Initializing components...
 DEBUG | Pipeline extractor initialized
@@ -1218,7 +1218,7 @@ Displays configuration in organized tables:
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ Setting                     ┃ Value                                  ┃
 ┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ BFA Server                  │ https://bfa-server.example.com         │
+│ BFA Server                  │ http://bfa-host:8000                   │
 │ BFA Secret Key              │ secret-a...k (8 chars)                 │
 │ Token Endpoint              │ /api/token                             │
 │ Token Usage                 │ Dynamic JWT for API authentication     │
@@ -1315,7 +1315,7 @@ else:
 ```bash
 # .env file
 GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx       # For GitLab API access (REQUIRED)
-BFA_SERVER=https://bfa-server.example.com     # API server to get BFA_SECRET_KEY (optional)
+BFA_SERVER=http://bfa-host:8000               # API server to get BFA_SECRET_KEY (optional)
 BFA_SECRET_KEY=your_strong_random_secret      # For JWT signing (optional)
 
 # If BFA_SECRET_KEY is not set:
@@ -1326,22 +1326,38 @@ BFA_SECRET_KEY=your_strong_random_secret      # For JWT signing (optional)
 
 **Obtaining BFA_SECRET_KEY:**
 
-Option 1: Get from BFA_SERVER (if you have one)
+**Option 1: Get from BFA_SERVER (if you have one)**
 ```bash
+# Set your BFA server host
+BFA_HOST="bfa-server.example.com"
+
 # Make API call to BFA_SERVER to obtain token
-curl -X POST https://bfa-server.example.com/get-token
+curl -X POST http://${BFA_HOST}:8000/api/token
+
+# Response format:
+# {
+#   "token": "<TOKEN>"
+# }
+
+# Extract token and set in .env
+TOKEN=$(curl -s -X POST http://${BFA_HOST}:8000/api/token | jq -r '.token')
+echo "BFA_SECRET_KEY=${TOKEN}" >> .env
 ```
 
-Option 2: Generate manually
+**Option 2: Generate manually**
 ```bash
+# Generate a random secure token
 python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# Or add directly to .env
+echo "BFA_SECRET_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
 ```
 
 **Startup Behavior:**
 
 With BFA_SECRET_KEY set:
 ```
-DEBUG | BFA Server: https://bfa-server.example.com
+DEBUG | BFA Server: http://bfa-host:8000
 DEBUG | BFA Secret Key: secret-xxxx...xxxx
 DEBUG | BFA JWT token manager initialized
 ```
