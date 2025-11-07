@@ -1014,6 +1014,283 @@ All API requests and responses are logged to `logs/api-requests.log`:
 
 **See also:** [API_POSTING.md](API_POSTING.md) for complete API posting documentation.
 
+### Configuration Loading Flow
+
+Understanding how configuration is loaded, validated, and displayed throughout the application.
+
+#### Overview
+
+Configuration flows through three stages:
+1. **Loading**: Environment variables → Config object
+2. **Validation**: Verify required values and formats
+3. **Display**: Show configuration at startup and in management tools
+
+#### Detailed Flow
+
+**1. Configuration Loading** (`src/config_loader.py`)
+
+**Class:** `ConfigLoader`
+**Method:** `ConfigLoader.load()` (lines 82-237)
+
+```python
+# Entry point
+config = ConfigLoader.load()
+```
+
+**Process:**
+- **Load from environment** using `os.getenv()` with defaults
+- **Create Config dataclass** (lines 41-77) with all settings
+- **Return validated Config object**
+
+**Key Configuration Variables:**
+
+| Variable | Default | Loaded In | Used By |
+|----------|---------|-----------|---------|
+| `GITLAB_URL` | (required) | line 98 | `log_fetcher.py`, `webhook_listener.py` |
+| `GITLAB_TOKEN` | (required) | line 99 | `log_fetcher.py`, `config_loader.py` (BFA fallback) |
+| `BFA_SECRET_KEY` | `GITLAB_TOKEN` | line 180 | `token_manager.py`, `webhook_listener.py` |
+| `API_POST_URL` | None | line 156 | `api_poster.py` |
+| `API_POST_AUTH_TOKEN` | None | line 157 | `api_poster.py` |
+| `WEBHOOK_PORT` | 8000 | line 100 | `webhook_listener.py` |
+| `LOG_LEVEL` | INFO | line 104 | `logging_config.py` |
+
+**Config Dataclass Fields:**
+```python
+@dataclass
+class Config:
+    gitlab_url: str                      # GitLab instance URL
+    gitlab_token: str                    # GitLab API token
+    webhook_port: int                    # Server port (default: 8000)
+    webhook_secret: Optional[str]        # Webhook validation secret
+    log_output_dir: str                  # Log storage directory
+    retry_attempts: int                  # API retry attempts
+    retry_delay: int                     # Retry delay in seconds
+    log_level: str                       # Logging level
+    log_save_pipeline_status: str        # Pipeline filter
+    log_save_job_status: str             # Job status filter
+    log_save_projects: str               # Project whitelist
+    log_exclude_projects: str            # Project blacklist
+    log_save_metadata_always: bool       # Save metadata flag
+    api_post_enabled: bool               # Enable API posting
+    api_post_url: Optional[str]          # API endpoint URL
+    api_post_auth_token: Optional[str]   # API Bearer token
+    api_post_timeout: int                # Request timeout
+    api_post_retry_enabled: bool         # Enable API retries
+    api_post_save_to_file: bool          # Dual mode flag
+    jenkins_enabled: bool                # Enable Jenkins support
+    jenkins_url: Optional[str]           # Jenkins URL
+    jenkins_user: Optional[str]          # Jenkins username
+    jenkins_api_token: Optional[str]     # Jenkins API token
+    jenkins_webhook_secret: Optional[str] # Jenkins webhook secret
+    bfa_secret_key: Optional[str]        # BFA JWT signing key
+```
+
+**2. Configuration Validation** (`src/config_loader.py`)
+
+**Method:** `ConfigLoader.validate()` (lines 240-259)
+
+**Checks:**
+- ✓ GitLab URL format (must start with http:// or https://)
+- ✓ GitLab token length (minimum 10 characters)
+- ✓ Port range (1-65535)
+- ✓ Log level validity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- ✓ API POST URL required when `API_POST_ENABLED=true`
+- ✓ API POST URL format validation
+
+**Validation Location in Code:**
+```python
+# config_loader.py lines 182-196
+if not 1 <= webhook_port <= 65535:
+    raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}")
+
+if log_level not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
+    raise ValueError(f"Invalid LOG_LEVEL: {log_level}")
+
+if api_post_enabled:
+    if not api_post_url:
+        raise ValueError("API_POST_URL is required when API_POST_ENABLED is true")
+```
+
+**3. Configuration Display on Startup** (`src/webhook_listener.py`)
+
+**Function:** `lifespan()` context manager (lines 143-223)
+
+**Display Sequence:**
+```python
+# Lines 147-164: Basic configuration
+logger.info("Configuration loaded successfully")
+logger.debug(f"GitLab URL: {config.gitlab_url}")
+logger.debug(f"Webhook Port: {config.webhook_port}")
+logger.debug(f"Log Output Directory: {config.log_output_dir}")
+logger.debug(f"Log Level: {config.log_level}")
+logger.debug(f"Retry Attempts: {config.retry_attempts}")
+
+# Lines 160-164: Masked tokens (security)
+masked_token = mask_token(config.gitlab_token)
+logger.debug(f"GitLab Token: {masked_token}")
+masked_bfa_key = mask_token(config.bfa_secret_key)
+logger.debug(f"BFA Secret Key: {masked_bfa_key}")
+
+# Lines 184-194: API posting configuration
+if config.api_post_enabled:
+    logger.info("API posting is ENABLED")
+    logger.debug(f"API endpoint: {config.api_post_url}")
+    logger.debug(f"API timeout: {config.api_post_timeout}s")
+```
+
+**Startup Log Example:**
+```
+======================================================================
+GitLab Pipeline Log Extractor - Initializing
+======================================================================
+INFO  | Configuration loaded successfully
+DEBUG | GitLab URL: https://gitlab.example.com
+DEBUG | Webhook Port: 8000
+DEBUG | Log Output Directory: ./logs
+DEBUG | Log Level: DEBUG
+DEBUG | GitLab Token: glpat-xxxx...xxxx
+DEBUG | BFA Secret Key: secret-xxxx...xxxx
+INFO  | Initializing components...
+DEBUG | Pipeline extractor initialized
+DEBUG | Log fetcher initialized
+DEBUG | Storage manager initialized
+DEBUG | Pipeline monitor initialized
+DEBUG | BFA JWT token manager initialized
+INFO  | API posting is ENABLED
+DEBUG | API endpoint: https://api.example.com/logs
+```
+
+**4. Configuration Display in Management Tool** (`manage_container.py`)
+
+**Function:** `review_config()` (lines 365-528)
+
+Displays configuration in organized tables:
+
+**Tables Displayed:**
+1. **Configuration Review** (lines 398-413)
+   - GitLab URL, Token, Webhook Port, Secret
+   - Log Level, Directory, Retry settings
+
+2. **Log Filtering Settings** (lines 416-436)
+   - Pipeline/Job status filters
+   - Project whitelist/blacklist
+
+3. **API Posting Configuration** (lines 438-453)
+   - Only shown if `API_POST_ENABLED=true`
+   - API URL, Auth Token, Timeout, Retry
+
+4. **Jenkins Integration** (lines 455-469)
+   - Only shown if `JENKINS_ENABLED=true`
+   - Jenkins URL, User, API Token, Secret
+
+5. **BFA JWT Token Generation** (lines 471-481)
+   - BFA Secret Key (masked)
+   - Token endpoint (/api/token)
+   - Usage description
+
+**Display Command:**
+```bash
+# Show full configuration
+./manage_container.py config
+
+# Or during container start
+./manage_container.py start
+```
+
+**Example Output:**
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Setting                     ┃ Value                       ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ BFA Secret Key              │ secret-a...k (8 chars)      │
+│ Token Endpoint              │ /api/token                  │
+│ Token Usage                 │ Dynamic JWT for API auth    │
+└─────────────────────────────┴─────────────────────────────┘
+```
+
+#### Configuration Debug Commands
+
+**Test Configuration Loading:**
+```bash
+# Test config_loader.py directly
+python src/config_loader.py
+
+# Expected output:
+# Configuration loaded successfully!
+# GitLab URL: https://gitlab.example.com
+# Webhook Port: 8000
+# Log Output Directory: ./logs
+```
+
+**View Current Configuration:**
+```bash
+# Using management tool
+./manage_container.py config
+
+# Check environment file
+cat .env
+
+# Verify specific values
+grep "BFA_SECRET_KEY" .env
+grep "API_POST_URL" .env
+```
+
+**Verify Configuration at Runtime:**
+```bash
+# Check startup logs
+tail -n 100 logs/application.log | grep -A 20 "Configuration loaded"
+
+# Monitor real-time
+tail -f logs/application.log | grep "config"
+```
+
+**Configuration Troubleshooting:**
+```bash
+# Test with different log levels
+LOG_LEVEL=DEBUG python src/config_loader.py
+
+# Validate .env file format
+python -c "from dotenv import load_dotenv; load_dotenv(); print('✓ .env file is valid')"
+
+# Check for missing required variables
+python -c "
+import os
+from dotenv import load_dotenv
+load_dotenv()
+required = ['GITLAB_URL', 'GITLAB_TOKEN']
+missing = [v for v in required if not os.getenv(v)]
+if missing:
+    print(f'❌ Missing: {missing}')
+else:
+    print('✓ All required variables set')
+"
+```
+
+#### BFA_SECRET_KEY vs GITLAB_TOKEN
+
+**Important Distinction:**
+
+| Token | Purpose | Used By | Required |
+|-------|---------|---------|----------|
+| **GITLAB_TOKEN** | Authenticate with GitLab API to fetch logs | `log_fetcher.py` | ✅ Yes |
+| **BFA_SECRET_KEY** | Sign JWT tokens for API authentication | `token_manager.py` | ❌ No (fallback to GITLAB_TOKEN) |
+
+**Configuration:**
+```bash
+# .env file
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx    # For GitLab API access
+BFA_SECRET_KEY=your_strong_random_secret   # For JWT signing
+
+# If BFA_SECRET_KEY is not set, it uses GITLAB_TOKEN as fallback
+# Recommended: Use separate secrets for security
+```
+
+**Security Best Practice:**
+- Use different secrets for different purposes
+- Generate BFA_SECRET_KEY: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+- Never commit secrets to version control
+- Rotate secrets periodically
+
 ## Usage
 
 ### Start the Server

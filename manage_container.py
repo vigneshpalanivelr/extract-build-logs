@@ -468,6 +468,18 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
         console.print(jenkins_table)
         console.print()
 
+    # BFA Token Generation Configuration
+    bfa_table = Table(title="BFA JWT Token Generation", show_header=True, header_style="bold cyan")
+    bfa_table.add_column("Setting", style="yellow", width=30)
+    bfa_table.add_column("Value", style="green")
+
+    bfa_table.add_row("BFA Secret Key", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[dim]Using GITLAB_TOKEN[/dim]')
+    bfa_table.add_row("Token Endpoint", "/api/token")
+    bfa_table.add_row("Token Usage", "Dynamic JWT for API authentication")
+
+    console.print(bfa_table)
+    console.print()
+
     # Container Configuration
     container_table = Table(title="Container Settings", show_header=True, header_style="bold cyan")
     container_table.add_column("Setting", style="yellow", width=30)

@@ -157,9 +157,11 @@ def init_app():
         logger.debug(f"Log Level: {config.log_level}")
         logger.debug(f"Retry Attempts: {config.retry_attempts}")
 
-        # Mask token in logs
+        # Mask tokens in logs
         masked_token = mask_token(config.gitlab_token)
         logger.debug(f"GitLab Token: {masked_token}")
+        masked_bfa_key = mask_token(config.bfa_secret_key) if config.bfa_secret_key else "Not Set"
+        logger.debug(f"BFA Secret Key: {masked_bfa_key}")
 
         # Initialize components
         logger.info("Initializing components...")
@@ -176,9 +178,9 @@ def init_app():
         monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
         logger.debug("Pipeline monitor initialized")
 
-        # Initialize JWT token manager
-        token_manager = TokenManager(secret_key=config.jwt_secret_key)
-        logger.debug("JWT token manager initialized")
+        # Initialize BFA JWT token manager
+        token_manager = TokenManager(secret_key=config.bfa_secret_key)
+        logger.debug("BFA JWT token manager initialized")
 
         # Initialize API poster if enabled
         if config.api_post_enabled:
@@ -379,7 +381,7 @@ async def generate_token(request: Request):
 
     This endpoint generates a JWT token that can be used for API posting
     instead of using a static API_POST_AUTH_TOKEN. The token is signed
-    with the JWT_SECRET_KEY (or GITLAB_TOKEN if not set).
+    with the BFA_SECRET_KEY (or GITLAB_TOKEN if not set).
 
     Request Body:
         {
