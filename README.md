@@ -1047,8 +1047,9 @@ config = ConfigLoader.load()
 | Variable | Default | Loaded In | Used By |
 |----------|---------|-----------|---------|
 | `GITLAB_URL` | (required) | line 98 | `log_fetcher.py`, `webhook_listener.py` |
-| `GITLAB_TOKEN` | (required) | line 99 | `log_fetcher.py`, `config_loader.py` (BFA fallback) |
-| `BFA_SECRET_KEY` | `GITLAB_TOKEN` | line 180 | `token_manager.py`, `webhook_listener.py` |
+| `GITLAB_TOKEN` | (required) | line 99 | `log_fetcher.py` |
+| `BFA_SERVER` | None | line 183 | `token_manager.py` (for obtaining BFA_SECRET_KEY) |
+| `BFA_SECRET_KEY` | None | line 184 | `token_manager.py`, `webhook_listener.py` |
 | `API_POST_URL` | None | line 156 | `api_poster.py` |
 | `API_POST_AUTH_TOKEN` | None | line 157 | `api_poster.py` |
 | `WEBHOOK_PORT` | 8000 | line 100 | `webhook_listener.py` |
@@ -1082,6 +1083,7 @@ class Config:
     jenkins_user: Optional[str]          # Jenkins username
     jenkins_api_token: Optional[str]     # Jenkins API token
     jenkins_webhook_secret: Optional[str] # Jenkins webhook secret
+    bfa_server: Optional[str]            # BFA server URL for token API
     bfa_secret_key: Optional[str]        # BFA JWT signing key
 ```
 
@@ -1125,20 +1127,31 @@ logger.debug(f"Log Output Directory: {config.log_output_dir}")
 logger.debug(f"Log Level: {config.log_level}")
 logger.debug(f"Retry Attempts: {config.retry_attempts}")
 
-# Lines 160-164: Masked tokens (security)
+# Lines 160-175: Masked tokens and BFA configuration (security)
 masked_token = mask_token(config.gitlab_token)
 logger.debug(f"GitLab Token: {masked_token}")
-masked_bfa_key = mask_token(config.bfa_secret_key)
-logger.debug(f"BFA Secret Key: {masked_bfa_key}")
 
-# Lines 184-194: API posting configuration
+# BFA configuration logging
+if config.bfa_server:
+    logger.debug(f"BFA Server: {config.bfa_server}")
+else:
+    logger.debug("BFA Server: Not Set")
+
+if config.bfa_secret_key:
+    masked_bfa_key = mask_token(config.bfa_secret_key)
+    logger.debug(f"BFA Secret Key: {masked_bfa_key}")
+else:
+    logger.debug("BFA Secret Key: Not Set")
+    logger.error("BFA_SECRET_KEY is not set - JWT token generation disabled")
+
+# Lines 201-210: API posting configuration
 if config.api_post_enabled:
     logger.info("API posting is ENABLED")
     logger.debug(f"API endpoint: {config.api_post_url}")
     logger.debug(f"API timeout: {config.api_post_timeout}s")
 ```
 
-**Startup Log Example:**
+**Startup Log Example (with BFA configured):**
 ```
 ======================================================================
 GitLab Pipeline Log Extractor - Initializing
@@ -1149,6 +1162,7 @@ DEBUG | Webhook Port: 8000
 DEBUG | Log Output Directory: ./logs
 DEBUG | Log Level: DEBUG
 DEBUG | GitLab Token: glpat-xxxx...xxxx
+DEBUG | BFA Server: https://bfa-server.example.com
 DEBUG | BFA Secret Key: secret-xxxx...xxxx
 INFO  | Initializing components...
 DEBUG | Pipeline extractor initialized
@@ -1183,10 +1197,12 @@ Displays configuration in organized tables:
    - Only shown if `JENKINS_ENABLED=true`
    - Jenkins URL, User, API Token, Secret
 
-5. **BFA JWT Token Generation** (lines 471-481)
+5. **BFA JWT Token Generation** (lines 471-486)
+   - BFA Server URL
    - BFA Secret Key (masked)
    - Token endpoint (/api/token)
    - Usage description
+   - Warning status if BFA_SECRET_KEY not set
 
 **Display Command:**
 ```bash
@@ -1197,15 +1213,29 @@ Displays configuration in organized tables:
 ./manage_container.py start
 ```
 
-**Example Output:**
+**Example Output (with BFA configured):**
 ```
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
-┃ Setting                     ┃ Value                       ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
-│ BFA Secret Key              │ secret-a...k (8 chars)      │
-│ Token Endpoint              │ /api/token                  │
-│ Token Usage                 │ Dynamic JWT for API auth    │
-└─────────────────────────────┴─────────────────────────────┘
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Setting                     ┃ Value                                  ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ BFA Server                  │ https://bfa-server.example.com         │
+│ BFA Secret Key              │ secret-a...k (8 chars)                 │
+│ Token Endpoint              │ /api/token                             │
+│ Token Usage                 │ Dynamic JWT for API authentication     │
+└─────────────────────────────┴────────────────────────────────────────┘
+```
+
+**Example Output (without BFA configured):**
+```
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ Setting                     ┃ Value                                  ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┩
+│ BFA Server                  │ Not Set                                │
+│ BFA Secret Key              │ Not Set                                │
+│ Token Endpoint              │ /api/token                             │
+│ Token Usage                 │ Dynamic JWT for API authentication     │
+│ Status                      │ ⚠ Token generation disabled            │
+└─────────────────────────────┴────────────────────────────────────────┘
 ```
 
 #### Configuration Debug Commands
@@ -1266,30 +1296,71 @@ else:
 "
 ```
 
-#### BFA_SECRET_KEY vs GITLAB_TOKEN
+#### BFA Configuration: BFA_SERVER & BFA_SECRET_KEY vs GITLAB_TOKEN
 
 **Important Distinction:**
 
-| Token | Purpose | Used By | Required |
-|-------|---------|---------|----------|
+| Token/Setting | Purpose | Used By | Required |
+|---------------|---------|---------|----------|
 | **GITLAB_TOKEN** | Authenticate with GitLab API to fetch logs | `log_fetcher.py` | ✅ Yes |
-| **BFA_SECRET_KEY** | Sign JWT tokens for API authentication | `token_manager.py` | ❌ No (fallback to GITLAB_TOKEN) |
+| **BFA_SERVER** | API server URL to obtain BFA_SECRET_KEY token | `token_manager.py` | ❌ No (optional) |
+| **BFA_SECRET_KEY** | Sign JWT tokens for API authentication | `token_manager.py` | ❌ No (if not set, /api/token endpoint disabled) |
+
+**Key Changes:**
+- ⚠️ **No fallback**: BFA_SECRET_KEY does NOT fallback to GITLAB_TOKEN anymore
+- ⚠️ **Separate concerns**: GITLAB_TOKEN and BFA_SECRET_KEY are completely separate
+- ⚠️ **Error logging**: If BFA_SECRET_KEY is not set, errors are logged and JWT token generation is disabled
 
 **Configuration:**
 ```bash
 # .env file
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx    # For GitLab API access
-BFA_SECRET_KEY=your_strong_random_secret   # For JWT signing
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx       # For GitLab API access (REQUIRED)
+BFA_SERVER=https://bfa-server.example.com     # API server to get BFA_SECRET_KEY (optional)
+BFA_SECRET_KEY=your_strong_random_secret      # For JWT signing (optional)
 
-# If BFA_SECRET_KEY is not set, it uses GITLAB_TOKEN as fallback
-# Recommended: Use separate secrets for security
+# If BFA_SECRET_KEY is not set:
+# - JWT token generation via /api/token endpoint will be disabled
+# - Errors will be logged on startup
+# - API calls to /api/token will return 503 Service Unavailable
+```
+
+**Obtaining BFA_SECRET_KEY:**
+
+Option 1: Get from BFA_SERVER (if you have one)
+```bash
+# Make API call to BFA_SERVER to obtain token
+curl -X POST https://bfa-server.example.com/get-token
+```
+
+Option 2: Generate manually
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+**Startup Behavior:**
+
+With BFA_SECRET_KEY set:
+```
+DEBUG | BFA Server: https://bfa-server.example.com
+DEBUG | BFA Secret Key: secret-xxxx...xxxx
+DEBUG | BFA JWT token manager initialized
+```
+
+Without BFA_SECRET_KEY:
+```
+DEBUG | BFA Server: Not Set
+DEBUG | BFA Secret Key: Not Set
+ERROR | BFA_SECRET_KEY is not set - JWT token generation disabled
+ERROR | BFA_SERVER is also not set - cannot obtain BFA_SECRET_KEY from server
 ```
 
 **Security Best Practice:**
-- Use different secrets for different purposes
-- Generate BFA_SECRET_KEY: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
-- Never commit secrets to version control
-- Rotate secrets periodically
+- ✅ Use different secrets for different purposes (GITLAB_TOKEN ≠ BFA_SECRET_KEY)
+- ✅ Never use GITLAB_TOKEN for JWT signing
+- ✅ Generate strong random secrets: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+- ✅ Never commit secrets to version control
+- ✅ Rotate secrets periodically
+- ✅ Use BFA_SERVER to centrally manage BFA_SECRET_KEY distribution
 
 ## Usage
 

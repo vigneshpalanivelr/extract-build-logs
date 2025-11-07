@@ -160,8 +160,18 @@ def init_app():
         # Mask tokens in logs
         masked_token = mask_token(config.gitlab_token)
         logger.debug(f"GitLab Token: {masked_token}")
-        masked_bfa_key = mask_token(config.bfa_secret_key) if config.bfa_secret_key else "Not Set"
-        logger.debug(f"BFA Secret Key: {masked_bfa_key}")
+
+        # Log BFA configuration
+        if config.bfa_server:
+            logger.debug(f"BFA Server: {config.bfa_server}")
+        else:
+            logger.debug("BFA Server: Not Set")
+
+        if config.bfa_secret_key:
+            masked_bfa_key = mask_token(config.bfa_secret_key)
+            logger.debug(f"BFA Secret Key: {masked_bfa_key}")
+        else:
+            logger.debug("BFA Secret Key: Not Set")
 
         # Initialize components
         logger.info("Initializing components...")
@@ -179,8 +189,14 @@ def init_app():
         logger.debug("Pipeline monitor initialized")
 
         # Initialize BFA JWT token manager
-        token_manager = TokenManager(secret_key=config.bfa_secret_key)
-        logger.debug("BFA JWT token manager initialized")
+        if config.bfa_secret_key:
+            token_manager = TokenManager(secret_key=config.bfa_secret_key)
+            logger.debug("BFA JWT token manager initialized")
+        else:
+            token_manager = None
+            logger.error("BFA_SECRET_KEY is not set - JWT token generation via /api/token endpoint will be disabled")
+            if not config.bfa_server:
+                logger.error("BFA_SERVER is also not set - cannot obtain BFA_SECRET_KEY from server")
 
         # Initialize API poster if enabled
         if config.api_post_enabled:
@@ -381,7 +397,7 @@ async def generate_token(request: Request):
 
     This endpoint generates a JWT token that can be used for API posting
     instead of using a static API_POST_AUTH_TOKEN. The token is signed
-    with the BFA_SECRET_KEY (or GITLAB_TOKEN if not set).
+    with the BFA_SECRET_KEY.
 
     Request Body:
         {
@@ -407,9 +423,21 @@ async def generate_token(request: Request):
 
     Error Responses:
         400: Invalid subject format
+        503: BFA_SECRET_KEY not configured (token generation disabled)
         500: Token generation failed
     """
     try:
+        # Check if token_manager is initialized
+        if token_manager is None:
+            logger.error("Token generation requested but BFA_SECRET_KEY is not configured", extra={
+                'operation': 'token_generation_error'
+            })
+            raise HTTPException(
+                status_code=503,
+                detail="JWT token generation is disabled: BFA_SECRET_KEY not configured. "
+                       "Please set BFA_SECRET_KEY in your environment configuration."
+            )
+
         # Parse request body
         body = await request.json()
         subject = body.get('subject')

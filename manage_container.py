@@ -473,9 +473,14 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     bfa_table.add_column("Setting", style="yellow", width=30)
     bfa_table.add_column("Value", style="green")
 
-    bfa_table.add_row("BFA Secret Key", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[dim]Using GITLAB_TOKEN[/dim]')
+    bfa_table.add_row("BFA Server", config.get('BFA_SERVER', '[dim]Not Set[/dim]'))
+    bfa_table.add_row("BFA Secret Key", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[bold red]Not Set[/bold red]')
     bfa_table.add_row("Token Endpoint", "/api/token")
     bfa_table.add_row("Token Usage", "Dynamic JWT for API authentication")
+
+    # Add warning if BFA_SECRET_KEY is not set
+    if not config.get('BFA_SECRET_KEY'):
+        bfa_table.add_row("Status", "[bold red]⚠ Token generation disabled[/bold red]")
 
     console.print(bfa_table)
     console.print()
