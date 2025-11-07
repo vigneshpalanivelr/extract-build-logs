@@ -200,7 +200,7 @@ class LoggingConfig:
     - Sensitive data masking
     """
 
-    def __init__(self, log_dir: str = './logs', log_level: str = 'DEBUG'):
+    def __init__(self, log_dir: str = './logs', log_level: str = 'INFO'):
         """
         Initialize logging configuration.
 
@@ -237,14 +237,14 @@ class LoggingConfig:
         console_handler.addFilter(SensitiveDataFilter())
         root_logger.addHandler(console_handler)
 
-        # 2. Application Log File - All levels including errors (DEBUG and above)
+        # 2. Application Log File - Respects configured log level
         app_handler = logging.handlers.RotatingFileHandler(
             filename=self.log_dir / 'application.log',
             maxBytes=100 * 1024 * 1024,  # 100MB
             backupCount=10,
             encoding='utf-8'
         )
-        app_handler.setLevel(logging.DEBUG)
+        app_handler.setLevel(self.log_level)  # Use configured level, not hardcoded DEBUG
         app_handler.setFormatter(formatter)
         app_handler.addFilter(RequestIdFilter())
         app_handler.addFilter(SensitiveDataFilter())
@@ -333,7 +333,7 @@ class LoggingConfig:
 _logging_config: Optional[LoggingConfig] = None
 
 
-def setup_logging(log_dir: str = './logs', log_level: str = 'DEBUG') -> LoggingConfig:
+def setup_logging(log_dir: str = './logs', log_level: str = 'INFO') -> LoggingConfig:
     """
     Initialize logging configuration (call once at startup).
 
