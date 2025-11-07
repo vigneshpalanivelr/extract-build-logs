@@ -114,7 +114,7 @@ sudo nano .env  # Edit GITLAB_URL, GITLAB_TOKEN, etc.
 sudo ./manage_container.py build
 
 # 4. Install systemd service
-sudo cp gitlab-log-extractor.service /etc/systemd/system/
+sudo cp scripts/gitlab-log-extractor.service /etc/systemd/system/
 sudo systemctl daemon-reload
 
 # 5. Start and enable service
@@ -1384,7 +1384,7 @@ The system automatically tracks **every webhook request** and maintains a comple
 - ✓ Export capabilities (CSV, JSON, SQL)
 
 **Access methods:**
-1. **CLI Dashboard** - `python monitor_dashboard.py`
+1. **CLI Dashboard** - `python scripts/monitor_dashboard.py`
 2. **REST API** - `/monitor/summary`, `/monitor/recent`, etc.
 3. **CSV Export** - For Excel/analysis
 4. **Direct SQL** - Query `logs/monitoring.db`
@@ -1434,22 +1434,22 @@ RECEIVED → IGNORED    (Wrong event type)
 
 ```bash
 # Show 24-hour summary (default)
-python monitor_dashboard.py
+python scripts/monitor_dashboard.py
 
 # Show 48-hour summary
-python monitor_dashboard.py --hours 48
+python scripts/monitor_dashboard.py --hours 48
 
 # Show recent 100 requests
-python monitor_dashboard.py --recent 100
+python scripts/monitor_dashboard.py --recent 100
 
 # Show details for specific pipeline
-python monitor_dashboard.py --pipeline 12345
+python scripts/monitor_dashboard.py --pipeline 12345
 
 # Export data to CSV
-python monitor_dashboard.py --export pipeline_data.csv
+python scripts/monitor_dashboard.py --export pipeline_data.csv
 
 # Export last 24 hours to CSV
-python monitor_dashboard.py --export data.csv --hours 24
+python scripts/monitor_dashboard.py --export data.csv --hours 24
 ```
 
 ### Dashboard Output Example
@@ -1569,10 +1569,10 @@ curl -O http://localhost:8000/monitor/export/csv
 
 ```bash
 # Quick summary
-python monitor_dashboard.py
+python scripts/monitor_dashboard.py
 
 # Detailed recent requests
-python monitor_dashboard.py --recent 50
+python scripts/monitor_dashboard.py --recent 50
 ```
 
 ### Method 2: API Calls
@@ -1608,13 +1608,13 @@ SELECT status, COUNT(*) FROM requests GROUP BY status;
 
 ```bash
 # Export all data
-python monitor_dashboard.py --export all_pipelines.csv
+python scripts/monitor_dashboard.py --export all_pipelines.csv
 
 # Export last 24 hours
-python monitor_dashboard.py --export today.csv --hours 24
+python scripts/monitor_dashboard.py --export today.csv --hours 24
 
 # Export last week
-python monitor_dashboard.py --export week.csv --hours 168
+python scripts/monitor_dashboard.py --export week.csv --hours 168
 ```
 
 ### CSV Export via API
@@ -1626,7 +1626,7 @@ curl -o pipelines.csv http://localhost:8000/monitor/export/csv?hours=24
 
 ### Analyze in Excel/Google Sheets
 
-1. Export CSV: `python monitor_dashboard.py --export data.csv`
+1. Export CSV: `python scripts/monitor_dashboard.py --export data.csv`
 2. Open in Excel/Google Sheets
 3. Create pivot tables, charts, and analysis
 
@@ -1710,10 +1710,10 @@ ORDER BY date DESC;
 
 ```bash
 # View dashboard
-python monitor_dashboard.py --hours 24
+python scripts/monitor_dashboard.py --hours 24
 
 # Export to CSV
-python monitor_dashboard.py --export today.csv --hours 24
+python scripts/monitor_dashboard.py --export today.csv --hours 24
 
 # Check via API
 curl http://localhost:8000/monitor/summary?hours=24 | jq
@@ -1723,10 +1723,10 @@ curl http://localhost:8000/monitor/summary?hours=24 | jq
 
 ```bash
 # Find pipeline in recent requests
-python monitor_dashboard.py --recent 100 | grep failed
+python scripts/monitor_dashboard.py --recent 100 | grep failed
 
 # Get details for specific pipeline
-python monitor_dashboard.py --pipeline 12345
+python scripts/monitor_dashboard.py --pipeline 12345
 
 # Or via API
 curl http://localhost:8000/monitor/pipeline/12345 | jq
@@ -1736,7 +1736,7 @@ curl http://localhost:8000/monitor/pipeline/12345 | jq
 
 ```bash
 # Export last week
-python monitor_dashboard.py --export week.csv --hours 168
+python scripts/monitor_dashboard.py --export week.csv --hours 168
 
 # Open in Excel and create charts for:
 # - Requests per day
@@ -1772,7 +1772,7 @@ curl http://localhost:8000/monitor/summary?hours=168 | jq '
 }' | tee weekly_report.json
 
 # Export detailed data
-python monitor_dashboard.py --export weekly_data.csv --hours 168
+python scripts/monitor_dashboard.py --export weekly_data.csv --hours 168
 ```
 
 ---
@@ -1785,7 +1785,7 @@ python monitor_dashboard.py --export weekly_data.csv --hours 168
 
 ```bash
 # Refresh dashboard every 30 seconds
-watch -n 30 python monitor_dashboard.py
+watch -n 30 python scripts/monitor_dashboard.py
 
 # Monitor processing requests
 watch -n 5 'curl -s http://localhost:8000/monitor/summary | jq .by_status'
@@ -1798,7 +1798,7 @@ watch -n 5 'curl -s http://localhost:8000/monitor/summary | jq .by_status'
 tail -f webhook_server.log | grep "pipeline"
 
 # Terminal 2: Dashboard
-python monitor_dashboard.py
+python scripts/monitor_dashboard.py
 ```
 
 ### Cleanup Old Data

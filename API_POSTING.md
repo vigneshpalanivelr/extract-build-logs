@@ -1020,4 +1020,120 @@ tail -20 logs/api-requests.log
 
 ---
 
-*Last Updated: 2024*
+## Appendix: Design History & Implementation Notes
+
+### Original Design (v1.0)
+
+The API posting feature was originally designed to send complete pipeline logs with full job output to external APIs. Below is the historical design documentation preserved for reference.
+
+#### Design Overview
+
+**Goal:** POST pipeline logs to an API endpoint instead of/in addition to saving to files.
+
+**Approach:** Batch all jobs for a pipeline into ONE API call with complete log content.
+
+#### Original Payload Format (v1.0 - Legacy)
+
+```json
+{
+  "pipeline_id": 12345,
+  "project_id": 123,
+  "project_name": "my-app",
+  "status": "success",
+  "ref": "main",
+  "sha": "abc123def456...",
+  "source": "push",
+  "pipeline_type": "main",
+  "created_at": "2024-01-01T00:00:00Z",
+  "finished_at": "2024-01-01T00:02:00Z",
+  "duration": 120.5,
+  "user": {
+    "name": "John Doe",
+    "email": "john@example.com"
+  },
+  "stages": ["build", "test", "deploy"],
+  "jobs": [
+    {
+      "job_id": 456,
+      "job_name": "build:production",
+      "log_content": "Full build logs here...",
+      "status": "success",
+      "stage": "build",
+      "created_at": "2024-01-01T00:00:00Z",
+      "started_at": "2024-01-01T00:00:05Z",
+      "finished_at": "2024-01-01T00:01:05Z",
+      "duration": 60.2,
+      "ref": "main"
+    }
+  ]
+}
+```
+
+**Issues with v1.0:**
+- Large payload sizes (1-25 MB for typical pipelines)
+- Network transfer overhead
+- Included full logs with success messages mixed with errors
+- Included all jobs (successful and failed)
+
+#### Evolution to v2.0
+
+**Motivation:** Reduce payload size by 97-99% and focus on actionable error data.
+
+**Changes in v2.0:**
+1. **Simplified structure** - Removed timestamps, durations, stages metadata
+2. **Error extraction** - Parse logs to extract only error lines
+3. **Failed jobs only** - Include only failed steps in `failed_steps` array
+4. **Short identifiers** - 7-char commit SHA, repo name without org
+5. **Error cleaning** - Remove timestamps, ANSI codes, duplicates from error lines
+
+**Result:** Typical payload reduced from 30KB-25MB to 1-15KB (97-99% reduction)
+
+#### Implementation Details
+
+**Files Modified:**
+- `src/config_loader.py` - API configuration fields
+- `src/api_poster.py` - API posting logic with v2.0 format
+- `src/webhook_listener.py` - Integration with pipeline processing
+- `.env.example` - Configuration examples
+- Documentation (this file)
+
+**Implemented:** 2025-11-04
+**Updated to v2.0:** 2025-11-07
+
+#### Design Decisions
+
+**Q: One API call per pipeline vs. one per job?**
+A: One per pipeline (batched) to reduce API calls and provide complete context.
+
+**Q: Log to file or database?**
+A: Log to `logs/api-requests.log` file for simplicity and separation of concerns.
+
+**Q: Compress large payloads?**
+A: Not needed with v2.0 format (payloads now <15KB). Can add if required later.
+
+**Q: Retry logic?**
+A: Yes, exponential backoff with configurable retries (default: 3 attempts, 2/4/8s delays).
+
+**Q: Fallback on failure?**
+A: Controlled by `API_POST_SAVE_TO_FILE` setting. If true, saves to files on API failure.
+
+#### Behavior Characteristics
+
+- **Batch Processing:** All jobs sent in single API request
+- **Retry Logic:** Uses existing error handler with exponential backoff
+- **Fallback:** Optional file storage if API fails
+- **Continue on Error:** Logs error and continues (doesn't crash)
+- **Filtering:** Respects LOG_SAVE_PIPELINE_STATUS and other filters
+- **Error Handling:** Graceful degradation if API unavailable
+
+#### Future Enhancements (Potential)
+
+- Payload compression (gzip) for very large error outputs
+- Webhook-style confirmation/acknowledgment from receiving API
+- Batch multiple pipelines in single API call (configurable)
+- Custom payload transformations via plugins
+- Metrics/monitoring dashboard for API posting success rates
+
+---
+
+*Last Updated: 2025-11-07*

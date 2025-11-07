@@ -899,9 +899,9 @@ def show_monitor(client: docker.DockerClient, args: List[str]) -> bool:
 
         console.print("[blue]Opening monitoring dashboard...[/blue]\n")
 
-        # Run monitor_dashboard.py inside container
+        # Run scripts/monitor_dashboard.py inside container
         container = client.containers.get(CONTAINER_NAME)
-        cmd = ['python', 'monitor_dashboard.py'] + args
+        cmd = ['python', 'scripts/monitor_dashboard.py'] + args
 
         result = container.exec_run(cmd, stream=True, tty=True)
         for line in result.output:

@@ -528,5 +528,5 @@ post {
 
 For more information:
 - See `README.md` for general setup
-- See `API_POST_DESIGN.md` for API posting architecture
+- See `API_POSTING.md` for API posting documentation
 - See `.env.example` for all configuration options

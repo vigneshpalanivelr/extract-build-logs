@@ -20,7 +20,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src/ ./src/
-COPY monitor_dashboard.py ./
+COPY scripts/ ./scripts/
 COPY docker-entrypoint.sh ./
 
 # Make entrypoint script executable

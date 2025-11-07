@@ -2,6 +2,7 @@ stages:
   - formatcheck
   - test
   - coverage
+  - build
 
 variables:
   PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
@@ -72,3 +73,36 @@ coverage:
     - coverage xml
   coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
   allow_failure: true
+
+# ============================================================================
+# BUILD STAGE - Docker Image Build
+# ============================================================================
+
+build-docker-image:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  tags:
+    - executor:dind-socket
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    # Use branch name for tagging instead of commit SHA
+    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+    LATEST_TAG: $CI_REGISTRY_IMAGE:latest
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - echo "Building Docker image for branch $CI_COMMIT_REF_NAME"
+    - docker build -t $IMAGE_TAG -t $LATEST_TAG .
+    - echo "Pushing image with tag $CI_COMMIT_REF_SLUG"
+    - docker push $IMAGE_TAG
+    # Only push 'latest' tag from main/master branch
+    - |
+      if [ "$CI_COMMIT_REF_NAME" = "main" ] || [ "$CI_COMMIT_REF_NAME" = "master" ]; then
+        echo "Pushing latest tag from $CI_COMMIT_REF_NAME branch"
+        docker push $LATEST_TAG
+      else
+        echo "Skipping latest tag push (not on main/master branch)"
+      fi
+  when: on_success  # Only build if tests pass

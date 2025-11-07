@@ -1012,7 +1012,7 @@ All API requests and responses are logged to `logs/api-requests.log`:
 [2024-01-01 00:02:05] PIPELINE_ID=12345 PROJECT_ID=123 URL=https://api.example.com/logs STATUS=200 DURATION=1250ms RESPONSE={"success": true}
 ```
 
-**See also:** [API_POST_DESIGN.md](API_POST_DESIGN.md) for complete design documentation.
+**See also:** [API_POSTING.md](API_POSTING.md) for complete API posting documentation.
 
 ## Usage
 
@@ -1094,13 +1094,13 @@ The system automatically tracks **every webhook request** and processing status.
 
 ```bash
 # View monitoring dashboard
-python monitor_dashboard.py
+python scripts/monitor_dashboard.py
 
 # Show recent 100 requests
-python monitor_dashboard.py --recent 100
+python scripts/monitor_dashboard.py --recent 100
 
 # Export to CSV
-python monitor_dashboard.py --export pipeline_data.csv
+python scripts/monitor_dashboard.py --export pipeline_data.csv
 ```
 
 ### What is Tracked
