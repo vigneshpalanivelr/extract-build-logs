@@ -202,7 +202,186 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
     except ValueError:
         warnings.append(f"RETRY_DELAY '{config.get('RETRY_DELAY')}' is not a valid number")
 
+    # API Posting validation
+    api_enabled = config.get('API_POST_ENABLED', 'false').lower() == 'true'
+    if api_enabled:
+        if not config.get('API_POST_URL'):
+            errors.append("API_POST_ENABLED is true but API_POST_URL is not set")
+        elif not config.get('API_POST_URL').startswith(('http://', 'https://')):
+            warnings.append("API_POST_URL should start with http:// or https://")
+
+        # Check if auth token is provided
+        if not config.get('API_POST_AUTH_TOKEN'):
+            warnings.append("API posting is enabled but API_POST_AUTH_TOKEN is not set (API may reject requests)")
+
+        # Validate timeout
+        try:
+            timeout = int(config.get('API_POST_TIMEOUT', '30'))
+            if timeout < 1:
+                warnings.append("API_POST_TIMEOUT should be at least 1 second")
+            elif timeout > 300:
+                warnings.append("API_POST_TIMEOUT is very high (>300s), consider reducing it")
+        except ValueError:
+            warnings.append(f"API_POST_TIMEOUT '{config.get('API_POST_TIMEOUT')}' is not a valid number")
+
+    # Jenkins validation
+    jenkins_enabled = config.get('JENKINS_ENABLED', 'false').lower() == 'true'
+    if jenkins_enabled:
+        if not config.get('JENKINS_URL'):
+            errors.append("JENKINS_ENABLED is true but JENKINS_URL is not set")
+        elif not config.get('JENKINS_URL').startswith(('http://', 'https://')):
+            warnings.append("JENKINS_URL should start with http:// or https://")
+
+        if not config.get('JENKINS_USER'):
+            errors.append("JENKINS_ENABLED is true but JENKINS_USER is not set")
+
+        if not config.get('JENKINS_API_TOKEN'):
+            errors.append("JENKINS_ENABLED is true but JENKINS_API_TOKEN is not set")
+
+        if not config.get('JENKINS_WEBHOOK_SECRET'):
+            warnings.append("JENKINS_WEBHOOK_SECRET is not set (Jenkins webhooks will be unauthenticated)")
+
+    # Log filtering validation
+    valid_statuses = ['all', 'failed', 'success', 'running', 'canceled', 'skipped']
+    pipeline_status = config.get('LOG_SAVE_PIPELINE_STATUS', 'all').lower()
+    if pipeline_status not in valid_statuses and ',' not in pipeline_status:
+        warnings.append(f"LOG_SAVE_PIPELINE_STATUS '{pipeline_status}' is invalid")
+    elif ',' in pipeline_status:
+        # Validate comma-separated values
+        for status in pipeline_status.split(','):
+            if status.strip() not in valid_statuses:
+                warnings.append(f"LOG_SAVE_PIPELINE_STATUS contains invalid status '{status.strip()}'")
+                break
+
+    job_status = config.get('LOG_SAVE_JOB_STATUS', 'all').lower()
+    if job_status not in valid_statuses and ',' not in job_status:
+        warnings.append(f"LOG_SAVE_JOB_STATUS '{job_status}' is invalid")
+    elif ',' in job_status:
+        # Validate comma-separated values
+        for status in job_status.split(','):
+            if status.strip() not in valid_statuses:
+                warnings.append(f"LOG_SAVE_JOB_STATUS contains invalid status '{status.strip()}'")
+                break
+
+    # System validations
+    # Check disk space
+    try:
+        import shutil
+        stat = shutil.disk_usage(Path.cwd())
+        gb_free = stat.free / (1024 ** 3)  # Convert to GB
+        if gb_free < 1:
+            warnings.append(f"Low disk space: Only {gb_free:.1f} GB available")
+        elif gb_free < 5:
+            warnings.append(f"Disk space is getting low: {gb_free:.1f} GB available")
+    except Exception:
+        pass
+
+    # Check .env file permissions
+    env_file = Path(ENV_FILE)
+    if env_file.exists():
+        try:
+            import stat
+            st = env_file.stat()
+            mode = st.st_mode
+            perms = oct(mode)[-3:]
+            if perms not in ['600', '400']:
+                warnings.append(f".env file has insecure permissions ({perms}), consider setting to 600 or 400")
+        except Exception:
+            pass
+
+    # Check log directory
+    log_dir = Path(config.get('LOG_OUTPUT_DIR', './logs'))
+    if not log_dir.exists():
+        warnings.append(f"Log directory '{log_dir}' does not exist (will be created on start)")
+    elif not os.access(log_dir, os.W_OK):
+        errors.append(f"Log directory '{log_dir}' is not writable")
+
     return errors, warnings
+
+
+def get_directory_size(path: Path) -> str:
+    """
+    Get directory size in human-readable format.
+
+    Args:
+        path: Directory path
+
+    Returns:
+        Size string (e.g., "1.2 GB")
+    """
+    try:
+        if not path.exists():
+            return "N/A (not created)"
+
+        total_size = 0
+        for entry in path.rglob('*'):
+            if entry.is_file():
+                total_size += entry.stat().st_size
+
+        # Convert to human-readable
+        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+            if total_size < 1024.0:
+                return f"{total_size:.1f} {unit}"
+            total_size /= 1024.0
+        return f"{total_size:.1f} PB"
+    except Exception:
+        return "Unknown"
+
+
+def get_disk_space(path: Path) -> Tuple[str, str, float]:
+    """
+    Get available and total disk space.
+
+    Args:
+        path: Path to check
+
+    Returns:
+        Tuple of (available, total, percent_used)
+    """
+    try:
+        import shutil
+        stat = shutil.disk_usage(path)
+
+        def format_bytes(bytes_val):
+            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+                if bytes_val < 1024.0:
+                    return f"{bytes_val:.1f} {unit}"
+                bytes_val /= 1024.0
+            return f"{bytes_val:.1f} PB"
+
+        available = format_bytes(stat.free)
+        total = format_bytes(stat.total)
+        percent_used = (stat.used / stat.total) * 100
+
+        return available, total, percent_used
+    except Exception:
+        return "Unknown", "Unknown", 0.0
+
+
+def check_file_permissions(file_path: Path) -> Tuple[str, bool]:
+    """
+    Check file permissions.
+
+    Args:
+        file_path: Path to file
+
+    Returns:
+        Tuple of (permissions_string, is_secure)
+    """
+    try:
+        import stat
+        st = file_path.stat()
+        mode = st.st_mode
+
+        # Get octal permissions (e.g., 0o600)
+        perms = oct(mode)[-3:]
+
+        # Check if secure (600 or 400)
+        is_secure = perms in ['600', '400']
+
+        return perms, is_secure
+    except Exception:
+        return "Unknown", False
 
 
 def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
@@ -218,7 +397,7 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
 
     # Environment Configuration
     env_table = Table(title="Configuration Review", show_header=True, header_style="bold cyan")
-    env_table.add_column("Setting", style="yellow", width=20)
+    env_table.add_column("Setting", style="yellow", width=30)
     env_table.add_column("Value", style="green")
 
     env_table.add_row("GitLab URL", config.get('GITLAB_URL', '[dim]Not Set[/dim]'))
@@ -233,9 +412,65 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     console.print(env_table)
     console.print()
 
+    # Log Filtering Configuration
+    log_filter_table = Table(title="Log Filtering Settings", show_header=True, header_style="bold cyan")
+    log_filter_table.add_column("Setting", style="yellow", width=30)
+    log_filter_table.add_column("Value", style="green")
+
+    log_filter_table.add_row("Pipeline Status Filter", config.get('LOG_SAVE_PIPELINE_STATUS', 'all'))
+    log_filter_table.add_row("Job Status Filter", config.get('LOG_SAVE_JOB_STATUS', 'all'))
+
+    save_projects = config.get('LOG_SAVE_PROJECTS', '').strip()
+    exclude_projects = config.get('LOG_EXCLUDE_PROJECTS', '').strip()
+
+    if save_projects:
+        log_filter_table.add_row("Save Projects (IDs)", save_projects)
+    elif exclude_projects:
+        log_filter_table.add_row("Exclude Projects (IDs)", exclude_projects)
+    else:
+        log_filter_table.add_row("Project Filter", "[dim]All Projects[/dim]")
+
+    log_filter_table.add_row("Save Metadata Always", config.get('LOG_SAVE_METADATA_ALWAYS', 'true'))
+
+    console.print(log_filter_table)
+    console.print()
+
+    # API Posting Configuration (if enabled)
+    api_enabled = config.get('API_POST_ENABLED', 'false').lower() == 'true'
+    if api_enabled:
+        api_table = Table(title="API Posting Configuration", show_header=True, header_style="bold cyan")
+        api_table.add_column("Setting", style="yellow", width=30)
+        api_table.add_column("Value", style="green")
+
+        api_table.add_row("API Posting Enabled", "[bold green]Yes[/bold green]")
+        api_table.add_row("API URL", config.get('API_POST_URL', '[dim]Not Set[/dim]'))
+        api_table.add_row("API Auth Token", mask_value(config.get('API_POST_AUTH_TOKEN', ''), 8) if config.get('API_POST_AUTH_TOKEN') else '[dim]Not Set[/dim]')
+        api_table.add_row("API Timeout", f"{config.get('API_POST_TIMEOUT', '30')}s")
+        api_table.add_row("API Retry Enabled", config.get('API_POST_RETRY_ENABLED', 'true'))
+        api_table.add_row("Also Save to File", config.get('API_POST_SAVE_TO_FILE', 'false'))
+
+        console.print(api_table)
+        console.print()
+
+    # Jenkins Integration (if enabled)
+    jenkins_enabled = config.get('JENKINS_ENABLED', 'false').lower() == 'true'
+    if jenkins_enabled:
+        jenkins_table = Table(title="Jenkins Integration", show_header=True, header_style="bold cyan")
+        jenkins_table.add_column("Setting", style="yellow", width=30)
+        jenkins_table.add_column("Value", style="green")
+
+        jenkins_table.add_row("Jenkins Enabled", "[bold green]Yes[/bold green]")
+        jenkins_table.add_row("Jenkins URL", config.get('JENKINS_URL', '[dim]Not Set[/dim]'))
+        jenkins_table.add_row("Jenkins User", config.get('JENKINS_USER', '[dim]Not Set[/dim]'))
+        jenkins_table.add_row("Jenkins API Token", mask_value(config.get('JENKINS_API_TOKEN', ''), 8) if config.get('JENKINS_API_TOKEN') else '[dim]Not Set[/dim]')
+        jenkins_table.add_row("Jenkins Webhook Secret", mask_value(config.get('JENKINS_WEBHOOK_SECRET', ''), 4) if config.get('JENKINS_WEBHOOK_SECRET') else '[dim]Not Set[/dim]')
+
+        console.print(jenkins_table)
+        console.print()
+
     # Container Configuration
-    container_table = Table(show_header=True, header_style="bold cyan")
-    container_table.add_column("Container Setting", style="yellow", width=20)
+    container_table = Table(title="Container Settings", show_header=True, header_style="bold cyan")
+    container_table.add_column("Setting", style="yellow", width=30)
     container_table.add_column("Value", style="green")
 
     container_table.add_row("Container Name", CONTAINER_NAME)
@@ -243,6 +478,34 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     container_table.add_row("Logs Volume", f"{Path.cwd()}/{LOGS_DIR}")
 
     console.print(container_table)
+    console.print()
+
+    # System Information
+    system_table = Table(title="System Information", show_header=True, header_style="bold cyan")
+    system_table.add_column("Property", style="yellow", width=30)
+    system_table.add_column("Value", style="green")
+
+    # Log directory size
+    log_dir = Path(config.get('LOG_OUTPUT_DIR', './logs'))
+    log_size = get_directory_size(log_dir)
+    system_table.add_row("Log Directory Size", log_size)
+
+    # Disk space
+    available, total, percent_used = get_disk_space(Path.cwd())
+    disk_color = "green" if percent_used < 80 else ("yellow" if percent_used < 90 else "red")
+    system_table.add_row("Disk Available", f"[{disk_color}]{available} / {total} ({percent_used:.1f}% used)[/{disk_color}]")
+
+    # .env file permissions
+    env_file = Path(ENV_FILE)
+    if env_file.exists():
+        perms, is_secure = check_file_permissions(env_file)
+        perm_color = "green" if is_secure else "yellow"
+        perm_text = f"[{perm_color}]{perms}[/{perm_color}]"
+        if not is_secure:
+            perm_text += " [yellow](consider 600 or 400)[/yellow]"
+        system_table.add_row(".env File Permissions", perm_text)
+
+    console.print(system_table)
     console.print()
 
 
