@@ -1896,8 +1896,8 @@ A: It interactively asks what to remove:
 **Q: How to backup data?**
 A:
 - Logs: `tar -czf logs_backup_$(date +%Y%m%d).tar.gz ./logs`
-- PostgreSQL: Use `./scripts/backup-database.sh` (see DATABASE_MAINTENANCE.md)
-- SQLite: Copy `logs/monitoring.db` file
+- Database: Use `./scripts/manage_database.sh backup [daily|weekly|monthly]` (see DATABASE_MAINTENANCE.md)
+- Manual SQLite: Copy `logs/monitoring.db` file
 
 **Q: Does monitoring affect performance?**
 A: Minimal impact. Database writes are non-blocking and very fast.

@@ -530,207 +530,97 @@ sed -i '/DATABASE_URL/d' .env
 
 ## Automated Backup Scripts
 
-### Complete Backup Script
+The project includes a database management script (`scripts/manage_database.sh`) that handles backup, restore, and health check operations for both PostgreSQL and SQLite databases.
 
-Create `/usr/local/bin/pipeline-logs-backup.sh`:
+### Using the Database Management Script
 
+**Create backup:**
 ```bash
-#!/bin/bash
-# Pipeline Logs Backup Script
-# Usage: ./pipeline-logs-backup.sh [daily|weekly|monthly]
+# Daily backup (keeps last 7)
+./scripts/manage_database.sh backup daily
 
-set -e
+# Weekly backup (keeps last 4)
+./scripts/manage_database.sh backup weekly
 
-BACKUP_ROOT="/backups/pipeline-logs"
-RETENTION_DAILY=7
-RETENTION_WEEKLY=4
-RETENTION_MONTHLY=6
-
-BACKUP_TYPE="${1:-daily}"
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BACKUP_DIR="$BACKUP_ROOT/$BACKUP_TYPE"
-
-mkdir -p $BACKUP_DIR
-
-# Detect database type
-if [ -n "$DATABASE_URL" ] || grep -q "^DATABASE_URL=" .env 2>/dev/null; then
-    DB_TYPE="postgresql"
-else
-    DB_TYPE="sqlite"
-fi
-
-echo "==================================="
-echo "Pipeline Logs Backup"
-echo "Type: $BACKUP_TYPE"
-echo "Database: $DB_TYPE"
-echo "Date: $(date)"
-echo "==================================="
-
-# Backup based on database type
-if [ "$DB_TYPE" = "postgresql" ]; then
-    BACKUP_FILE="$BACKUP_DIR/postgres_${BACKUP_TYPE}_${TIMESTAMP}.sql.gz"
-
-    echo "Backing up PostgreSQL database..."
-    docker-compose exec -T postgres pg_dump -U logextractor pipeline_logs | \
-        gzip > $BACKUP_FILE
-
-    # Get database size
-    DB_SIZE=$(docker-compose exec postgres psql -U logextractor -d pipeline_logs -t -c \
-        "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));")
-
-else
-    BACKUP_FILE="$BACKUP_DIR/sqlite_${BACKUP_TYPE}_${TIMESTAMP}.db"
-
-    echo "Backing up SQLite database..."
-    sqlite3 logs/pipeline-logs/monitoring.db ".backup $BACKUP_FILE"
-
-    # Get database size
-    DB_SIZE=$(du -h logs/pipeline-logs/monitoring.db | cut -f1)
-fi
-
-# Compress if not already compressed
-if [[ ! $BACKUP_FILE =~ \.gz$ ]]; then
-    gzip $BACKUP_FILE
-    BACKUP_FILE="${BACKUP_FILE}.gz"
-fi
-
-BACKUP_SIZE=$(du -h $BACKUP_FILE | cut -f1)
-
-echo "Backup created: $BACKUP_FILE"
-echo "Database size: $DB_SIZE"
-echo "Backup size: $BACKUP_SIZE"
-
-# Apply retention policy
-case $BACKUP_TYPE in
-    daily)
-        RETENTION=$RETENTION_DAILY
-        ;;
-    weekly)
-        RETENTION=$RETENTION_WEEKLY
-        ;;
-    monthly)
-        RETENTION=$RETENTION_MONTHLY
-        ;;
-esac
-
-echo "Applying retention policy: keep last $RETENTION backups"
-ls -t $BACKUP_DIR/*.gz | tail -n +$((RETENTION + 1)) | xargs -r rm
-echo "Old backups cleaned up"
-
-# Log to syslog
-logger -t pipeline-logs-backup "Backup completed: $BACKUP_FILE ($BACKUP_SIZE)"
-
-echo "==================================="
-echo "Backup completed successfully!"
-echo "==================================="
+# Monthly backup (keeps last 6)
+./scripts/manage_database.sh backup monthly
 ```
 
-**Make executable:**
+**Restore from backup:**
 ```bash
-chmod +x /usr/local/bin/pipeline-logs-backup.sh
+# List available backups
+./scripts/manage_database.sh list
+
+# Restore from specific backup
+./scripts/manage_database.sh restore backups/daily/postgres_daily_20250107_020000.sql.gz
+```
+
+**Check database health:**
+```bash
+./scripts/manage_database.sh check
 ```
 
 ### Cron Schedule
 
-Add to `/etc/crontab`:
+Example cron schedule using the management script (add to `/etc/crontab` or user crontab):
 
 ```bash
 # Pipeline Logs Backups
 
 # Daily backup at 2 AM
-0 2 * * * root cd /path/to/extract-build-logs && /usr/local/bin/pipeline-logs-backup.sh daily >> /var/log/pipeline-logs-backup.log 2>&1
+0 2 * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup daily >> /var/log/pipeline-logs-backup.log 2>&1
 
 # Weekly backup on Sunday at 3 AM
-0 3 * * 0 root cd /path/to/extract-build-logs && /usr/local/bin/pipeline-logs-backup.sh weekly >> /var/log/pipeline-logs-backup.log 2>&1
+0 3 * * 0 cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup weekly >> /var/log/pipeline-logs-backup.log 2>&1
 
 # Monthly backup on 1st at 4 AM
-0 4 1 * * root cd /path/to/extract-build-logs && /usr/local/bin/pipeline-logs-backup.sh monthly >> /var/log/pipeline-logs-backup.log 2>&1
+0 4 1 * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup monthly >> /var/log/pipeline-logs-backup.log 2>&1
+
+# Health check every hour
+0 * * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh check >> /var/log/pipeline-logs-health.log 2>&1
 ```
+
+See `scripts/crontab.example` for more scheduling examples.
 
 ---
 
 ## Monitoring & Health Checks
 
-### Database Health Check Script
+### Database Health Check
 
-Create `check-db-health.sh`:
+The project includes a database management script that handles health checks for both PostgreSQL and SQLite databases.
 
+**Run health check:**
 ```bash
-#!/bin/bash
-# Database Health Check
-
-if [ -n "$DATABASE_URL" ]; then
-    # PostgreSQL
-    echo "=== PostgreSQL Health Check ==="
-
-    # Connection test
-    if docker-compose exec postgres pg_isready -U logextractor; then
-        echo "✓ Database is accepting connections"
-    else
-        echo "✗ Database connection failed!"
-        exit 1
-    fi
-
-    # Table check
-    ROW_COUNT=$(docker-compose exec postgres psql -U logextractor -d pipeline_logs -t -c \
-        "SELECT COUNT(*) FROM requests;")
-    echo "✓ Total requests: $ROW_COUNT"
-
-    # Recent activity
-    RECENT=$(docker-compose exec postgres psql -U logextractor -d pipeline_logs -t -c \
-        "SELECT COUNT(*) FROM requests WHERE timestamp > NOW() - INTERVAL '1 hour';")
-    echo "✓ Last hour: $RECENT requests"
-
-    # Database size
-    DB_SIZE=$(docker-compose exec postgres psql -U logextractor -d pipeline_logs -t -c \
-        "SELECT pg_size_pretty(pg_database_size('pipeline_logs'));")
-    echo "✓ Database size: $DB_SIZE"
-
-    # Connection count
-    CONNECTIONS=$(docker-compose exec postgres psql -U logextractor -d pipeline_logs -t -c \
-        "SELECT count(*) FROM pg_stat_activity WHERE datname='pipeline_logs';")
-    echo "✓ Active connections: $CONNECTIONS"
-
-else
-    # SQLite
-    echo "=== SQLite Health Check ==="
-
-    # File exists
-    if [ -f logs/pipeline-logs/monitoring.db ]; then
-        echo "✓ Database file exists"
-    else
-        echo "✗ Database file not found!"
-        exit 1
-    fi
-
-    # Integrity check
-    if sqlite3 logs/pipeline-logs/monitoring.db "PRAGMA integrity_check;" | grep -q "ok"; then
-        echo "✓ Database integrity: OK"
-    else
-        echo "✗ Database integrity check failed!"
-        exit 1
-    fi
-
-    # Row count
-    ROW_COUNT=$(sqlite3 logs/pipeline-logs/monitoring.db "SELECT COUNT(*) FROM requests;")
-    echo "✓ Total requests: $ROW_COUNT"
-
-    # Database size
-    DB_SIZE=$(du -h logs/pipeline-logs/monitoring.db | cut -f1)
-    echo "✓ Database size: $DB_SIZE"
-
-    # WAL mode check
-    WAL_MODE=$(sqlite3 logs/pipeline-logs/monitoring.db "PRAGMA journal_mode;")
-    echo "✓ Journal mode: $WAL_MODE"
-fi
-
-echo "=== Health Check Complete ==="
+./scripts/manage_database.sh check
 ```
 
-**Schedule health checks:**
+**Example output:**
+```
+===================================
+Database Health Check
+Type: postgresql
+Date: Thu Jan  7 10:30:00 UTC 2025
+===================================
+
+PostgreSQL Health Check
+-----------------------
+Database connection: ✓ OK
+Requests table: ✓ OK (1234 rows)
+Recent activity (last hour): ✓ 45 requests
+Database size: ✓ 15 MB
+Active connections: ✓ 3
+Last autovacuum: ✓ 2025-01-07 09:15:23
+
+===================================
+✓ Health Check: PASSED
+===================================
+```
+
+**Schedule health checks with cron:**
 ```bash
 # Every hour
-0 * * * * /path/to/check-db-health.sh >> /var/log/db-health.log 2>&1
+0 * * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh check >> /var/log/db-health.log 2>&1
 ```
 
 ---
