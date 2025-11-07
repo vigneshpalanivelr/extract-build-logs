@@ -38,8 +38,7 @@ class Config:
         log_save_job_status (List[str]): Which job statuses to save logs for
         log_save_metadata_always (bool): Whether to save metadata even if logs are filtered out
         api_post_enabled (bool): Enable API POST for pipeline logs
-        api_post_url (Optional[str]): API endpoint URL for posting logs
-        api_post_auth_token (Optional[str]): Bearer token for API authentication
+        api_post_url (Optional[str]): API endpoint URL (auto-constructed from BFA_HOST)
         api_post_timeout (int): Request timeout in seconds for API calls
         api_post_retry_enabled (bool): Enable retry logic for failed API requests
         api_post_save_to_file (bool): Also save to file when API posting is enabled
@@ -65,8 +64,7 @@ class Config:
     log_save_job_status: List[str]
     log_save_metadata_always: bool
     api_post_enabled: bool
-    api_post_url: Optional[str]
-    api_post_auth_token: Optional[str]
+    api_post_url: Optional[str]  # Auto-constructed from BFA_HOST
     api_post_timeout: int
     api_post_retry_enabled: bool
     api_post_save_to_file: bool
@@ -155,8 +153,6 @@ class ConfigLoader:
         api_post_enabled_str = os.getenv('API_POST_ENABLED', 'false').lower()
         api_post_enabled = api_post_enabled_str in ['true', '1', 'yes', 'on']
 
-        api_post_url = os.getenv('API_POST_URL')
-        api_post_auth_token = os.getenv('API_POST_AUTH_TOKEN')
         api_post_timeout = int(os.getenv('API_POST_TIMEOUT', '30'))
 
         api_post_retry_enabled_str = os.getenv('API_POST_RETRY_ENABLED', 'true').lower()
@@ -183,6 +179,9 @@ class ConfigLoader:
         bfa_host = os.getenv('BFA_HOST')
         bfa_secret_key = os.getenv('BFA_SECRET_KEY')
 
+        # Auto-construct API POST URL from BFA_HOST
+        api_post_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else None
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -194,10 +193,10 @@ class ConfigLoader:
 
         # Validate API POST configuration
         if api_post_enabled:
-            if not api_post_url:
-                raise ValueError("API_POST_URL is required when API_POST_ENABLED is true")
-            if not api_post_url.startswith(('http://', 'https://')):
-                raise ValueError(f"Invalid API_POST_URL: {api_post_url}. Must start with http:// or https://")
+            if not bfa_host:
+                raise ValueError("BFA_HOST is required when API_POST_ENABLED is true")
+            if not bfa_secret_key:
+                raise ValueError("BFA_SECRET_KEY is required when API_POST_ENABLED is true")
             if api_post_timeout < 1 or api_post_timeout > 300:
                 raise ValueError(f"Invalid API_POST_TIMEOUT: {api_post_timeout}. Must be between 1 and 300 seconds")
 
@@ -228,7 +227,6 @@ class ConfigLoader:
             log_save_metadata_always=log_save_metadata_always,
             api_post_enabled=api_post_enabled,
             api_post_url=api_post_url,
-            api_post_auth_token=api_post_auth_token,
             api_post_timeout=api_post_timeout,
             api_post_retry_enabled=api_post_retry_enabled,
             api_post_save_to_file=api_post_save_to_file,

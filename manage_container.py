@@ -205,14 +205,11 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
     # API Posting validation
     api_enabled = config.get('API_POST_ENABLED', 'false').lower() == 'true'
     if api_enabled:
-        if not config.get('API_POST_URL'):
-            errors.append("API_POST_ENABLED is true but API_POST_URL is not set")
-        elif not config.get('API_POST_URL').startswith(('http://', 'https://')):
-            warnings.append("API_POST_URL should start with http:// or https://")
+        if not config.get('BFA_HOST'):
+            errors.append("API_POST_ENABLED is true but BFA_HOST is not set")
 
-        # Check if auth token is provided
-        if not config.get('API_POST_AUTH_TOKEN'):
-            warnings.append("API posting is enabled but API_POST_AUTH_TOKEN is not set (API may reject requests)")
+        if not config.get('BFA_SECRET_KEY'):
+            errors.append("API_POST_ENABLED is true but BFA_SECRET_KEY is not set")
 
         # Validate timeout
         try:
@@ -443,8 +440,13 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
         api_table.add_column("Value", style="green")
 
         api_table.add_row("API Posting Enabled", "[bold green]Yes[/bold green]")
-        api_table.add_row("API URL", config.get('API_POST_URL', '[dim]Not Set[/dim]'))
-        api_table.add_row("API Auth Token", mask_value(config.get('API_POST_AUTH_TOKEN', ''), 8) if config.get('API_POST_AUTH_TOKEN') else '[dim]Not Set[/dim]')
+
+        # Construct API URL from BFA_HOST
+        bfa_host = config.get('BFA_HOST', '')
+        api_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else '[dim]Not Set (BFA_HOST missing)[/dim]'
+        api_table.add_row("API URL", api_url)
+
+        api_table.add_row("Auth Token", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[dim]Not Set[/dim]')
         api_table.add_row("API Timeout", f"{config.get('API_POST_TIMEOUT', '30')}s")
         api_table.add_row("API Retry Enabled", config.get('API_POST_RETRY_ENABLED', 'true'))
         api_table.add_row("Also Save to File", config.get('API_POST_SAVE_TO_FILE', 'false'))

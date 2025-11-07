@@ -257,8 +257,8 @@ class ApiPoster:
         }
 
         # Add authentication if configured
-        if self.config.api_post_auth_token:
-            headers["Authorization"] = f"Bearer {self.config.api_post_auth_token}"
+        if self.config.bfa_secret_key:
+            headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
 
         start_time = time.time()
 
