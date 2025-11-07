@@ -45,6 +45,7 @@ from .monitoring import PipelineMonitor, RequestStatus
 from .api_poster import ApiPoster
 from .jenkins_extractor import JenkinsExtractor
 from .jenkins_log_fetcher import JenkinsLogFetcher
+from .token_manager import TokenManager
 from .logging_config import (
     setup_logging,
     get_logger,
@@ -115,6 +116,7 @@ monitor: Optional[PipelineMonitor] = None
 api_poster: Optional[ApiPoster] = None
 jenkins_extractor: Optional[JenkinsExtractor] = None
 jenkins_log_fetcher: Optional[JenkinsLogFetcher] = None
+token_manager: Optional[TokenManager] = None
 
 
 def init_app():
@@ -132,7 +134,7 @@ def init_app():
     Should be called before starting the server.
     """
     global config, log_fetcher, storage_manager, pipeline_extractor, monitor, api_poster
-    global jenkins_extractor, jenkins_log_fetcher
+    global jenkins_extractor, jenkins_log_fetcher, token_manager
 
     try:
         # Load configuration first
@@ -173,6 +175,10 @@ def init_app():
 
         monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
         logger.debug("Pipeline monitor initialized")
+
+        # Initialize JWT token manager
+        token_manager = TokenManager(secret_key=config.jwt_secret_key)
+        logger.debug("JWT token manager initialized")
 
         # Initialize API poster if enabled
         if config.api_post_enabled:
@@ -364,6 +370,90 @@ async def health_check():
         "service": "gitlab-log-extractor",
         "version": "1.0.0"
     }
+
+
+@app.post('/api/token')
+async def generate_token(request: Request):
+    """
+    Generate JWT token for API authentication.
+
+    This endpoint generates a JWT token that can be used for API posting
+    instead of using a static API_POST_AUTH_TOKEN. The token is signed
+    with the JWT_SECRET_KEY (or GITLAB_TOKEN if not set).
+
+    Request Body:
+        {
+            "subject": "<source>_<repository>_<pipeline_id>",
+            "expires_in": 60  # Optional, default: 60 minutes
+        }
+
+    Returns:
+        JSON response with generated token
+
+    Example Request:
+        POST /api/token
+        {
+            "subject": "gitlab_myproject_12345"
+        }
+
+    Example Response:
+        {
+            "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+            "subject": "gitlab_myproject_12345",
+            "expires_in": 60
+        }
+
+    Error Responses:
+        400: Invalid subject format
+        500: Token generation failed
+    """
+    try:
+        # Parse request body
+        body = await request.json()
+        subject = body.get('subject')
+        expires_in = body.get('expires_in', 60)
+
+        if not subject:
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required field: subject"
+            )
+
+        # Validate expires_in
+        if not isinstance(expires_in, int) or expires_in < 1 or expires_in > 1440:
+            raise HTTPException(
+                status_code=400,
+                detail="expires_in must be an integer between 1 and 1440 minutes"
+            )
+
+        # Generate token
+        token = token_manager.generate_token(
+            subject=subject,
+            expires_in_minutes=expires_in
+        )
+
+        logger.info(f"Generated JWT token for subject: {subject}", extra={
+            'operation': 'token_generation',
+            'subject': subject,
+            'expires_in': expires_in
+        })
+
+        return {
+            "token": token,
+            "subject": subject,
+            "expires_in": expires_in
+        }
+
+    except ValueError as e:
+        logger.warning(f"Invalid token request: {str(e)}", extra={
+            'operation': 'token_generation_error'
+        })
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Token generation failed: {str(e)}", extra={
+            'operation': 'token_generation_error'
+        })
+        raise HTTPException(status_code=500, detail="Token generation failed")
 
 
 @app.post('/webhook/gitlab')

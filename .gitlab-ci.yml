@@ -87,10 +87,13 @@ build-docker-image:
     - executor:dind-socket
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
-    # Use branch name for tagging instead of commit SHA
-    IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
-    LATEST_TAG: $CI_REGISTRY_IMAGE:latest
+    # Construct registry image path if CI_REGISTRY_IMAGE is not set
+    # Uses: <registry>/<namespace>/<project>
+    REGISTRY_IMAGE: "${CI_REGISTRY_IMAGE:-$CI_REGISTRY/$CI_PROJECT_PATH}"
+    IMAGE_TAG: $REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
+    LATEST_TAG: $REGISTRY_IMAGE:latest
   before_script:
+    - echo "Registry image will be $REGISTRY_IMAGE"
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
   script:
     - echo "Building Docker image for branch $CI_COMMIT_REF_NAME"

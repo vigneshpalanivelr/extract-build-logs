@@ -10,6 +10,9 @@ requests==2.31.0
 # Environment variable management
 python-dotenv==1.0.0
 
+# JWT token generation
+PyJWT==2.8.0
+
 # Testing (optional but recommended)
 pytest==7.4.3
 pytest-cov==4.1.0
