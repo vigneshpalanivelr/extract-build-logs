@@ -62,7 +62,8 @@ echo "Starting FastAPI server on port $WEBHOOK_PORT..."
 echo "=========================================="
 
 # Start uvicorn with dynamic port from environment
-exec uvicorn src.webhook_listener:app \
+# Use 'python -m uvicorn' instead of 'uvicorn' to avoid PATH issues
+exec python -m uvicorn src.webhook_listener:app \
     --host 0.0.0.0 \
     --port "$WEBHOOK_PORT" \
     --log-level "${LOG_LEVEL,,}"
