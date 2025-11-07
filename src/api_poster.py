@@ -197,16 +197,15 @@ class ApiPoster:
             job_names.append(job_name)
 
         # Extract triggered_by
-        # Priority: user.username -> user.name -> None (if not available)
+        # Priority: user.username -> user.name -> source
         user_info = pipeline_info.get('user', {})
         if isinstance(user_info, dict):
             triggered_by = user_info.get('username') or user_info.get('name')
         else:
             triggered_by = None
 
-        # Keep None if no user info available (don't fallback to source)
         if not triggered_by:
-            triggered_by = None
+            triggered_by = pipeline_info.get('source', 'unknown')
 
         # Build failed_steps (only jobs with status="failed")
         failed_steps = []
