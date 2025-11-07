@@ -19,8 +19,8 @@ Excludes:
  - This script itself (default)
 
 Usage examples:
-    python3 remove_emojis_safe.py
-    python3 remove_emojis_safe.py --dry-run
+    python3 remove_emojis_safe.py            # cleans current directory
+    python3 remove_emojis_safe.py --dry-run  # preview only
     python3 remove_emojis_safe.py --exclude-dir node_modules,dist --exclude-files README.md
 """
 
@@ -37,7 +37,8 @@ EMOJIS = [
 SYMBOL_REPLACEMENTS = {
     "✅ ": "✓ ",
     "❌ ": "✗ ",
-    "⚠️ ": "! "
+    "⚠️ ": "! ",
+    "❓ ": "? "
 }
 
 # Default files to exclude (this script itself)

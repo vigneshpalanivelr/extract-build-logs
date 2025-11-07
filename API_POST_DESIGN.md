@@ -160,17 +160,17 @@ Our service only:
 
 ## Questions/Decisions Pending:
 
-- ✅ One API call per pipeline (batched jobs)
-- ✅ Log to file, not database
-- ✅ Configurable via environment variables
-- ❓ Additional request headers needed?
-- ❓ Specific response format expected?
-- ❓ Any request payload size limits?
-- ❓ Should we compress large payloads (gzip)?
+- ✓ One API call per pipeline (batched jobs)
+- ✓ Log to file, not database
+- ✓ Configurable via environment variables
+- ? Additional request headers needed?
+- ? Specific response format expected?
+- ? Any request payload size limits?
+- ? Should we compress large payloads (gzip)?
 
 ---
 
-**Status**: ✅ IMPLEMENTED
+**Status**: ✓ IMPLEMENTED
 
 **Date**: 2025-11-04
 
@@ -178,11 +178,11 @@ Our service only:
 
 All components have been successfully implemented:
 
-- ✅ `src/config_loader.py` - Added API configuration fields
-- ✅ `src/api_poster.py` - New module for API posting
-- ✅ `src/webhook_listener.py` - Integrated API posting logic
-- ✅ `.env.example` - Added configuration examples
-- ✅ Documentation updated
+- ✓ `src/config_loader.py` - Added API configuration fields
+- ✓ `src/api_poster.py` - New module for API posting
+- ✓ `src/webhook_listener.py` - Integrated API posting logic
+- ✓ `.env.example` - Added configuration examples
+- ✓ Documentation updated
 
 ## How It Works
 

@@ -1234,26 +1234,26 @@ pytest tests/test_api_poster.py --cov=src/api_poster.py
 The `test_api_poster.py` module includes comprehensive tests for:
 
 **Success Scenarios:**
-- ✅ Successful API POST with authentication
-- ✅ POST without authentication token
-- ✅ Large payload handling
-- ✅ Slow/late responses (within timeout)
+- ✓ Successful API POST with authentication
+- ✓ POST without authentication token
+- ✓ Large payload handling
+- ✓ Slow/late responses (within timeout)
 
 **Error Scenarios:**
-- ✅ 400 Bad Request errors
-- ✅ 500 Internal Server errors
-- ✅ 503 Service Unavailable errors
-- ✅ Connection errors
-- ✅ Timeout errors
+- ✓ 400 Bad Request errors
+- ✓ 500 Internal Server errors
+- ✓ 503 Service Unavailable errors
+- ✓ Connection errors
+- ✓ Timeout errors
 
 **Retry Logic:**
-- ✅ Retry with exponential backoff
-- ✅ Retry exhaustion handling
+- ✓ Retry with exponential backoff
+- ✓ Retry exhaustion handling
 
 **Data & Logging:**
-- ✅ Payload formatting and structure
-- ✅ Request/response logging
-- ✅ Long response truncation
+- ✓ Payload formatting and structure
+- ✓ Request/response logging
+- ✓ Long response truncation
 
 ### Manual Testing
 

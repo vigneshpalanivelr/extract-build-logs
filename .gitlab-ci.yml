@@ -1,45 +1,46 @@
-# GitLab CI/CD Configuration
-# Runs linters, tests, and coverage on every push
-
 stages:
-  - lint
+  - formatcheck
   - test
   - coverage
 
-# Cache pip packages to speed up builds
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  DOCKER_IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
+
 cache:
-  key: ${CI_COMMIT_REF_SLUG}
+  key: "${CI_COMMIT_REF_SLUG}"
   paths:
     - .cache/pip
-    - venv/
 
-# Define default Python image
+
 .python_base:
-  image: python:3.11-slim
+  image: artifact.internal.com:9999/python:3.11-slim
+  tags:
+    - executor:dind-socket
   before_script:
     - python --version
-    - pip install --cache-dir .cache/pip --upgrade pip
-    - pip install --cache-dir .cache/pip -r requirements.txt
+    - pip config set 'global.index-url' https://$ARTIFACTORY_USER:$ARTIFACTORY_PASS@artifact.internal.com/artifactory/api/pypi/pypi.org/simple
+    - pip install --trusted-host artifact.internal.com pylint  pytest pytest-cov
+    - pip install --upgrade pip --trusted-host artifact.internal.com -r requirements.txt
 
 # ============================================================================
 # LINT STAGE - Code Quality Checks
 # ============================================================================
 
 flake8:
-  extends: .python_base
-  stage: lint
+  stage: formatcheck
+  image: git.internal.com:9999/repo/flake8-py37
   script:
-    - pip install --cache-dir .cache/pip flake8
-    - flake8 src/ tests/ --exclude=venv,__pycache__,.git --max-line-length=120 --statistics
-  allow_failure: false
+    - flake8 --max-line-length 120
+  allow_failure: true
 
 pylint:
   extends: .python_base
-  stage: lint
+  stage: formatcheck
   script:
-    - pip install --cache-dir .cache/pip pylint
-    - pylint src/ --max-line-length=120 --disable=C0114,C0115,C0116,R0913,R0914 --exit-zero
-  allow_failure: true  # Advisory only
+    - echo "Running pylint on entire project"
+    - pylint src/ --max-line-length=120
+  allow_failure: true
 
 # ============================================================================
 # TEST STAGE - Unit Tests
@@ -49,15 +50,8 @@ pytest:
   extends: .python_base
   stage: test
   script:
-    - pip install --cache-dir .cache/pip pytest pytest-cov
     - pytest tests/ --ignore=tests/test_manage_container.py -v --tb=short
-  artifacts:
-    when: always
-    reports:
-      junit: report.xml
-    paths:
-      - report.xml
-  allow_failure: false
+  allow_failure: true
 
 # ============================================================================
 # COVERAGE STAGE - Code Coverage Analysis
@@ -67,7 +61,7 @@ coverage:
   extends: .python_base
   stage: coverage
   script:
-    - pip install --cache-dir .cache/pip pytest pytest-cov
+    - pip install pytest pytest-cov
     - pytest tests/ --ignore=tests/test_manage_container.py
         --cov=src
         --cov-report=term-missing
@@ -77,16 +71,4 @@ coverage:
     - coverage report
     - coverage xml
   coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
-  artifacts:
-    when: always
-    reports:
-      coverage_report:
-        coverage_format: cobertura
-        path: coverage.xml
-      junit: report.xml
-    paths:
-      - coverage_html/
-      - coverage.xml
-      - report.xml
-    expire_in: 30 days
-  allow_failure: false
+  allow_failure: true

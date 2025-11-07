@@ -45,7 +45,7 @@ echo "==================================="
 echo ""
 
 # Confirm before proceeding
-read -p "⚠️  This will REPLACE the current database. Continue? (yes/no): " CONFIRM
+read -p "!  This will REPLACE the current database. Continue? (yes/no): " CONFIRM
 
 if [ "$CONFIRM" != "yes" ]; then
     echo "Restore cancelled."
