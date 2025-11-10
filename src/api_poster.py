@@ -32,6 +32,7 @@ except ImportError:
 from .config_loader import Config
 from .error_handler import ErrorHandler, RetryExhaustedError
 from .email_sender import EmailSender
+from .token_manager import TokenManager
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -82,6 +83,16 @@ class ApiPoster:
             except Exception as e:
                 logger.error(f"Failed to initialize email sender: {e}", exc_info=True)
                 logger.warning("Email notifications will be disabled")
+
+        # Initialize token manager for JWT authentication
+        self.token_manager = None
+        if config.bfa_secret_key:
+            try:
+                self.token_manager = TokenManager(config.bfa_secret_key)
+                logger.info("TokenManager initialized for JWT authentication")
+            except Exception as e:
+                logger.error(f"Failed to initialize TokenManager: {e}", exc_info=True)
+                logger.warning("JWT authentication will be disabled, using raw secret key")
 
         logger.info(f"API Poster initialized with endpoint: {config.api_post_url}")
         logger.debug(f"API log file: {self.api_log_file}")
@@ -267,9 +278,32 @@ class ApiPoster:
             "Content-Type": "application/json"
         }
 
-        # Add authentication if configured
-        if self.config.bfa_secret_key:
+        # Generate JWT token for authentication
+        if self.token_manager:
+            try:
+                # Extract info from payload to create JWT subject
+                repo = payload.get('repo', 'unknown')
+                pipeline_id = payload.get('pipeline_id', '0')
+                source = 'gitlab'  # Default source
+
+                # Build subject: <source>_<repo>_<pipeline_id>
+                subject = f"{source}_{repo}_{pipeline_id}"
+
+                # Generate JWT token (expires in 60 minutes)
+                jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
+                headers["Authorization"] = f"Bearer {jwt_token}"
+
+                logger.debug(f"Generated JWT token for subject: {subject}")
+            except Exception as e:
+                logger.error(f"Failed to generate JWT token: {e}", exc_info=True)
+                # Fallback to raw secret key if JWT generation fails
+                if self.config.bfa_secret_key:
+                    headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
+                    logger.warning("Using raw secret key as fallback authentication")
+        elif self.config.bfa_secret_key:
+            # TokenManager not initialized, use raw secret key
             headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
+            logger.debug("Using raw secret key for authentication (TokenManager not available)")
 
         start_time = time.time()
 
