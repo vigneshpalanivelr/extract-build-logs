@@ -208,9 +208,6 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
         if not config.get('BFA_HOST'):
             errors.append("API_POST_ENABLED is true but BFA_HOST is not set")
 
-        if not config.get('BFA_SECRET_KEY'):
-            errors.append("API_POST_ENABLED is true but BFA_SECRET_KEY is not set")
-
         # Validate timeout
         try:
             timeout = int(config.get('API_POST_TIMEOUT', '30'))

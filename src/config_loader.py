@@ -214,8 +214,6 @@ class ConfigLoader:
         if api_post_enabled:
             if not bfa_host:
                 raise ValueError("BFA_HOST is required when API_POST_ENABLED is true")
-            if not bfa_secret_key:
-                raise ValueError("BFA_SECRET_KEY is required when API_POST_ENABLED is true")
             if api_post_timeout < 1 or api_post_timeout > 300:
                 raise ValueError(f"Invalid API_POST_TIMEOUT: {api_post_timeout}. Must be between 1 and 300 seconds")
 

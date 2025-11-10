@@ -1113,8 +1113,7 @@ if log_level not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
 if api_post_enabled:
     if not bfa_host:
         raise ValueError("BFA_HOST is required when API_POST_ENABLED is true")
-    if not bfa_secret_key:
-        raise ValueError("BFA_SECRET_KEY is required when API_POST_ENABLED is true")
+    # Note: BFA_SECRET_KEY is optional - if set, will be used for Bearer token authentication
 ```
 
 **3. Configuration Display on Startup** (`src/webhook_listener.py`)
