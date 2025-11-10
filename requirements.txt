@@ -26,8 +26,10 @@ docker>=7.0.0  # Docker Python SDK for container operations
 rich>=13.0.0  # Rich terminal output with colors, tables, and progress bars
 
 # Database
-psycopg2-binary==2.9.9  # PostgreSQL adapter (optional, SQLite is default)
+# psycopg2-binary==2.9.9  # PostgreSQL adapter (optional, SQLite is default)
+# Commented out: Not available for Python 3.8 without compilation
+# Application uses SQLite by default, PostgreSQL is optional
 
 # Code quality tools (for CI/CD)
-flake8==7.0.0           # Code style checker
-pylint==3.0.3           # Comprehensive linting
+flake8==6.1.0           # Code style checker (downgraded for Python 3.8)
+pylint==2.17.7          # Comprehensive linting (downgraded for Python 3.8)
