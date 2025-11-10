@@ -732,6 +732,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             name=CONTAINER_NAME,
             detach=True,
             user='root',
+            userns_mode='host',
             ports={f'{port}/tcp': port},
             volumes={
                 str(Path.cwd() / LOGS_DIR): {'bind': '/app/logs', 'mode': 'rw'},
@@ -748,6 +749,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         shell_cmd = (
             f"docker run -d --name {CONTAINER_NAME} "
             f"--user root "
+            f"--userns=host "
             f"-p {port}:{port} "
             f"-v {logs_path}:/app/logs "
             f"-v {env_path}:/app/.env:ro "
