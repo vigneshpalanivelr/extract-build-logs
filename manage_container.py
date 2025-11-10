@@ -705,6 +705,21 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
     try:
         port = int(config.get('WEBHOOK_PORT', '8000'))
 
+        # Create logs directory first (before any container operations)
+        # This ensures it exists with proper permissions on the host
+        logs_path = Path(LOGS_DIR)
+        if not logs_path.exists():
+            logs_path.mkdir(parents=True, exist_ok=True)
+            # Set permissions to ensure container can write
+            # 0o755 = rwxr-xr-x (owner can read/write/execute, others can read/execute)
+            logs_path.chmod(0o755)
+            console.print(f"[green]✓ Created logs directory:[/green] {LOGS_DIR}")
+        else:
+            # Directory exists, verify it's writable
+            if not os.access(logs_path, os.W_OK):
+                console.print(f"[yellow]⚠ Warning: logs directory exists but may not be writable:[/yellow] {LOGS_DIR}")
+                console.print(f"[yellow]  Run: sudo chown -R $USER:$USER {LOGS_DIR}[/yellow]")
+
         # Check if container already exists
         if container_exists(client):
             if container_running(client):
@@ -719,9 +734,6 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
                 console.print(f"[dim]Shell equivalent: docker start {CONTAINER_NAME}[/dim]")
                 show_endpoints(port)
                 return True
-
-        # Create logs directory
-        Path(LOGS_DIR).mkdir(parents=True, exist_ok=True)
 
         # Start new container
         console.print(f"[bold blue]Starting new container:[/bold blue] {CONTAINER_NAME}")
