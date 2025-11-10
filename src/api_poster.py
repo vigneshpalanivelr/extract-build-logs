@@ -411,8 +411,32 @@ class ApiPoster:
 
             return response.status_code, response_body, duration_ms
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.HTTPError as e:
+            # HTTP error (4xx, 5xx) - log payload for debugging
             duration_ms = int((time.time() - start_time) * 1000)
+            status_code = e.response.status_code if e.response else None
+            response_body = e.response.text[:1000] if e.response and e.response.text else "No response"
+
+            # Log the payload that caused the error
+            logger.error(
+                f"API returned {status_code} error. Request payload:",
+                extra={
+                    'status_code': status_code,
+                    'duration_ms': duration_ms,
+                    'response': response_body
+                }
+            )
+            logger.error(f"Payload that caused {status_code} error:\n{json.dumps(payload, indent=2)}")
+
+            error_msg = str(e)[:1000]
+            raise requests.exceptions.RequestException(
+                f"API request failed after {duration_ms}ms: {error_msg}"
+            )
+
+        except requests.exceptions.RequestException as e:
+            # Other request errors (timeout, connection, etc.)
+            duration_ms = int((time.time() - start_time) * 1000)
+            logger.error(f"API request failed: {str(e)[:500]}")
             error_msg = str(e)[:1000]
             raise requests.exceptions.RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
@@ -506,8 +530,26 @@ class ApiPoster:
         # Format payload
         try:
             payload = self.format_payload(pipeline_info, all_logs)
-            payload_size = len(json.dumps(payload))
-            logger.debug(f"Formatted API payload (size: {payload_size} bytes)")
+            payload_json = json.dumps(payload, indent=2)
+            payload_size = len(payload_json)
+
+            # Always log payload summary
+            logger.info(
+                f"Formatted API payload for pipeline {pipeline_id}",
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'repo': payload.get('repo'),
+                    'branch': payload.get('branch'),
+                    'commit': payload.get('commit'),
+                    'job_count': len(payload.get('job_name', [])),
+                    'failed_steps_count': len(payload.get('failed_steps', [])),
+                    'payload_size_bytes': payload_size
+                }
+            )
+
+            # Log full payload in DEBUG mode for troubleshooting
+            logger.debug(f"Full API payload:\n{payload_json}")
+
         except Exception as e:
             logger.error(
                 f"Failed to format API payload for pipeline {pipeline_id}: {e}",

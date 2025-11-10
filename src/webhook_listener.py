@@ -188,15 +188,23 @@ def init_app():
         monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
         logger.debug("Pipeline monitor initialized")
 
-        # Initialize BFA JWT token manager
+        # Initialize BFA JWT token manager based on authentication configuration
+        # Scenario 1: BFA_SECRET_KEY set → Generate JWT tokens locally
+        # Scenario 2: BFA_HOST set (no SECRET_KEY) → Fetch tokens from BFA server
+        # Scenario 3: Neither set → Cannot authenticate (API posting will fail)
         if config.bfa_secret_key:
+            # Scenario 1: Local JWT generation
             token_manager = TokenManager(secret_key=config.bfa_secret_key)
-            logger.debug("BFA JWT token manager initialized")
-        else:
+            logger.info("BFA_SECRET_KEY configured - /api/token not needed as JWT token already available in .env")
+            logger.debug("TokenManager initialized for local JWT generation")
+        elif config.bfa_host:
+            # Scenario 2: Will fetch tokens from BFA server
             token_manager = None
-            logger.error("BFA_SECRET_KEY is not set - JWT token generation via /api/token endpoint will be disabled")
-            if not config.bfa_host:
-                logger.error("BFA_HOST is also not set - cannot obtain BFA_SECRET_KEY from server")
+            logger.info("BFA_SECRET_KEY not set - /api/token endpoint will be used to fetch tokens from BFA server")
+        else:
+            # Scenario 3: No authentication method available
+            token_manager = None
+            logger.error("Cannot post API to LLM: No BFA_SECRET_KEY or BFA_HOST configured")
 
         # Initialize API poster if enabled
         if config.api_post_enabled:
