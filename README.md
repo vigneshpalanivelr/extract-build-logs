@@ -883,10 +883,15 @@ LOG_SAVE_METADATA_ALWAYS=true
 # ============================================================================
 # API POSTING CONFIGURATION (New!)
 # ============================================================================
+# BFA Configuration (required for API posting)
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key
+
+# API POSTING CONFIGURATION
+# ============================================================================
 # Enable API posting for pipeline logs (instead of or in addition to file storage)
+# When enabled, API endpoint is auto-constructed as: http://BFA_HOST:8000/api/analyze
 API_POST_ENABLED=false
-API_POST_URL=https://api.example.com/pipeline-logs
-API_POST_AUTH_TOKEN=your_api_token_here
 API_POST_TIMEOUT=30
 API_POST_RETRY_ENABLED=true
 API_POST_SAVE_TO_FILE=false  # false = API only, true = dual mode (API + file)
@@ -937,14 +942,13 @@ Instead of (or in addition to) saving logs to files, you can configure the syste
 **Configuration:**
 
 ```bash
+# Configure BFA server (required for API posting)
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key
+
 # Enable API posting
+# API endpoint auto-constructed as: http://BFA_HOST:8000/api/analyze
 API_POST_ENABLED=true
-
-# Configure API endpoint
-API_POST_URL=https://api.example.com/pipeline-logs
-
-# Add authentication (optional)
-API_POST_AUTH_TOKEN=your_bearer_token_here
 
 # Set timeout (default: 30 seconds)
 API_POST_TIMEOUT=30
@@ -1048,10 +1052,8 @@ config = ConfigLoader.load()
 |----------|---------|-----------|---------|
 | `GITLAB_URL` | (required) | line 98 | `log_fetcher.py`, `webhook_listener.py` |
 | `GITLAB_TOKEN` | (required) | line 99 | `log_fetcher.py` |
-| `BFA_SERVER` | None | line 183 | `token_manager.py` (for obtaining BFA_SECRET_KEY) |
-| `BFA_SECRET_KEY` | None | line 184 | `token_manager.py`, `webhook_listener.py` |
-| `API_POST_URL` | None | line 156 | `api_poster.py` |
-| `API_POST_AUTH_TOKEN` | None | line 157 | `api_poster.py` |
+| `BFA_HOST` | None | line 180 | Auto-constructs API endpoint: `http://BFA_HOST:8000/api/analyze` |
+| `BFA_SECRET_KEY` | None | line 181 | `token_manager.py`, `api_poster.py` (Bearer auth) |
 | `WEBHOOK_PORT` | 8000 | line 100 | `webhook_listener.py` |
 | `LOG_LEVEL` | INFO | line 104 | `logging_config.py` |
 
@@ -1109,8 +1111,10 @@ if log_level not in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
     raise ValueError(f"Invalid LOG_LEVEL: {log_level}")
 
 if api_post_enabled:
-    if not api_post_url:
-        raise ValueError("API_POST_URL is required when API_POST_ENABLED is true")
+    if not bfa_host:
+        raise ValueError("BFA_HOST is required when API_POST_ENABLED is true")
+    if not bfa_secret_key:
+        raise ValueError("BFA_SECRET_KEY is required when API_POST_ENABLED is true")
 ```
 
 **3. Configuration Display on Startup** (`src/webhook_listener.py`)
@@ -1261,8 +1265,8 @@ python src/config_loader.py
 cat .env
 
 # Verify specific values
+grep "BFA_HOST" .env
 grep "BFA_SECRET_KEY" .env
-grep "API_POST_URL" .env
 ```
 
 **Verify Configuration at Runtime:**
