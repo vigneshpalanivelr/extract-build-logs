@@ -31,6 +31,7 @@ except ImportError:
 
 from .config_loader import Config
 from .error_handler import ErrorHandler, RetryExhaustedError
+from .email_sender import EmailSender
 
 # Configure module logger
 logger = logging.getLogger(__name__)
@@ -71,6 +72,16 @@ class ApiPoster:
         log_dir = Path(config.log_output_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         self.api_log_file = log_dir / "api-requests.log"
+
+        # Initialize email sender if email notifications are enabled
+        self.email_sender = None
+        if config.email_notifications_enabled:
+            try:
+                self.email_sender = EmailSender(config)
+                logger.info("Email notifications enabled for API responses")
+            except Exception as e:
+                logger.error(f"Failed to initialize email sender: {e}", exc_info=True)
+                logger.warning("Email notifications will be disabled")
 
         logger.info(f"API Poster initialized with endpoint: {config.api_post_url}")
         logger.debug(f"API log file: {self.api_log_file}")
@@ -426,6 +437,26 @@ class ApiPoster:
                 response_body, duration_ms
             )
 
+            # Send email notifications if enabled
+            if self.email_sender:
+                try:
+                    if status_code == 200:
+                        # Success: Parse response and send email to pipeline user
+                        try:
+                            api_response = json.loads(response_body)
+                            self.email_sender.send_success_email(pipeline_info, api_response)
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"Failed to parse API response for email notification: {e}")
+                    else:
+                        # Failure: Send alert to DevOps team
+                        self.email_sender.send_failure_email(
+                            pipeline_info,
+                            status_code,
+                            response_body
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send email notification: {e}", exc_info=True)
+
             return True
 
         except RetryExhaustedError as e:
@@ -441,6 +472,18 @@ class ApiPoster:
                 pipeline_id, project_id, None, "", 0,
                 error=f"Retry exhausted: {str(e)}"
             )
+
+            # Send failure email to DevOps
+            if self.email_sender:
+                try:
+                    self.email_sender.send_failure_email(
+                        pipeline_info,
+                        status_code=0,
+                        error_message=f"Retry exhausted: {str(e)}"
+                    )
+                except Exception as email_err:
+                    logger.error(f"Failed to send failure email: {email_err}", exc_info=True)
+
             return False
 
         except Exception as e:
@@ -457,6 +500,18 @@ class ApiPoster:
                 pipeline_id, project_id, None, "", 0,
                 error=f"{type(e).__name__}: {str(e)}"
             )
+
+            # Send failure email to DevOps
+            if self.email_sender:
+                try:
+                    self.email_sender.send_failure_email(
+                        pipeline_info,
+                        status_code=0,
+                        error_message=f"{type(e).__name__}: {str(e)}"
+                    )
+                except Exception as email_err:
+                    logger.error(f"Failed to send failure email: {email_err}", exc_info=True)
+
             return False
 
     def post_jenkins_logs(self, jenkins_payload: Dict[str, Any]) -> bool:

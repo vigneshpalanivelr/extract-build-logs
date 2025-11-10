@@ -49,6 +49,11 @@ class Config:
         jenkins_webhook_secret (Optional[str]): Secret token for Jenkins webhook validation
         bfa_host (Optional[str]): BFA server hostname/IP (used to construct API endpoint)
         bfa_secret_key (Optional[str]): Secret key for BFA JWT token generation (required for /api/token endpoint)
+        email_notifications_enabled (bool): Enable email notifications for API response processing
+        smtp_host (str): SMTP server hostname
+        smtp_port (int): SMTP server port
+        smtp_from_email (Optional[str]): Email address to send notifications from
+        devops_email (Optional[str]): DevOps team email address for failure notifications
     """
     gitlab_url: str
     gitlab_token: str
@@ -75,6 +80,11 @@ class Config:
     jenkins_webhook_secret: Optional[str]
     bfa_host: Optional[str]
     bfa_secret_key: Optional[str]
+    email_notifications_enabled: bool
+    smtp_host: str
+    smtp_port: int
+    smtp_from_email: Optional[str]
+    devops_email: Optional[str]
 
 
 class ConfigLoader:
@@ -182,6 +192,15 @@ class ConfigLoader:
         # Auto-construct API POST URL from BFA_HOST
         api_post_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else None
 
+        # Email notification configuration
+        email_notifications_enabled_str = os.getenv('EMAIL_NOTIFICATIONS_ENABLED', 'false').lower()
+        email_notifications_enabled = email_notifications_enabled_str in ['true', '1', 'yes', 'on']
+
+        smtp_host = os.getenv('SMTP_HOST', 'localhost')
+        smtp_port = int(os.getenv('SMTP_PORT', '25'))
+        smtp_from_email = os.getenv('SMTP_FROM_EMAIL')
+        devops_email = os.getenv('DEVOPS_EMAIL')
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -211,6 +230,15 @@ class ConfigLoader:
             if not jenkins_api_token:
                 raise ValueError("JENKINS_API_TOKEN is required when JENKINS_ENABLED is true")
 
+        # Validate Email notification configuration
+        if email_notifications_enabled:
+            if not smtp_from_email:
+                raise ValueError("SMTP_FROM_EMAIL is required when EMAIL_NOTIFICATIONS_ENABLED is true")
+            if not devops_email:
+                raise ValueError("DEVOPS_EMAIL is required when EMAIL_NOTIFICATIONS_ENABLED is true")
+            if smtp_port < 1 or smtp_port > 65535:
+                raise ValueError(f"Invalid SMTP_PORT: {smtp_port}. Must be between 1 and 65535")
+
         return Config(
             gitlab_url=gitlab_url,
             gitlab_token=gitlab_token,
@@ -236,7 +264,12 @@ class ConfigLoader:
             jenkins_api_token=jenkins_api_token,
             jenkins_webhook_secret=jenkins_webhook_secret,
             bfa_host=bfa_host,
-            bfa_secret_key=bfa_secret_key
+            bfa_secret_key=bfa_secret_key,
+            email_notifications_enabled=email_notifications_enabled,
+            smtp_host=smtp_host,
+            smtp_port=smtp_port,
+            smtp_from_email=smtp_from_email,
+            devops_email=devops_email
         )
 
     @staticmethod

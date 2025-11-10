@@ -87,8 +87,8 @@ JENKINS_WEBHOOK_SECRET=your_secret_token
 
 # Enable API posting
 API_POST_ENABLED=true
-API_POST_URL=https://your-api.example.com/logs
-API_POST_AUTH_TOKEN=your_api_bearer_token
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_secret_key
 ```
 
 ### Step 3: Restart the Service

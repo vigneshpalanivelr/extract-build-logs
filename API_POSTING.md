@@ -50,17 +50,22 @@ Add these to your `.env` file:
 
 ```bash
 # ============================================================================
+# BFA Server Configuration (Required for API Posting)
+# ============================================================================
+
+# BFA Host - hostname or IP (without http:// prefix)
+# API endpoint will be auto-constructed as: http://BFA_HOST:8000/api/analyze
+BFA_HOST=bfa-server.example.com
+
+# BFA Secret Key - used for Bearer token authentication
+BFA_SECRET_KEY=your_bfa_secret_key
+
+# ============================================================================
 # API Posting Configuration
 # ============================================================================
 
 # Enable/disable API posting
 API_POST_ENABLED=true
-
-# API endpoint URL (required if enabled)
-API_POST_URL=https://your-api.example.com/pipeline-logs
-
-# Authentication token (optional but recommended)
-API_POST_AUTH_TOKEN=your_bearer_token_here
 
 # Request timeout in seconds (default: 30, range: 1-300)
 API_POST_TIMEOUT=30
@@ -76,12 +81,24 @@ API_POST_SAVE_TO_FILE=false
 
 | Variable | Required | Default | Validation |
 |----------|----------|---------|------------|
+| `BFA_HOST` | Yes (if API enabled) | - | Hostname or IP address |
+| `BFA_SECRET_KEY` | Yes (if API enabled) | - | Any string (used as Bearer token) |
 | `API_POST_ENABLED` | No | `false` | Must be `true` or `false` |
-| `API_POST_URL` | Yes (if enabled) | - | Must be valid HTTP/HTTPS URL |
-| `API_POST_AUTH_TOKEN` | No | - | Any string |
 | `API_POST_TIMEOUT` | No | `30` | Integer between 1-300 |
 | `API_POST_RETRY_ENABLED` | No | `true` | Must be `true` or `false` |
 | `API_POST_SAVE_TO_FILE` | No | `false` | Must be `true` or `false` |
+
+### API Endpoint
+
+The API endpoint is **automatically constructed** from `BFA_HOST`:
+
+```
+http://{BFA_HOST}:8000/api/analyze
+```
+
+**Examples:**
+- `BFA_HOST=bfa-server.example.com` → `http://bfa-server.example.com:8000/api/analyze`
+- `BFA_HOST=192.168.1.100` → `http://192.168.1.100:8000/api/analyze`
 
 ### Configuration Validation
 
@@ -244,12 +261,12 @@ If `LOG_SAVE_PIPELINE_STATUS=all`:
 
 ### Bearer Token Authentication
 
-The system uses **HTTP Bearer token** authentication:
+The system uses **HTTP Bearer token** authentication with `BFA_SECRET_KEY`:
 
 ```http
-POST /your-endpoint HTTP/1.1
-Host: your-api.example.com
-Authorization: Bearer your_token_here
+POST /api/analyze HTTP/1.1
+Host: bfa-server.example.com:8000
+Authorization: Bearer your_bfa_secret_key
 Content-Type: application/json
 
 {payload}
@@ -259,27 +276,211 @@ Content-Type: application/json
 
 ```bash
 # In .env file:
-API_POST_AUTH_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+BFA_SECRET_KEY=your_bfa_secret_key
 
-# Token is automatically added to Authorization header
+# Token is automatically added to Authorization header as Bearer token
 ```
 
 ### Security
 
 - ✓ Token is **masked in logs** (`Bearer *****`)
 - ✓ Token is **never** written to log files
-- ✓ Transmitted over **HTTPS** (recommended)
+- ✓ Same secret key used for JWT token signing
+- ✓ Transmitted over HTTP (HTTPS recommended for production)
 - ✓ No token validation on client side (API validates)
 
-### No Authentication
+### Required Authentication
 
-If your API doesn't require authentication:
+**Note:** `BFA_SECRET_KEY` is **required** when `API_POST_ENABLED=true`.
 
 ```bash
-# Leave empty or don't set:
-API_POST_AUTH_TOKEN=
+# Both required for API posting:
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_secret_key
 
-# System will send requests without Authorization header
+# System will validate on startup and fail if missing
+```
+
+---
+
+## API Request and Response Details
+
+### HTTP Request Format
+
+**Endpoint:** `POST http://{BFA_HOST}:8000/api/analyze`
+
+**Headers:**
+```http
+POST /api/analyze HTTP/1.1
+Host: {BFA_HOST}:8000
+Content-Type: application/json
+Authorization: Bearer {BFA_SECRET_KEY}
+User-Agent: GitLab-Pipeline-Log-Extractor/2.0
+```
+
+**Request Body:**
+```json
+{
+  "repo": "api-backend",
+  "branch": "feature/user-auth",
+  "commit": "abc123d",
+  "job_name": ["build:docker", "test:unit"],
+  "pipeline_id": "12345",
+  "triggered_by": "john.doe",
+  "failed_steps": [
+    {
+      "step_name": "build:docker",
+      "error_lines": [
+        "npm ERR! code ERESOLVE",
+        "npm ERR! ERESOLVE unable to resolve dependency tree",
+        "ERROR: Build failed with exit code 1"
+      ]
+    }
+  ]
+}
+```
+
+### Success Response (HTTP 200)
+
+**Status Code:** `200 OK`
+
+**Response Format:**
+```json
+{
+  "status": "ok",
+  "results": [
+    {
+      "error_hash": "60b7634d92fcd9eda5c3d3755fda94a6fb6d50c00b707f6a129a08a0ab787c3b",
+      "source": "slack_posted",
+      "step_name": "unit-test",
+      "error_text": "semi colon missing",
+      "fix": "## Fix: Semi colon missing\n\n**Root Cause:** Missing semicolon in JavaScript code.\n\n**Steps:**\n1. Add semicolon at the end of the statement\n2. Enable ESLint to catch these errors\n\n**Code Fix:**\n\n```javascript\n// Before (causes error)\nconst value = obj.property\n\n// After (fixed)\nconst value = obj.property;\n```\n\n**Quick Debug:**\n- Check line number in error message\n- Enable linting in your editor\n- Use Prettier for auto-formatting\n\n[debug] prompt tokens=52, output tokens=212, total tokens=264"
+    },
+    {
+      "error_hash": "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6",
+      "source": "slack_posted",
+      "step_name": "integration-test",
+      "error_text": "Cannot read properties of undefined",
+      "fix": "## Fix: Cannot read properties of undefined\n\n**Root Cause:** Trying to access a property on an undefined/null object.\n\n**Steps:**\n1. Add null/undefined checks before property access\n2. Use optional chaining or defensive programming\n\n**Code Fix:**\n\n```javascript\n// Before (causes error)\nconst value = obj.property.nestedProperty;\n\n// After (safe approaches)\n// Option 1: Optional chaining\nconst value = obj?.property?.nestedProperty;\n\n// Option 2: Null check\nconst value = obj && obj.property && obj.property.nestedProperty;\n\n// Option 3: Default values\nconst value = obj?.property?.nestedProperty || 'defaultValue';\n```\n\n**Quick Debug:**\n- Add `console.log(obj)` before the failing line to identify which object is undefined\n- Check if async data has loaded before accessing properties\n- Ensure API responses/imports are properly handled\n\n[debug] prompt tokens=52, output tokens=212, total tokens=264"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | Always `"ok"` for successful analysis |
+| `results` | array | Array of error analysis results |
+| `results[].error_hash` | string | Unique hash identifier for the error |
+| `results[].source` | string | Source of the fix (e.g., "slack_posted") |
+| `results[].step_name` | string | Name of the failed step |
+| `results[].error_text` | string | Brief description of the error |
+| `results[].fix` | string | Markdown-formatted fix instructions with code examples |
+
+**Processing Success Response:**
+- Status 200 indicates successful error analysis
+- Parse `results` array to extract error fixes
+- Each result contains actionable fix information
+- `fix` field contains detailed Markdown documentation
+- **Action:** Send email to pipeline user with all error fixes
+
+### Failure Response (HTTP != 200)
+
+**Status Codes:**
+- `400 Bad Request` - Invalid payload format
+- `401 Unauthorized` - Invalid or missing BFA_SECRET_KEY
+- `500 Internal Server Error` - Server error
+- `503 Service Unavailable` - Server temporarily unavailable
+- `504 Gateway Timeout` - Request timeout
+
+**Response Format:**
+```json
+{
+  "error": "Invalid payload format",
+  "message": "Missing required field: pipeline_id",
+  "code": "INVALID_PAYLOAD"
+}
+```
+
+**Error Response Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `error` | string | Error type/summary |
+| `message` | string | Detailed error message |
+| `code` | string | Machine-readable error code |
+
+**Processing Failure Response:**
+- Status != 200 indicates failure
+- Log error details for debugging
+- **Action:** Send alert email to DevOps team
+- Include error message and status code
+- May trigger retry logic if enabled
+
+### Response Handling Flow
+
+```
+API Response Received
+       │
+       ├─→ [Status 200]
+       │      │
+       │      ├─→ Parse results array
+       │      ├─→ Extract error fixes
+       │      ├─→ Send email to PIPELINE USER
+       │      │   ├─ Subject: "Build Failures Fixed: [repo/branch]"
+       │      │   ├─ Body: All error analysis + fixes
+       │      │   └─ Format: HTML email with code blocks
+       │      └─→ Log success
+       │
+       └─→ [Status != 200]
+              │
+              ├─→ Log error details
+              ├─→ Send alert to DEVOPS TEAM
+              │   ├─ Subject: "BFA API Failure: [pipeline_id]"
+              │   ├─ Body: Error message + status code
+              │   └─ Include: Pipeline details
+              └─→ Trigger retry (if enabled)
+```
+
+### Example cURL Request
+
+```bash
+curl -X POST http://bfa-server.example.com:8000/api/analyze \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your_bfa_secret_key" \
+  -d '{
+    "repo": "api-backend",
+    "branch": "main",
+    "commit": "abc123",
+    "job_name": ["build", "test"],
+    "pipeline_id": "12345",
+    "triggered_by": "john.doe",
+    "failed_steps": [
+      {
+        "step_name": "test",
+        "error_lines": ["Error: Test failed", "AssertionError: expected true"]
+      }
+    ]
+  }'
+```
+
+**Expected Output (Success):**
+```json
+{
+  "status": "ok",
+  "results": [...]
+}
+```
+
+**Expected Output (Failure):**
+```json
+{
+  "error": "Unauthorized",
+  "message": "Invalid Bearer token",
+  "code": "AUTH_FAILED"
+}
 ```
 
 ---
@@ -474,8 +675,8 @@ grep "^API_POST" .env
 
 # Expected output:
 # API_POST_ENABLED=true
-# API_POST_URL=https://your-api.example.com/endpoint
-# API_POST_AUTH_TOKEN=your_token
+# BFA_HOST=bfa-server.example.com
+# BFA_SECRET_KEY=your_secret_key
 
 # Check if configuration loaded correctly:
 grep "API posting" logs/application.log
@@ -569,8 +770,8 @@ docker logs bfa-gitlab-pipeline-extractor | grep -i "api"
 # 1. Is API posting enabled?
 grep "API_POST_ENABLED" .env
 
-# 2. What's the API URL?
-grep "API_POST_URL" .env
+# 2. What's the BFA Host?
+grep "BFA_HOST" .env
 
 # 3. Recent API requests:
 tail -n 100 logs/api-requests.log
@@ -742,8 +943,8 @@ app.listen(5000, () => {
 ```bash
 # In .env:
 API_POST_ENABLED=true
-API_POST_URL=https://httpbin.org/post
-API_POST_AUTH_TOKEN=test_token
+BFA_HOST=httpbin.org
+BFA_SECRET_KEY=test_token
 
 # Restart:
 sudo systemctl restart gitlab-log-extractor
@@ -806,7 +1007,7 @@ pip install fastapi uvicorn
 python test_api_server.py
 
 # In another terminal, configure:
-API_POST_URL=http://localhost:5000/logs
+BFA_HOST=localhost
 ```
 
 ### Step 2: Trigger Test Webhook
@@ -854,10 +1055,10 @@ tail -20 logs/api-requests.log
    # Should be: API_POST_ENABLED=true
    ```
 
-2. **Check URL is set:**
+2. **Check BFA Host is set:**
    ```bash
-   grep "API_POST_URL" .env
-   # Should have valid URL
+   grep "BFA_HOST" .env
+   # Should have valid hostname
    ```
 
 3. **Check startup logs:**
@@ -880,9 +1081,9 @@ tail -20 logs/api-requests.log
 
 **Solutions:**
 
-1. **Check token is set:**
+1. **Check BFA Secret Key is set:**
    ```bash
-   grep "API_POST_AUTH_TOKEN" .env
+   grep "BFA_SECRET_KEY" .env
    ```
 
 2. **Verify token is correct:**
@@ -999,8 +1200,8 @@ tail -20 logs/api-requests.log
 **Quick Start Checklist:**
 
 - [ ] Set `API_POST_ENABLED=true` in .env
-- [ ] Set `API_POST_URL` to your API endpoint
-- [ ] Set `API_POST_AUTH_TOKEN` (if required)
+- [ ] Set `BFA_HOST` to your BFA server hostname
+- [ ] Set `BFA_SECRET_KEY` for authentication
 - [ ] Restart service
 - [ ] Send test webhook
 - [ ] Check `logs/api-requests.log`
