@@ -86,6 +86,9 @@ class ApiPoster:
 
         # Initialize token manager for JWT authentication
         self.token_manager = None
+        self.bfa_token_cache = None  # Cache token fetched from BFA server
+        self.bfa_token_expiry = None  # Track token expiration
+
         if config.bfa_secret_key:
             try:
                 self.token_manager = TokenManager(config.bfa_secret_key)
@@ -93,6 +96,10 @@ class ApiPoster:
             except Exception as e:
                 logger.error(f"Failed to initialize TokenManager: {e}", exc_info=True)
                 logger.warning("JWT authentication will be disabled, using raw secret key")
+        elif config.bfa_host:
+            logger.info(f"BFA_SECRET_KEY not set, will fetch tokens from BFA server: {config.bfa_host}")
+        else:
+            logger.warning("Neither BFA_SECRET_KEY nor BFA_HOST configured - API authentication may fail")
 
         logger.info(f"API Poster initialized with endpoint: {config.api_post_url}")
         logger.debug(f"API log file: {self.api_log_file}")
@@ -261,6 +268,64 @@ class ApiPoster:
 
         return payload
 
+    def _fetch_token_from_bfa_server(self, subject: str) -> Optional[str]:
+        """
+        Fetch authentication token from BFA server's /api/token endpoint.
+
+        Args:
+            subject: Token subject (e.g., "gitlab_repository_1066055")
+
+        Returns:
+            Token string if successful, None otherwise
+        """
+        if not self.config.bfa_host:
+            logger.error("Cannot fetch token: BFA_HOST not configured")
+            return None
+
+        # Check if cached token is still valid (expires in 50 minutes, fetch new before expiry)
+        if self.bfa_token_cache and self.bfa_token_expiry:
+            import time
+            if time.time() < self.bfa_token_expiry:
+                logger.debug("Using cached BFA token")
+                return self.bfa_token_cache
+
+        # Construct token endpoint URL
+        token_url = f"http://{self.config.bfa_host}:8000/api/token"
+
+        try:
+            logger.debug(f"Fetching token from BFA server: {token_url}")
+
+            # Make request to BFA server
+            response = requests.post(
+                token_url,
+                json={"subject": subject, "expires_in": 60},
+                timeout=10
+            )
+            response.raise_for_status()
+
+            # Parse response
+            token_data = response.json()
+            token = token_data.get('token')
+
+            if not token:
+                logger.error(f"BFA server response missing 'token' field: {token_data}")
+                return None
+
+            # Cache the token (expires in 50 minutes to refresh before actual expiry)
+            import time
+            self.bfa_token_cache = token
+            self.bfa_token_expiry = time.time() + (50 * 60)  # 50 minutes
+
+            logger.info(f"Successfully fetched token from BFA server for subject: {subject}")
+            return token
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to fetch token from BFA server: {e}", exc_info=True)
+            return None
+        except (ValueError, KeyError) as e:
+            logger.error(f"Failed to parse token response from BFA server: {e}", exc_info=True)
+            return None
+
     def _post_to_api(self, payload: Dict[str, Any]) -> Tuple[int, str, float]:
         """
         Internal method to POST payload to API.
@@ -278,32 +343,53 @@ class ApiPoster:
             "Content-Type": "application/json"
         }
 
-        # Generate JWT token for authentication
+        # Extract info for subject/authentication
+        repo = payload.get('repo', 'unknown')
+        pipeline_id = payload.get('pipeline_id', '0')
+        source = 'gitlab'  # Default source
+        subject = f"{source}_{repo}_{pipeline_id}"
+
+        # Authentication Strategy:
+        # 1. If TokenManager available -> Generate JWT locally
+        # 2. Else if BFA_HOST configured -> Fetch token from BFA server
+        # 3. Else if BFA_SECRET_KEY -> Use raw secret key
+        # 4. Else -> No authentication (will likely fail with 401)
+
         if self.token_manager:
+            # Strategy 1: Generate JWT locally
             try:
-                # Extract info from payload to create JWT subject
-                repo = payload.get('repo', 'unknown')
-                pipeline_id = payload.get('pipeline_id', '0')
-                source = 'gitlab'  # Default source
-
-                # Build subject: <source>_<repo>_<pipeline_id>
-                subject = f"{source}_{repo}_{pipeline_id}"
-
-                # Generate JWT token (expires in 60 minutes)
                 jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
                 headers["Authorization"] = f"Bearer {jwt_token}"
-
-                logger.debug(f"Generated JWT token for subject: {subject}")
+                logger.debug(f"Generated JWT token locally for subject: {subject}")
             except Exception as e:
                 logger.error(f"Failed to generate JWT token: {e}", exc_info=True)
-                # Fallback to raw secret key if JWT generation fails
-                if self.config.bfa_secret_key:
+                # Fallback to fetching from BFA server
+                if self.config.bfa_host:
+                    fetched_token = self._fetch_token_from_bfa_server(subject)
+                    if fetched_token:
+                        headers["Authorization"] = f"Bearer {fetched_token}"
+                        logger.warning("JWT generation failed, using token from BFA server")
+                elif self.config.bfa_secret_key:
                     headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
-                    logger.warning("Using raw secret key as fallback authentication")
+                    logger.warning("JWT generation failed, using raw secret key")
+        elif self.config.bfa_host:
+            # Strategy 2: Fetch token from BFA server
+            try:
+                fetched_token = self._fetch_token_from_bfa_server(subject)
+                if fetched_token:
+                    headers["Authorization"] = f"Bearer {fetched_token}"
+                    logger.debug(f"Using token fetched from BFA server for subject: {subject}")
+                else:
+                    logger.error("Failed to fetch token from BFA server, no authentication will be sent")
+            except Exception as e:
+                logger.error(f"Error fetching token from BFA server: {e}", exc_info=True)
         elif self.config.bfa_secret_key:
-            # TokenManager not initialized, use raw secret key
+            # Strategy 3: Use raw secret key (legacy)
             headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
-            logger.debug("Using raw secret key for authentication (TokenManager not available)")
+            logger.debug("Using raw secret key for authentication (no TokenManager or BFA_HOST)")
+        else:
+            # Strategy 4: No authentication
+            logger.warning("No authentication configured (no BFA_SECRET_KEY or BFA_HOST)")
 
         start_time = time.time()
 
