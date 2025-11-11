@@ -428,7 +428,7 @@ class ApiPoster:
             # Parse JSON response to check status field
             try:
                 response_json = response.json()
-            except ValueError as e:
+            except ValueError:
                 logger.error(f"API returned non-JSON response: {response_body[:500]}")
                 raise requests.exceptions.RequestException(
                     f"API returned non-JSON response after {duration_ms}ms"
@@ -442,7 +442,7 @@ class ApiPoster:
                 # Success - log results if present
                 results = response_json.get("results", [])
                 logger.info(
-                    f"API returned success status",
+                    "API returned success status",
                     extra={
                         'response_status': response_status,
                         'results_count': len(results),
@@ -463,7 +463,7 @@ class ApiPoster:
             else:
                 # Failure - status is not "ok"
                 logger.error(
-                    f"API returned failure status",
+                    "API returned failure status",
                     extra={
                         'response_status': response_status,
                         'http_status': response.status_code,

@@ -13,7 +13,7 @@ Module Dependencies:
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List
 from enum import Enum
 
 # Configure module logger
@@ -286,12 +286,11 @@ class PipelineExtractor:
             status = job.get("status", "").lower()
 
             should_include = (
-                (status == "success" and include_success) or
-                (status == "failed" and include_failed) or
-                (status == "canceled" and include_canceled) or
-                (status == "skipped" and include_skipped)
+                (status == "success" and include_success)
+                or (status == "failed" and include_failed)
+                or (status == "canceled" and include_canceled)
+                or (status == "skipped" and include_skipped)
             )
-
             if should_include:
                 filtered_jobs.append(job)
 

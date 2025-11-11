@@ -16,7 +16,7 @@ Module Dependencies:
 
 import re
 import logging
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 # Configure module logger
@@ -246,7 +246,6 @@ class JenkinsExtractor:
         stages = []
         current_stage = None
         in_parallel = False
-        parallel_blocks = []
         current_block = None
 
         for i, line in enumerate(log_lines):

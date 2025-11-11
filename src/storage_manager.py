@@ -16,7 +16,6 @@ Module Dependencies:
     - logging: For operation logging
 """
 
-import os
 import json
 import logging
 from datetime import datetime
@@ -460,7 +459,7 @@ if __name__ == "__main__":
 
     # Get storage stats
     stats = manager.get_storage_stats()
-    print(f"\nStorage Statistics:")
+    print("\nStorage Statistics:")
     print(f"  Projects: {stats['total_projects']}")
     print(f"  Pipelines: {stats['total_pipelines']}")
     print(f"  Jobs: {stats['total_jobs']}")
