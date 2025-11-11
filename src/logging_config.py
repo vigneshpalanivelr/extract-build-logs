@@ -24,7 +24,6 @@ Note: All logs including errors are kept in application.log to maintain context 
 
 import logging
 import logging.handlers
-import os
 import re
 import sys
 from contextvars import ContextVar
@@ -142,7 +141,7 @@ class PipeDelimitedFormatter(logging.Formatter):
         # Truncate or pad logger name
         logger = record.name
         if len(logger) > self.LOGGER_WIDTH:
-            logger = logger[:self.LOGGER_WIDTH-3] + '...'
+            logger = logger[:self.LOGGER_WIDTH - 3] + '...'
         else:
             logger = logger.ljust(self.LOGGER_WIDTH)
 
@@ -158,7 +157,7 @@ class PipeDelimitedFormatter(logging.Formatter):
 
         # Standard extra fields we want to include
         extra_fields = ['pipeline_id', 'project_id', 'project_name', 'job_id', 'event_type', 'source_ip',
-                       'duration_ms', 'status_code', 'operation', 'path', 'error_type']
+                        'duration_ms', 'status_code', 'operation', 'path', 'error_type']
 
         for field in extra_fields:
             if hasattr(record, field):

@@ -16,11 +16,10 @@ Module Dependencies:
 
 import logging
 import requests
-from typing import Dict, List, Optional, Any
-from urllib.parse import quote
+from typing import Dict, List, Any
 
 from .config_loader import Config
-from .error_handler import retry_on_failure, RetryExhaustedError
+from .error_handler import retry_on_failure
 
 # Configure module logger
 logger = logging.getLogger(__name__)

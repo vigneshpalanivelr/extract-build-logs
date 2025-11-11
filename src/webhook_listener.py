@@ -33,7 +33,7 @@ import time
 from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse
 import uvicorn
 
 from .config_loader import ConfigLoader, Config
@@ -93,7 +93,7 @@ async def log_requests(request: Request, call_next):
 
     # Log in our custom format with context
     access_logger.info(
-        f"HTTP request",
+        "HTTP request",
         extra={
             'request_id': request_id,
             'method': request.method,
@@ -580,7 +580,7 @@ async def webhook_gitlab_handler(
 
         # Check event type
         if x_gitlab_event != 'Pipeline Hook':
-            logger.info(f"Ignoring non-pipeline event", extra={
+            logger.info("Ignoring non-pipeline event", extra={
                 'event_type': x_gitlab_event,
                 'source_ip': client_host
             })
@@ -615,7 +615,7 @@ async def webhook_gitlab_handler(
                 )
             logger.debug("JSON payload parsed successfully")
         except Exception as e:
-            logger.error(f"Failed to parse JSON payload", extra={
+            logger.error("Failed to parse JSON payload", extra={
                 'error_type': type(e).__name__,
                 'error': str(e)
             })
@@ -742,7 +742,7 @@ async def webhook_gitlab_handler(
     except HTTPException:
         # Re-raise HTTP exceptions
         duration_ms = int((time.time() - start_time) * 1000)
-        logger.debug(f"Request failed with HTTP exception", extra={'duration_ms': duration_ms})
+        logger.debug("Request failed with HTTP exception", extra={'duration_ms': duration_ms})
         raise
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
@@ -1020,14 +1020,14 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                 api_duration_ms = int((time.time() - api_start) * 1000)
 
                 if api_success:
-                    logger.info(f"Successfully posted Jenkins build to API", extra={
+                    logger.info("Successfully posted Jenkins build to API", extra={
                         'job_name': job_name,
                         'build_number': build_number,
                         'api_duration_ms': api_duration_ms,
                         'stage_count': len(stages)
                     })
                 else:
-                    logger.warning(f"Failed to post Jenkins build to API", extra={
+                    logger.warning("Failed to post Jenkins build to API", extra={
                         'job_name': job_name,
                         'build_number': build_number
                     })
@@ -1573,7 +1573,6 @@ async def monitor_export_csv(
     """
     try:
         import tempfile
-        import os
 
         # Create temporary CSV file
         temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')

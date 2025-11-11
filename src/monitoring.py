@@ -616,6 +616,6 @@ if __name__ == "__main__":
 
     # Export to CSV
     monitor.export_to_csv("requests.csv")
-    print(f"\nExported to requests.csv")
+    print("\nExported to requests.csv")
 
     monitor.close()
