@@ -442,15 +442,18 @@ class ApiPoster:
             status_code = e.response.status_code if e.response else None
             response_body = e.response.text[:1000] if e.response and e.response.text else "No response"
 
-            # Log the payload that caused the error
+            # Log the error with full exception details
             logger.error(
-                f"API returned {status_code} error. Request payload:",
+                f"API returned {status_code} error",
                 extra={
                     'status_code': status_code,
                     'duration_ms': duration_ms,
-                    'response': response_body
-                }
+                    'response': response_body,
+                    'error_type': type(e).__name__
+                },
+                exc_info=True
             )
+            logger.error(f"Server response body: {response_body}")
             logger.error(f"Payload that caused {status_code} error:\n{json.dumps(payload, indent=2)}")
 
             error_msg = str(e)[:1000]
@@ -461,7 +464,17 @@ class ApiPoster:
         except requests.exceptions.RequestException as e:
             # Other request errors (timeout, connection, etc.)
             duration_ms = int((time.time() - start_time) * 1000)
-            logger.error(f"API request failed: {str(e)[:500]}")
+            logger.error(
+                f"API request failed (timeout/connection): {str(e)}",
+                extra={
+                    'duration_ms': duration_ms,
+                    'error_type': type(e).__name__,
+                    'error_message': str(e)
+                },
+                exc_info=True
+            )
+            # Log payload for debugging
+            logger.error(f"Payload that caused error:\n{json.dumps(payload, indent=2)}")
             error_msg = str(e)[:1000]
             raise requests.exceptions.RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
@@ -578,8 +591,18 @@ class ApiPoster:
         except Exception as e:
             logger.error(
                 f"Failed to format API payload for pipeline {pipeline_id}: {e}",
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'error_type': type(e).__name__
+                },
                 exc_info=True
             )
+            # Log pipeline_info to understand what data failed
+            logger.error(f"Pipeline info that caused formatting error: {json.dumps(pipeline_info, indent=2, default=str)}")
+            logger.error(f"Number of jobs in all_logs: {len(all_logs)}")
+
             self._log_api_request(
                 pipeline_id, project_id, None, "", 0,
                 error=f"Payload formatting failed: {str(e)}"
@@ -652,9 +675,15 @@ class ApiPoster:
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
-                    'error_type': 'RetryExhaustedError'
-                }
+                    'project_name': project_name,
+                    'error_type': 'RetryExhaustedError',
+                    'error_message': str(e)
+                },
+                exc_info=True
             )
+            # Log the payload that failed after all retries
+            logger.error(f"Payload that failed after all retries:\n{json.dumps(payload, indent=2)}")
+
             self._log_api_request(
                 pipeline_id, project_id, None, "", 0,
                 error=f"Retry exhausted: {str(e)}"
@@ -679,10 +708,15 @@ class ApiPoster:
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
-                    'error_type': type(e).__name__
+                    'project_name': project_name,
+                    'error_type': type(e).__name__,
+                    'error_message': str(e)
                 },
                 exc_info=True
             )
+            # Log the payload that caused the unexpected error
+            logger.error(f"Payload that caused unexpected error:\n{json.dumps(payload, indent=2)}")
+
             self._log_api_request(
                 pipeline_id, project_id, None, "", 0,
                 error=f"{type(e).__name__}: {str(e)}"
