@@ -440,7 +440,7 @@ class ApiPoster:
             # HTTP error (4xx, 5xx) - log payload for debugging
             duration_ms = int((time.time() - start_time) * 1000)
             status_code = e.response.status_code if e.response else None
-            response_body = e.response.text[:1000] if e.response and e.response.text else "No response"
+            response_body = e.response.text if e.response and e.response.text else "No response"
 
             # Log the error with full exception details
             logger.error(
@@ -448,12 +448,23 @@ class ApiPoster:
                 extra={
                     'status_code': status_code,
                     'duration_ms': duration_ms,
-                    'response': response_body,
+                    'response': response_body[:1000],
                     'error_type': type(e).__name__
                 },
                 exc_info=True
             )
-            logger.error(f"Server response body: {response_body}")
+
+            # Log complete exception details
+            import traceback
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: {str(e)}")
+            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+
+            # Log server response
+            logger.error(f"Server response status: {status_code}")
+            logger.error(f"Server response body (full):\n{response_body}")
+
+            # Log the payload that caused the error
             logger.error(f"Payload that caused {status_code} error:\n{json.dumps(payload, indent=2)}")
 
             error_msg = str(e)[:1000]
@@ -473,8 +484,16 @@ class ApiPoster:
                 },
                 exc_info=True
             )
+
+            # Log complete exception details
+            import traceback
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: {str(e)}")
+            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+
             # Log payload for debugging
             logger.error(f"Payload that caused error:\n{json.dumps(payload, indent=2)}")
+
             error_msg = str(e)[:1000]
             raise requests.exceptions.RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
@@ -599,6 +618,13 @@ class ApiPoster:
                 },
                 exc_info=True
             )
+
+            # Log complete exception details
+            import traceback
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: {str(e)}")
+            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+
             # Log pipeline_info to understand what data failed
             logger.error(f"Pipeline info that caused formatting error: {json.dumps(pipeline_info, indent=2, default=str)}")
             logger.error(f"Number of jobs in all_logs: {len(all_logs)}")
@@ -681,6 +707,13 @@ class ApiPoster:
                 },
                 exc_info=True
             )
+
+            # Log complete exception details
+            import traceback
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: {str(e)}")
+            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+
             # Log the payload that failed after all retries
             logger.error(f"Payload that failed after all retries:\n{json.dumps(payload, indent=2)}")
 
@@ -714,6 +747,13 @@ class ApiPoster:
                 },
                 exc_info=True
             )
+
+            # Log complete exception details
+            import traceback
+            logger.error(f"Exception type: {type(e).__name__}")
+            logger.error(f"Exception message: {str(e)}")
+            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+
             # Log the payload that caused the unexpected error
             logger.error(f"Payload that caused unexpected error:\n{json.dumps(payload, indent=2)}")
 
