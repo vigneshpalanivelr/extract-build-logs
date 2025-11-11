@@ -422,13 +422,58 @@ class ApiPoster:
 
             duration_ms = int((time.time() - start_time) * 1000)
 
-            # Get response body (truncate if too long)
-            response_body = response.text[:1000] if len(response.text) > 1000 else response.text
+            # Get full response body for logging
+            response_body = response.text
 
-            # Raise exception for bad status codes
-            response.raise_for_status()
+            # Parse JSON response to check status field
+            try:
+                response_json = response.json()
+            except ValueError as e:
+                logger.error(f"API returned non-JSON response: {response_body[:500]}")
+                raise requests.exceptions.RequestException(
+                    f"API returned non-JSON response after {duration_ms}ms"
+                )
 
-            return response.status_code, response_body, duration_ms
+            # Check "status" field in response body (not HTTP status code)
+            # API returns: {"status": "ok", "results": [...]}
+            response_status = response_json.get("status")
+
+            if response_status == "ok":
+                # Success - log results if present
+                results = response_json.get("results", [])
+                logger.info(
+                    f"API returned success status",
+                    extra={
+                        'response_status': response_status,
+                        'results_count': len(results),
+                        'http_status': response.status_code,
+                        'duration_ms': duration_ms
+                    }
+                )
+
+                # Log each result for debugging
+                for idx, result in enumerate(results):
+                    logger.debug(
+                        f"Result {idx + 1}: step={result.get('step_name')}, "
+                        f"error_hash={result.get('error_hash')}, "
+                        f"source={result.get('source')}"
+                    )
+
+                return response.status_code, response_body, duration_ms
+            else:
+                # Failure - status is not "ok"
+                logger.error(
+                    f"API returned failure status",
+                    extra={
+                        'response_status': response_status,
+                        'http_status': response.status_code,
+                        'duration_ms': duration_ms,
+                        'response_body': response_body[:1000]
+                    }
+                )
+                raise requests.exceptions.RequestException(
+                    f"API returned status '{response_status}' (expected 'ok') after {duration_ms}ms"
+                )
 
         except requests.exceptions.HTTPError as e:
             # HTTP error (4xx, 5xx) - log payload for debugging
