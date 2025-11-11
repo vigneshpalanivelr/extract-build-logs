@@ -312,7 +312,7 @@ class ApiPoster:
         token_url = f"http://{self.config.bfa_host}:8000/api/token"
 
         try:
-            logger.debug(f"Fetching token from BFA server: {token_url}")
+            logger.info(f"Fetching JWT token from BFA server: {token_url}")
 
             # Make request to BFA server
             response = requests.post(
@@ -379,7 +379,7 @@ class ApiPoster:
             try:
                 jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
                 headers["Authorization"] = f"Bearer {jwt_token}"
-                logger.debug(f"Generated JWT token locally for subject: {subject}")
+                logger.info(f"Generated JWT token locally for subject: {subject}")
             except Exception as e:
                 logger.error(f"Failed to generate JWT token: {e}", exc_info=True)
                 # Fallback to fetching from BFA server
@@ -397,7 +397,7 @@ class ApiPoster:
                 fetched_token = self._fetch_token_from_bfa_server(subject)
                 if fetched_token:
                     headers["Authorization"] = f"Bearer {fetched_token}"
-                    logger.debug(f"Using token fetched from BFA server for subject: {subject}")
+                    logger.info(f"Using token fetched from BFA server for subject: {subject}")
                 else:
                     logger.error("Failed to fetch token from BFA server, no authentication will be sent")
             except Exception as e:
@@ -405,7 +405,7 @@ class ApiPoster:
         elif self.config.bfa_secret_key:
             # Strategy 3: Use raw secret key (legacy)
             headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
-            logger.debug("Using raw secret key for authentication (no TokenManager or BFA_HOST)")
+            logger.info("Using raw secret key for authentication (no TokenManager or BFA_HOST)")
         else:
             # Strategy 4: No authentication
             logger.warning("No authentication configured (no BFA_SECRET_KEY or BFA_HOST)")
@@ -678,7 +678,7 @@ class ApiPoster:
         try:
             if self.config.api_post_retry_enabled:
                 # Use retry logic
-                logger.debug("Using retry logic for API POST")
+                logger.info("Using retry logic for API POST")
                 error_handler = ErrorHandler(
                     max_retries=self.config.retry_attempts,
                     base_delay=self.config.retry_delay,
@@ -691,7 +691,7 @@ class ApiPoster:
                 )
             else:
                 # No retry, single attempt
-                logger.debug("Retry disabled, single API POST attempt")
+                logger.info("Retry disabled, single API POST attempt")
                 status_code, response_body, duration_ms = self._post_to_api(payload)
 
             # Success

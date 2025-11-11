@@ -151,8 +151,8 @@ def init_app():
         logger.info("Configuration loaded successfully", extra={
             'operation': 'config_load'
         })
-        logger.debug(f"GitLab URL: {config.gitlab_url}")
-        logger.debug(f"Webhook Port: {config.webhook_port}")
+        logger.info(f"GitLab URL: {config.gitlab_url}")
+        logger.info(f"Webhook Port: {config.webhook_port}")
         logger.debug(f"Log Output Directory: {config.log_output_dir}")
         logger.debug(f"Log Level: {config.log_level}")
         logger.debug(f"Retry Attempts: {config.retry_attempts}")
@@ -209,9 +209,9 @@ def init_app():
         # Initialize API poster if enabled
         if config.api_post_enabled:
             logger.info("API posting is ENABLED")
-            logger.debug(f"API endpoint: {config.api_post_url}")
-            logger.debug(f"API timeout: {config.api_post_timeout}s")
-            logger.debug(f"API retry enabled: {config.api_post_retry_enabled}")
+            logger.info(f"API endpoint: {config.api_post_url}")
+            logger.info(f"API timeout: {config.api_post_timeout}s")
+            logger.info(f"API retry enabled: {config.api_post_retry_enabled}")
             logger.debug(f"Save to file: {config.api_post_save_to_file}")
             api_poster = ApiPoster(config)
             logger.debug("API poster initialized")
