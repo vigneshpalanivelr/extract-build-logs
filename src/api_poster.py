@@ -20,7 +20,6 @@ Module Dependencies:
 import json
 import logging
 import time
-import base64
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -109,15 +108,15 @@ class ApiPoster:
         """
         Extract error lines from job log content.
 
-        Lightweight extraction - only removes ANSI codes and timestamps.
-        Lines are Base64 encoded before sending to avoid any encoding issues.
+        Lightweight extraction with ASCII-only sanitization.
+        Removes ANSI codes, timestamps, and non-ASCII characters.
 
         Args:
             log_content (str): Raw job log content
             max_lines (int): Maximum number of error lines to extract (default: 50)
 
         Returns:
-            list: List of error lines (strings)
+            list: List of ASCII-only error lines (strings)
 
         Error patterns detected:
             - Lines containing: error, err!, failed, failure, exception, traceback
@@ -150,7 +149,7 @@ class ApiPoster:
             # Check if line contains error pattern
             line_lower = line.lower()
             if any(pattern in line_lower for pattern in error_patterns):
-                # Minimal cleaning - just ANSI codes and timestamps
+                # Minimal cleaning - ANSI codes and timestamps
                 cleaned = line.strip()
 
                 # Remove ANSI color codes
@@ -159,6 +158,14 @@ class ApiPoster:
                 # Remove common timestamp patterns
                 cleaned = re.sub(r'^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}', '', cleaned)
                 cleaned = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]', '', cleaned)
+                cleaned = cleaned.strip()
+
+                # ASCII-only sanitization: Keep only printable ASCII (32-126)
+                # This removes unicode, control characters, and special symbols
+                cleaned = ''.join(c if 32 <= ord(c) <= 126 else ' ' for c in cleaned)
+
+                # Collapse multiple spaces
+                cleaned = re.sub(r'\s+', ' ', cleaned)
                 cleaned = cleaned.strip()
 
                 # Skip if empty after cleaning or already seen
@@ -204,13 +211,13 @@ class ApiPoster:
                 "failed_steps": [         # Only jobs with status="failed"
                     {
                         "step_name": str,
-                        "error_lines_base64": [str]  # Base64-encoded error lines
+                        "error_lines": [str]  # ASCII-only error lines
                     }
                 ]
             }
 
-        Note: error_lines are Base64-encoded to avoid JSON encoding issues.
-              Decode on server side: base64.b64decode(line).decode('utf-8')
+        Note: error_lines are sanitized to ASCII-only (chars 32-126) to avoid
+              JSON encoding issues with special characters.
         """
         # Extract repository name (short form)
         # "my-org/demo-repo" -> "demo-repo"
@@ -253,31 +260,18 @@ class ApiPoster:
                 step_name = job_details.get('name', 'unknown')
                 log_content = job_data.get('log', '')
 
-                # Extract error lines from log
+                # Extract ASCII-sanitized error lines from log
                 error_lines = self._extract_error_lines(log_content)
 
-                # Base64 encode error lines to avoid any JSON encoding issues
-                # This is fast and guarantees no special character problems
-                error_lines_b64 = []
-                for line in error_lines:
-                    try:
-                        # Encode to UTF-8 bytes, then Base64 encode
-                        line_bytes = line.encode('utf-8', errors='replace')
-                        b64_encoded = base64.b64encode(line_bytes).decode('ascii')
-                        error_lines_b64.append(b64_encoded)
-                    except Exception as e:
-                        logger.warning(f"Failed to encode error line, skipping: {e}")
-                        continue
-
-                if error_lines_b64:
+                if error_lines:
                     logger.debug(
-                        f"Extracted and encoded {len(error_lines_b64)} error lines from job '{step_name}'",
-                        extra={'job_name': step_name, 'error_count': len(error_lines_b64)}
+                        f"Extracted {len(error_lines)} ASCII-sanitized error lines from job '{step_name}'",
+                        extra={'job_name': step_name, 'error_count': len(error_lines)}
                     )
 
                 failed_steps.append({
                     "step_name": step_name,
-                    "error_lines_base64": error_lines_b64
+                    "error_lines": error_lines
                 })
 
         # Build complete payload
