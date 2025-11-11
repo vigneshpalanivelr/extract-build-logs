@@ -50,10 +50,24 @@ class TestApiPoster(unittest.TestCase):
             log_save_metadata_always=True,
             api_post_enabled=True,
             api_post_url="https://api.example.com/logs",
-            api_post_auth_token="test-api-token",
             api_post_timeout=30,
             api_post_retry_enabled=True,
-            api_post_save_to_file=False
+            api_post_save_to_file=False,
+            # Jenkins configuration
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            # BFA JWT authentication
+            bfa_host=None,
+            bfa_secret_key="test-secret-key",
+            # Email notifications
+            email_notifications_enabled=False,
+            smtp_host="localhost",
+            smtp_port=25,
+            smtp_from_email=None,
+            devops_email=None
         )
 
         self.pipeline_info = {
