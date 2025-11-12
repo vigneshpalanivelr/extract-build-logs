@@ -477,7 +477,13 @@ class EmailSender:
         body_html: str
     ) -> bool:
         """
-        Send email via SMTP or fallback to system mail command.
+        Send email via SMTP with automatic host resolution for Docker environments.
+
+        Tries multiple SMTP hosts automatically:
+        1. Configured SMTP_HOST
+        2. host.docker.internal (Docker Desktop)
+        3. 172.17.0.1 (Docker bridge gateway)
+        4. 127.0.0.1 (localhost)
 
         Args:
             to_email: Recipient email address
@@ -487,73 +493,69 @@ class EmailSender:
         Returns:
             bool: True if sent successfully, False otherwise
         """
-        # Try SMTP first
-        try:
-            # Create message
-            msg = MIMEMultipart('alternative')
-            msg['Subject'] = subject
-            msg['From'] = self.from_email
-            msg['To'] = to_email
+        # Create message
+        msg = MIMEMultipart('alternative')
+        msg['Subject'] = subject
+        msg['From'] = self.from_email
+        msg['To'] = to_email
 
-            # Attach HTML body
-            html_part = MIMEText(body_html, 'html')
-            msg.attach(html_part)
+        # Attach HTML body
+        html_part = MIMEText(body_html, 'html')
+        msg.attach(html_part)
 
-            # Connect to SMTP server and send
-            logger.debug(f"Connecting to SMTP server: {self.smtp_host}:{self.smtp_port}")
+        # Build list of SMTP hosts to try
+        smtp_hosts_to_try = []
 
-            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
-                # Note: No authentication needed for local SMTP relay
-                # server.starttls()  # Uncomment if TLS is required
-                # server.login(user, password)  # Uncomment if auth is required
+        # Always try configured host first
+        if self.smtp_host:
+            smtp_hosts_to_try.append(self.smtp_host)
 
-                server.send_message(msg)
-                logger.info(f"Email sent successfully via SMTP to {to_email}")
-                return True
+        # If configured host is localhost, add Docker-specific hosts
+        if self.smtp_host in ['localhost', '127.0.0.1', None]:
+            smtp_hosts_to_try.extend([
+                'host.docker.internal',  # Docker Desktop on Mac/Windows
+                '172.17.0.1',            # Docker default bridge gateway
+                '127.0.0.1'              # Localhost fallback
+            ])
 
-        except (smtplib.SMTPException, OSError, ConnectionError) as e:
-            logger.warning(f"SMTP failed ({type(e).__name__}: {str(e)}), trying system mail command")
+        # Remove duplicates while preserving order
+        seen = set()
+        smtp_hosts_to_try = [x for x in smtp_hosts_to_try if not (x in seen or seen.add(x))]
 
-            # Fallback to system mail command
+        # Try each host
+        last_error = None
+        for smtp_host in smtp_hosts_to_try:
             try:
-                import subprocess
-                import html
+                logger.debug(f"Attempting SMTP connection to {smtp_host}:{self.smtp_port}")
 
-                # Strip HTML tags for plain text email (mail command doesn't support HTML)
-                import re
-                plain_body = re.sub(r'<[^>]+>', '', body_html)
-                plain_body = html.unescape(plain_body)
+                with smtplib.SMTP(smtp_host, self.smtp_port, timeout=5) as server:
+                    # Set debug level if needed
+                    # server.set_debuglevel(1)
 
-                # Use system mail command
-                logger.debug(f"Sending email via system mail command to {to_email}")
+                    # Note: No authentication for local SMTP relay
+                    # Uncomment if needed:
+                    # server.starttls()
+                    # server.login(username, password)
 
-                process = subprocess.Popen(
-                    ['mail', '-s', subject, to_email],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-
-                stdout, stderr = process.communicate(input=plain_body, timeout=30)
-
-                if process.returncode == 0:
-                    logger.info(f"Email sent successfully via mail command to {to_email}")
+                    server.send_message(msg)
+                    logger.info(f"Email sent successfully to {to_email} via {smtp_host}:{self.smtp_port}")
                     return True
-                else:
-                    logger.error(f"Mail command failed with return code {process.returncode}: {stderr}")
-                    return False
 
-            except FileNotFoundError:
-                logger.error("'mail' command not found on system. Install mailutils package.")
-                return False
-            except subprocess.TimeoutExpired:
-                logger.error("Mail command timed out after 30 seconds")
-                return False
-            except Exception as mail_err:
-                logger.error(f"System mail command failed: {str(mail_err)}", exc_info=True)
-                return False
+            except (smtplib.SMTPException, OSError, ConnectionError, TimeoutError, Exception) as e:
+                logger.debug(f"SMTP attempt to {smtp_host}:{self.smtp_port} failed: {type(e).__name__}: {str(e)}")
+                last_error = e
+                continue  # Try next host
 
-        except Exception as e:
-            logger.error(f"Unexpected error sending email to {to_email}: {str(e)}", exc_info=True)
-            return False
+        # All attempts failed
+        logger.error(
+            f"Failed to send email to {to_email} after trying {len(smtp_hosts_to_try)} SMTP host(s)"
+        )
+        logger.error(f"Hosts attempted: {', '.join(smtp_hosts_to_try)}")
+        logger.error(f"Last error: {type(last_error).__name__}: {str(last_error)}")
+        logger.error(
+            "Troubleshooting: "
+            "1) Check if mail server is running on host "
+            "2) Verify SMTP_HOST and SMTP_PORT in .env "
+            "3) In Docker, use 'host.docker.internal' or '172.17.0.1' instead of 'localhost'"
+        )
+        return False
