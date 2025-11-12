@@ -218,8 +218,23 @@ class EmailSender:
             fix = result.get('fix', 'No fix provided')
             source = result.get('source', 'unknown')
 
+            # Handle fix field - can be string or dict
+            if isinstance(fix, dict):
+                # If fix is a dict, try to extract text content
+                # Common fields: 'text', 'content', 'description', 'solution'
+                fix_text = (
+                    fix.get('text') or
+                    fix.get('content') or
+                    fix.get('description') or
+                    fix.get('solution') or
+                    fix.get('fix') or
+                    str(fix)  # Fallback to string representation
+                )
+            else:
+                fix_text = str(fix) if fix else 'No fix provided'
+
             # Convert markdown to basic HTML (simple conversion)
-            fix_html = self._markdown_to_html(fix)
+            fix_html = self._markdown_to_html(fix_text)
 
             results_html += f"""
             <div style="margin-bottom: 30px; padding: 20px; background-color: #f8f9fa; border-left: 4px solid #007bff; border-radius: 4px;">
