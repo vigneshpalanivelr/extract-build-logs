@@ -67,7 +67,10 @@ class TestApiPoster(unittest.TestCase):
             smtp_host="localhost",
             smtp_port=25,
             smtp_from_email=None,
-            devops_email=None
+            devops_email=None,
+            # Error context extraction
+            error_context_lines_before=50,
+            error_context_lines_after=10
         )
 
         self.pipeline_info = {

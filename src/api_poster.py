@@ -29,6 +29,8 @@ try:
 except ImportError:
     requests = None
 
+from .log_error_extractor import extract_error_sections
+
 from .config_loader import Config
 from .error_handler import ErrorHandler, RetryExhaustedError
 from .email_sender import EmailSender
@@ -103,87 +105,6 @@ class ApiPoster:
 
         logger.info(f"API Poster initialized with endpoint: {config.api_post_url}")
         logger.debug(f"API log file: {self.api_log_file}")
-
-    def _extract_error_lines(self, log_content: str, max_lines: int = 50) -> list:
-        """
-        Extract error lines from job log content.
-
-        Lightweight extraction with ASCII-only sanitization.
-        Removes ANSI codes, timestamps, and non-ASCII characters.
-
-        Args:
-            log_content (str): Raw job log content
-            max_lines (int): Maximum number of error lines to extract (default: 50)
-
-        Returns:
-            list: List of ASCII-only error lines (strings)
-
-        Error patterns detected:
-            - Lines containing: error, err!, failed, failure, exception, traceback
-            - Lines starting with: ERROR:, FATAL:, CRITICAL:
-            - Error types: SyntaxError, TypeError, AssertionError, etc.
-            - Test failures: "tests failed", "assertion failed"
-            - Build failures: "build failed", "exit code"
-        """
-        if not log_content:
-            return []
-
-        error_lines = []
-        seen_lines = set()  # Track duplicates
-
-        # Error patterns to search for (case-insensitive)
-        error_patterns = [
-            'error', 'err!', 'failed', 'failure', 'exception', 'traceback',
-            'syntaxerror', 'typeerror', 'assertionerror', 'valueerror',
-            'fatal', 'critical', 'exit code', 'tests failed',
-            'assertion failed', 'could not resolve', 'eresolve',
-            'compilation error', 'build failed'
-        ]
-
-        import re
-        for line in log_content.split('\n'):
-            # Skip empty lines
-            if not line.strip():
-                continue
-
-            # Check if line contains error pattern
-            line_lower = line.lower()
-            if any(pattern in line_lower for pattern in error_patterns):
-                # Minimal cleaning - ANSI codes and timestamps
-                cleaned = line.strip()
-
-                # Remove ANSI color codes
-                cleaned = re.sub(r'\x1b\[[0-9;]*m', '', cleaned)
-
-                # Remove common timestamp patterns
-                cleaned = re.sub(r'^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}', '', cleaned)
-                cleaned = re.sub(r'^\[\d{2}:\d{2}:\d{2}\]', '', cleaned)
-                cleaned = cleaned.strip()
-
-                # ASCII-only sanitization: Keep only printable ASCII (32-126)
-                # This removes unicode, control characters, and special symbols
-                cleaned = ''.join(c if 32 <= ord(c) <= 126 else ' ' for c in cleaned)
-
-                # Collapse multiple spaces
-                cleaned = re.sub(r'\s+', ' ', cleaned)
-                cleaned = cleaned.strip()
-
-                # Skip if empty after cleaning or already seen
-                if not cleaned or cleaned in seen_lines:
-                    continue
-
-                # Limit line length to prevent massive payloads
-                if len(cleaned) > 1000:
-                    cleaned = cleaned[:1000] + "..."
-
-                seen_lines.add(cleaned)
-                error_lines.append(cleaned)
-
-                # Stop if we've reached max lines
-                if len(error_lines) >= max_lines:
-                    break
-
-        return error_lines
 
     def format_payload(
         self,
@@ -260,12 +181,18 @@ class ApiPoster:
                 step_name = job_details.get('name', 'unknown')
                 log_content = job_data.get('log', '')
 
-                # Extract ASCII-sanitized error lines from log
-                error_lines = self._extract_error_lines(log_content)
+                # Extract error sections with context using configurable parameters
+                error_lines = extract_error_sections(
+                    log_content=log_content,
+                    lines_before=self.config.error_context_lines_before,
+                    lines_after=self.config.error_context_lines_after
+                )
 
                 if error_lines:
                     logger.debug(
-                        f"Extracted {len(error_lines)} ASCII-sanitized error lines from job '{step_name}'",
+                        f"Extracted {len(error_lines)} error context lines from job '{step_name}' "
+                        f"(context: {self.config.error_context_lines_before} before, "
+                        f"{self.config.error_context_lines_after} after)",
                         extra={'job_name': step_name, 'error_count': len(error_lines)}
                     )
 

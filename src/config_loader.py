@@ -54,6 +54,8 @@ class Config:
         smtp_port (int): SMTP server port
         smtp_from_email (Optional[str]): Email address to send notifications from
         devops_email (Optional[str]): DevOps team email address for failure notifications
+        error_context_lines_before (int): Number of log lines to include before error lines (default: 50)
+        error_context_lines_after (int): Number of log lines to include after error lines (default: 10)
     """
     gitlab_url: str
     gitlab_token: str
@@ -85,6 +87,8 @@ class Config:
     smtp_port: int
     smtp_from_email: Optional[str]
     devops_email: Optional[str]
+    error_context_lines_before: int
+    error_context_lines_after: int
 
 
 class ConfigLoader:
@@ -201,6 +205,10 @@ class ConfigLoader:
         smtp_from_email = os.getenv('SMTP_FROM_EMAIL')
         devops_email = os.getenv('DEVOPS_EMAIL')
 
+        # Error context extraction settings
+        error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
+        error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -267,7 +275,9 @@ class ConfigLoader:
             smtp_host=smtp_host,
             smtp_port=smtp_port,
             smtp_from_email=smtp_from_email,
-            devops_email=devops_email
+            devops_email=devops_email,
+            error_context_lines_before=error_context_lines_before,
+            error_context_lines_after=error_context_lines_after
         )
 
     @staticmethod
