@@ -477,7 +477,7 @@ class EmailSender:
         body_html: str
     ) -> bool:
         """
-        Send email via SMTP.
+        Send email via SMTP or fallback to system mail command.
 
         Args:
             to_email: Recipient email address
@@ -487,6 +487,7 @@ class EmailSender:
         Returns:
             bool: True if sent successfully, False otherwise
         """
+        # Try SMTP first
         try:
             # Create message
             msg = MIMEMultipart('alternative')
@@ -501,18 +502,58 @@ class EmailSender:
             # Connect to SMTP server and send
             logger.debug(f"Connecting to SMTP server: {self.smtp_host}:{self.smtp_port}")
 
-            with smtplib.SMTP(self.smtp_host, self.smtp_port) as server:
+            with smtplib.SMTP(self.smtp_host, self.smtp_port, timeout=10) as server:
                 # Note: No authentication needed for local SMTP relay
                 # server.starttls()  # Uncomment if TLS is required
                 # server.login(user, password)  # Uncomment if auth is required
 
                 server.send_message(msg)
-                logger.debug(f"Email sent successfully to {to_email}")
+                logger.info(f"Email sent successfully via SMTP to {to_email}")
                 return True
 
-        except smtplib.SMTPException as e:
-            logger.error(f"SMTP error sending email to {to_email}: {str(e)}", exc_info=True)
-            return False
+        except (smtplib.SMTPException, OSError, ConnectionError) as e:
+            logger.warning(f"SMTP failed ({type(e).__name__}: {str(e)}), trying system mail command")
+
+            # Fallback to system mail command
+            try:
+                import subprocess
+                import html
+
+                # Strip HTML tags for plain text email (mail command doesn't support HTML)
+                import re
+                plain_body = re.sub(r'<[^>]+>', '', body_html)
+                plain_body = html.unescape(plain_body)
+
+                # Use system mail command
+                logger.debug(f"Sending email via system mail command to {to_email}")
+
+                process = subprocess.Popen(
+                    ['mail', '-s', subject, to_email],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+
+                stdout, stderr = process.communicate(input=plain_body, timeout=30)
+
+                if process.returncode == 0:
+                    logger.info(f"Email sent successfully via mail command to {to_email}")
+                    return True
+                else:
+                    logger.error(f"Mail command failed with return code {process.returncode}: {stderr}")
+                    return False
+
+            except FileNotFoundError:
+                logger.error("'mail' command not found on system. Install mailutils package.")
+                return False
+            except subprocess.TimeoutExpired:
+                logger.error("Mail command timed out after 30 seconds")
+                return False
+            except Exception as mail_err:
+                logger.error(f"System mail command failed: {str(mail_err)}", exc_info=True)
+                return False
+
         except Exception as e:
             logger.error(f"Unexpected error sending email to {to_email}: {str(e)}", exc_info=True)
             return False
