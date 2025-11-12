@@ -55,20 +55,11 @@ class LogErrorExtractor:
             log_content: Raw log content as string
 
         Returns:
-            List of error lines with context. Each section includes:
-            - Lines before the error
-            - The error line(s)
-            - Lines after the error
+            List with a single string element containing all error lines with context,
+            joined by newlines. Each line includes line numbers for reference.
 
         Example output:
-            [
-                "Line 100: npm install started",
-                "Line 101: Resolving dependencies...",
-                ...
-                "Line 150: npm ERR! code ERESOLVE",
-                "Line 151: npm ERR! Could not resolve dependency",
-                ...
-            ]
+            ["Line 100: npm install started\nLine 101: Resolving dependencies...\n...\nLine 150: npm ERR! code ERESOLVE"]
         """
         if not log_content:
             return []
@@ -92,7 +83,8 @@ class LogErrorExtractor:
             error_indices
         )
 
-        return sections
+        # Join all lines into a single string with newlines and return as list with one element
+        return ['\n'.join(sections)]
 
     def _clean_line(self, line: str) -> str:
         """
@@ -241,7 +233,7 @@ def extract_error_sections(
         lines_after: Number of context lines after each error (default: 10)
 
     Returns:
-        List of formatted error lines with context and line numbers
+        List with single string element containing all error lines with context, joined by newlines
     """
     extractor = LogErrorExtractor(
         lines_before=lines_before,

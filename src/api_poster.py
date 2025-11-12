@@ -189,11 +189,13 @@ class ApiPoster:
                 )
 
                 if error_lines:
+                    # error_lines is a list with one string element containing all lines joined by \n
+                    line_count = error_lines[0].count('\n') + 1 if error_lines else 0
                     logger.debug(
-                        f"Extracted {len(error_lines)} error context lines from job '{step_name}' "
+                        f"Extracted error context from job '{step_name}': {line_count} lines "
                         f"(context: {self.config.error_context_lines_before} before, "
                         f"{self.config.error_context_lines_after} after)",
-                        extra={'job_name': step_name, 'error_count': len(error_lines)}
+                        extra={'job_name': step_name, 'error_line_count': line_count}
                     )
 
                 failed_steps.append({
