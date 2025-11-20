@@ -344,8 +344,10 @@ def setup_logging(log_dir: str = './logs', log_level: str = 'INFO') -> LoggingCo
         LoggingConfig instance
     """
     global _logging_config
-    if _logging_config is None:
-        _logging_config = LoggingConfig(log_dir=log_dir, log_level=log_level)
+    # Allow re-initialization to support updating log level from configuration
+    # This fixes the issue where DEBUG logging was not working even after setting
+    # LOG_LEVEL=DEBUG in .env, because the singleton was locked to the initial INFO level
+    _logging_config = LoggingConfig(log_dir=log_dir, log_level=log_level)
     return _logging_config
 
 
