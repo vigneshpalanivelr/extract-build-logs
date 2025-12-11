@@ -99,10 +99,10 @@ class ErrorHandler:
 
         for attempt in range(self.max_retries + 1):
             try:
-                logger.debug(f"Attempt {attempt + 1}/{self.max_retries + 1} for {func.__name__}")
+                logger.debug("Attempt %s/{self.max_retries + 1} for {func.__name__}", attempt + 1)
                 result = func(*args, **kwargs)
                 if attempt > 0:
-                    logger.info(f"Success on attempt {attempt + 1} for {func.__name__}")
+                    logger.info("Success on attempt %s for {func.__name__}", attempt + 1)
                 return result
 
             except exceptions as e:

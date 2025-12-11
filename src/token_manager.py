@@ -21,7 +21,7 @@ Token Claims:
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, Optional
-import jwt
+import jwt  # pylint: disable=import-error
 
 
 class TokenManager:

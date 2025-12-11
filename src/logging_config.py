@@ -76,8 +76,9 @@ class SensitiveDataFilter(logging.Filter):
     def _mask_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Mask sensitive values in dictionary"""
         masked = {}
+        sensitive_keys = ['token', 'secret', 'password', 'auth']
         for key, value in data.items():
-            if isinstance(key, str) and any(sensitive in key.lower() for sensitive in ['token', 'secret', 'password', 'auth']):
+            if isinstance(key, str) and any(s in key.lower() for s in sensitive_keys):
                 masked[key] = self._mask_token(str(value))
             elif isinstance(value, dict):
                 masked[key] = self._mask_dict(value)

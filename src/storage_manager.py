@@ -57,7 +57,7 @@ class StorageManager:
         """
         self.base_dir = Path(base_dir)
         self._ensure_directory(self.base_dir)
-        logger.info(f"Storage manager initialized with base directory: {self.base_dir}")
+        logger.info("Storage manager initialized with base directory: %s", self.base_dir)
 
     def _ensure_directory(self, path: Path):
         """
@@ -177,7 +177,7 @@ class StorageManager:
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write(log_content)
 
-            logger.info(f"Saved log for job {job_id} ({job_name}) to {log_path}")
+            logger.info("Saved log for job %s (%s) to %s", job_id, job_name, log_path)
 
             # Update metadata
             if job_details:
@@ -192,7 +192,7 @@ class StorageManager:
             return log_path
 
         except IOError as e:
-            logger.error(f"Failed to save log for job {job_id}: {str(e)}")
+            logger.error("Failed to save log for job %s: %s", job_id, str(e))
             raise
 
     def save_pipeline_metadata(
@@ -253,10 +253,10 @@ class StorageManager:
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-            logger.info(f"Saved pipeline metadata to {metadata_path}")
+            logger.info("Saved pipeline metadata to %s", metadata_path)
 
         except IOError as e:
-            logger.error(f"Failed to save pipeline metadata: {str(e)}")
+            logger.error("Failed to save pipeline metadata: %s", str(e))
             raise
 
     def _update_job_metadata(
@@ -300,10 +300,10 @@ class StorageManager:
             with open(metadata_path, 'w', encoding='utf-8') as f:
                 json.dump(metadata, f, indent=2, ensure_ascii=False)
 
-            logger.debug(f"Updated metadata for job {job_id}")
+            logger.debug("Updated metadata for job %s", job_id)
 
         except IOError as e:
-            logger.error(f"Failed to update job metadata: {str(e)}")
+            logger.error("Failed to update job metadata: %s", str(e))
 
     def get_pipeline_metadata(
         self,
@@ -324,7 +324,7 @@ class StorageManager:
         metadata_path = pipeline_dir / "metadata.json"
 
         if not metadata_path.exists():
-            logger.warning(f"No metadata found for pipeline {pipeline_id}")
+            logger.warning("No metadata found for pipeline %s", pipeline_id)
             return None
 
         try:
@@ -332,7 +332,7 @@ class StorageManager:
                 metadata = json.load(f)
             return metadata
         except (IOError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to read pipeline metadata: {str(e)}")
+            logger.error("Failed to read pipeline metadata: %s", str(e))
             return None
 
     def list_stored_pipelines(self, project_id: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -383,7 +383,7 @@ class StorageManager:
                             "path": str(pipeline_dir)
                         })
                     except (IOError, json.JSONDecodeError) as e:
-                        logger.error(f"Failed to read metadata from {metadata_path}: {str(e)}")
+                        logger.error("Failed to read metadata from %s: %s", metadata_path, str(e))
 
         return pipelines
 

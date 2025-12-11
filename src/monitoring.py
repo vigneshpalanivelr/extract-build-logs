@@ -96,11 +96,11 @@ class PipelineMonitor:
 
         if self.db_url and HAS_POSTGRES:
             self.db_type = 'postgresql'
-            logger.info(f"Using PostgreSQL database: {self.db_url.split('@')[-1]}")  # Hide credentials
+            logger.info("Using PostgreSQL database: %s", self.db_url.split('@')[-1])  # Hide credentials
         else:
             self.db_type = 'sqlite'
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Using SQLite database: {self.db_path}")
+            logger.info("Using SQLite database: %s", self.db_path)
 
         self._init_database()
 
@@ -118,7 +118,7 @@ class PipelineMonitor:
         else:
             self._init_sqlite()
 
-        logger.debug(f"Database initialized successfully ({self.db_type})")
+        logger.debug("Database initialized successfully (%s)", self.db_type)
 
     def _init_postgresql(self):
         """Initialize PostgreSQL database with required tables."""
@@ -359,7 +359,7 @@ class PipelineMonitor:
         ))
 
         self.conn.commit()
-        logger.debug(f"Updated request #{request_id} to status: {status.value}")
+        logger.debug("Updated request #%s to status: %s", request_id, status.value)
 
     def get_summary(self, hours: int = 24) -> Dict[str, Any]:
         """
@@ -525,7 +525,7 @@ class PipelineMonitor:
             for row in rows:
                 writer.writerow(dict(row))
 
-        logger.info(f"Exported {len(rows)} requests to {filepath}")
+        logger.info("Exported %s requests to %s", len(rows), filepath)
 
     def get_status_timeline(self, hours: int = 24, interval_minutes: int = 60) -> List[Dict[str, Any]]:
         """
@@ -570,7 +570,7 @@ class PipelineMonitor:
         self.conn.commit()
         deleted = result.rowcount
 
-        logger.info(f"Cleaned up {deleted} records older than {days} days")
+        logger.info("Cleaned up %s records older than %s days", deleted, days)
         return deleted
 
     def close(self):
