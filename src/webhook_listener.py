@@ -1061,7 +1061,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
 
         monitor.update_request(
             request_id=db_request_id,
-            status=RequestStatus.ERROR,
+            status=RequestStatus.FAILED,
             processing_time=processing_time,
             error_message=str(e)
         )
