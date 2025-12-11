@@ -828,11 +828,13 @@ class ApiPoster:
 
             # Check if successful
             if 200 <= status_code < 300:
+                job_name = jenkins_payload['job_name']
+                build_num = jenkins_payload['build_number']
                 logger.info(
-                    f"Successfully posted Jenkins build {jenkins_payload['job_name']} #{jenkins_payload['build_number']} to API",
+                    f"Successfully posted Jenkins build {job_name} #{build_num} to API",
                     extra={
-                        'job_name': jenkins_payload['job_name'],
-                        'build_number': jenkins_payload['build_number'],
+                        'job_name': job_name,
+                        'build_number': build_num,
                         'status_code': status_code,
                         'duration_ms': duration_ms
                     }

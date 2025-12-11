@@ -248,7 +248,7 @@ class JenkinsExtractor:
         in_parallel = False
         current_block = None
 
-        for i, line in enumerate(log_lines):
+        for _, line in enumerate(log_lines):
             # Check for stage start
             stage_match = self.STAGE_HEADER_PATTERN.search(line)
             if stage_match:
