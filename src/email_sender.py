@@ -191,7 +191,7 @@ class EmailSender:
 
     def _build_success_email_html(
         self,
-        _project_name: str,
+        project_name: str,  # pylint: disable=unused-argument
         project_path: str,
         ref: str,
         pipeline_id: int,
@@ -303,7 +303,7 @@ class EmailSender:
 
     def _build_failure_email_html(
         self,
-        _project_name: str,
+        project_name: str,  # pylint: disable=unused-argument
         project_path: str,
         ref: str,
         pipeline_id: int,
