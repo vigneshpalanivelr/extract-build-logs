@@ -10,10 +10,9 @@ Comprehensive test coverage for the container management script including:
 """
 
 import unittest
-from unittest.mock import patch, MagicMock, mock_open, call
+from unittest.mock import patch, MagicMock, mock_open
 from pathlib import Path
 import sys
-import io
 import argparse
 
 # Add parent directory to path
@@ -449,7 +448,7 @@ class TestShowStatus(unittest.TestCase):
         mock_container.stats.return_value = {
             'cpu_stats': {'cpu_usage': {'total_usage': 1000}, 'system_cpu_usage': 2000, 'online_cpus': 1},
             'precpu_stats': {'cpu_usage': {'total_usage': 500}, 'system_cpu_usage': 1000},
-            'memory_stats': {'usage': 1024*1024*100, 'limit': 1024*1024*1000}
+            'memory_stats': {'usage': 1024 * 1024 * 100, 'limit': 1024 * 1024 * 1000}
         }
         mock_client.containers.get.return_value = mock_container
 
@@ -565,7 +564,7 @@ class TestExportMonitoringData(unittest.TestCase):
         mock_response.text = "csv,data"
         mock_get.return_value = mock_response
 
-        with patch('builtins.open', mock_open()) as mock_file:
+        with patch('builtins.open', mock_open()) as _mock_file:
             result = manage_container.export_monitoring_data("test.csv")
 
         self.assertTrue(result)

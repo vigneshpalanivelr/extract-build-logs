@@ -1183,13 +1183,15 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             else:
                 skipped_before_fetch += 1
 
-        logger.info("Job filtering: %s jobs to fetch, %s jobs skipped by filter",
-                    len(jobs_to_fetch), skipped_before_fetch, extra={
-            'pipeline_id': pipeline_id,
-            'jobs_to_fetch': len(jobs_to_fetch),
-            'jobs_skipped': skipped_before_fetch,
-            'total_jobs': len(all_jobs)
-        })
+        logger.info(
+            "Job filtering: %s jobs to fetch, %s jobs skipped by filter",
+            len(jobs_to_fetch), skipped_before_fetch, extra={
+                'pipeline_id': pipeline_id,
+                'jobs_to_fetch': len(jobs_to_fetch),
+                'jobs_skipped': skipped_before_fetch,
+                'total_jobs': len(all_jobs)
+            }
+        )
 
         # Now fetch logs only for filtered jobs
         all_logs = {}

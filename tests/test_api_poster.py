@@ -13,9 +13,8 @@ Comprehensive test coverage for API posting functionality including:
 """
 
 import unittest
-from unittest.mock import patch, MagicMock, mock_open, call
+from unittest.mock import patch, MagicMock
 from pathlib import Path
-import json
 import sys
 import tempfile
 import requests
@@ -205,7 +204,7 @@ class TestApiPoster(unittest.TestCase):
         mock_post.return_value = mock_response
 
         poster = ApiPoster(config_no_auth)
-        result = poster.post_pipeline_logs(self.pipeline_info, self.all_logs)
+        _result = poster.post_pipeline_logs(self.pipeline_info, self.all_logs)
 
         # Verify auth header not present
         call_kwargs = mock_post.call_args.kwargs

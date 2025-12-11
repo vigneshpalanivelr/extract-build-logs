@@ -39,7 +39,6 @@ import argparse
 import socket
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
-import subprocess
 import time
 
 try:
@@ -47,10 +46,8 @@ try:
     from docker.errors import DockerException, ImageNotFound, NotFound, APIError
     from rich.console import Console
     from rich.table import Table
-    from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
     from rich.prompt import Prompt
-    from rich import print as rprint
     from dotenv import dotenv_values
 except ImportError as e:
     print(f"Error: Required package not found: {e}")
@@ -318,7 +315,6 @@ def validate_system_resources(config: Dict[str, str]) -> Tuple[List[str], List[s
     env_file = Path(ENV_FILE)
     if env_file.exists():
         try:
-            import stat as stat_mod
             st = env_file.stat()
             perms = oct(st.st_mode)[-3:]
             if perms not in ['600', '400']:
@@ -424,7 +420,6 @@ def check_file_permissions(file_path: Path) -> Tuple[str, bool]:
         Tuple of (permissions_string, is_secure)
     """
     try:
-        import stat
         st = file_path.stat()
         mode = st.st_mode
 
@@ -672,7 +667,7 @@ def build_image(client: docker.DockerClient) -> bool:
 
         elapsed_time = time.time() - start_time
 
-        console.print(f"[bold green]✓ Image built successfully![/bold green]")
+        console.print("[bold green]✓ Image built successfully![/bold green]")
         console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
         return True
 
@@ -748,7 +743,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             return True
 
         console.print(f"[bold blue]Starting new container: {CONTAINER_NAME} (port {port})[/bold blue]")
-        container = client.containers.run(
+        client.containers.run(
             IMAGE_NAME, name=CONTAINER_NAME, detach=True,
             ports={f'{port}/tcp': port},
             volumes={
@@ -841,7 +836,7 @@ def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bo
 
     # Check if container is running
     if not container_running(client):
-        console.print(f"[yellow]!  Container exists but is not running.[/yellow]")
+        console.print("[yellow]!  Container exists but is not running.[/yellow]")
         console.print("[yellow]Use 'start' command to start it.[/yellow]")
         return False
 
@@ -971,9 +966,11 @@ def show_status(client: docker.DockerClient) -> bool:
 
             try:
                 logs = container.logs(tail=100, timestamps=True).decode('utf-8', errors='ignore')
-                error_lines = [line[:97] + '...' if len(line) > 100 else line
-                              for line in logs.split('\n')
-                              if any(p in line.lower() for p in ['error', 'critical', 'exception', 'traceback', 'failed'])]
+                error_lines = [
+                    line[:97] + '...' if len(line) > 100 else line
+                    for line in logs.split('\n')
+                    if any(p in line.lower() for p in ['error', 'critical', 'exception', 'traceback', 'failed'])
+                ]
 
                 if error_lines:
                     console.print("[bold yellow]Recent Errors (last 100 log lines):[/bold yellow]")
@@ -1019,7 +1016,7 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
             image_exists_flag = False
 
         if not container_exists_flag and not image_exists_flag:
-            console.print(f"[yellow]!  Neither container nor image exist.[/yellow]")
+            console.print("[yellow]!  Neither container nor image exist.[/yellow]")
             return True
 
         remove_image = False
@@ -1402,7 +1399,7 @@ def main():
     subparsers = parser.add_subparsers(dest='command', help='Available commands', required=True)
 
     parser_config = subparsers.add_parser('config', help='Display and validate configuration')
-    parser_config.add_argument('--env-file', default=ENV_FILE, help=f'Path to .env file')
+    parser_config.add_argument('--env-file', default=ENV_FILE, help='Path to .env file')
     parser_config.add_argument('-q', '--quiet', action='store_true', help='Minimal output')
     parser_config.add_argument('--validate-only', action='store_true', help='Only validate')
     parser_config.set_defaults(func=cmd_config)

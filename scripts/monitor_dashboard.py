@@ -32,20 +32,20 @@ def print_summary(monitor: PipelineMonitor, hours: int = 24):
     print(f"  PIPELINE MONITORING DASHBOARD - Last {hours} Hours")
     print("=" * 70)
     print(f"\nGenerated: {summary['generated_at']}")
-    print(f"\nOVERALL STATISTICS")
+    print("\nOVERALL STATISTICS")
     print(f"   Total Requests:      {summary['total_requests']}")
     print(f"   Success Rate:        {summary['success_rate']}%")
     print(f"   Avg Processing Time: {summary['avg_processing_time_seconds']}s")
     print(f"   Total Jobs Processed: {summary['total_jobs_processed']}")
 
     # Status breakdown
-    print(f"\nREQUESTS BY STATUS")
+    print("\nREQUESTS BY STATUS")
     status_data = [[status.title(), count] for status, count in summary['by_status'].items()]
     print(tabulate(status_data, headers=['Status', 'Count'], tablefmt='grid'))
 
     # Type breakdown
     if summary['by_type']:
-        print(f"\nREQUESTS BY PIPELINE TYPE")
+        print("\nREQUESTS BY PIPELINE TYPE")
         type_data = [[ptype.title(), count] for ptype, count in summary['by_type'].items()]
         print(tabulate(type_data, headers=['Type', 'Count'], tablefmt='grid'))
 
@@ -174,7 +174,7 @@ Examples:
     # Check if database exists
     if not Path(args.db).exists():
         print(f"\n✗ Error: Monitoring database not found at {args.db}")
-        print(f"   Make sure the webhook server has been running and processing requests.\n")
+        print("   Make sure the webhook server has been running and processing requests.\n")
         sys.exit(1)
 
     # Initialize monitor
