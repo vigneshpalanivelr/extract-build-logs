@@ -240,7 +240,7 @@ def init_app():
         sys.exit(1)
 
 
-def validate_webhook_secret(payload: bytes, signature: Optional[str]) -> bool:
+def validate_webhook_secret(_payload: bytes, signature: Optional[str]) -> bool:
     """
     Validate webhook signature using configured secret.
 
@@ -486,12 +486,12 @@ async def generate_token(request: Request):
         logger.warning("Invalid token request: %s", str(e), extra={
             'operation': 'token_generation_error'
         })
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.error("Token generation failed: %s", str(e), extra={
             'operation': 'token_generation_error'
         })
-        raise HTTPException(status_code=500, detail="Token generation failed")
+        raise HTTPException(status_code=500, detail="Token generation failed") from e
 
 
 @app.post('/webhook/gitlab')
@@ -622,7 +622,7 @@ async def webhook_gitlab_handler(
             raise HTTPException(
                 status_code=400,
                 detail={"status": "error", "message": "Failed to parse JSON"}
-            )
+            ) from e
 
         # Extract pipeline information
         try:
@@ -737,7 +737,7 @@ async def webhook_gitlab_handler(
             raise HTTPException(
                 status_code=500,
                 detail={"status": "error", "message": f"Failed to extract pipeline info: {str(e)}"}
-            )
+            ) from e
 
     except HTTPException:
         # Re-raise HTTP exceptions
@@ -762,7 +762,7 @@ async def webhook_gitlab_handler(
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": f"Processing failed: {str(e)}"}
-        )
+        ) from e
     finally:
         # Clear request ID from context
         clear_request_id()
@@ -856,7 +856,7 @@ async def webhook_jenkins_handler(
             raise HTTPException(
                 status_code=400,
                 detail={"status": "error", "message": "Failed to parse JSON"}
-            )
+            ) from e
 
         # Extract build information
         try:
@@ -915,7 +915,7 @@ async def webhook_jenkins_handler(
             raise HTTPException(
                 status_code=400,
                 detail={"status": "error", "message": f"Invalid payload: {str(e)}"}
-            )
+            ) from e
 
     except HTTPException:
         raise
@@ -928,7 +928,7 @@ async def webhook_jenkins_handler(
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": f"Processing failed: {str(e)}"}
-        )
+        ) from e
     finally:
         clear_request_id()
 
@@ -1470,7 +1470,7 @@ async def stats():
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
-        )
+        ) from e
 
 
 @app.get('/monitor/summary')
@@ -1512,7 +1512,7 @@ async def monitor_summary(hours: int = Query(24, description="Number of hours to
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
-        )
+        ) from e
 
 
 @app.get('/monitor/recent')
@@ -1534,7 +1534,7 @@ async def monitor_recent(limit: int = Query(50, description="Maximum number of r
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
-        )
+        ) from e
 
 
 @app.get('/monitor/pipeline/{pipeline_id}')
@@ -1556,7 +1556,7 @@ async def monitor_pipeline(pipeline_id: int):
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
-        )
+        ) from e
 
 
 @app.get('/monitor/export/csv')
@@ -1593,7 +1593,7 @@ async def monitor_export_csv(
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
-        )
+        ) from e
 
 
 @app.on_event("startup")

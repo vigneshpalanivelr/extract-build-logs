@@ -15,8 +15,9 @@ Module Dependencies:
 """
 
 import logging
-import requests
 from typing import Dict, List, Any
+
+import requests
 
 from .config_loader import Config
 from .error_handler import retry_on_failure
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 class GitLabAPIError(Exception):
     """Raised when GitLab API returns an error."""
-    pass
 
 
 class LogFetcher:
@@ -89,7 +89,7 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/jobs/{job_id}/trace"
 
-        logger.info("Fetching log for job %s in project {project_id}", job_id)
+        logger.info("Fetching log for job %s in project %s", job_id, project_id)
 
         try:
             response = self.session.get(url, timeout=30)
@@ -107,11 +107,11 @@ class LogFetcher:
             response.raise_for_status()
 
             log_content = response.text
-            logger.info("Successfully fetched log for job %s ({len(log_content)} bytes)", job_id)
+            logger.info("Successfully fetched log for job %s (%s bytes)", job_id, len(log_content))
             return log_content
 
-        except requests.RequestException as e:
-            logger.error("Failed to fetch log for job %s: {str(e)}", job_id)
+        except requests.RequestException:
+            logger.error("Failed to fetch log for job %s", job_id)
             raise
 
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
@@ -149,7 +149,7 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/jobs/{job_id}"
 
-        logger.debug("Fetching details for job %s in project {project_id}", job_id)
+        logger.debug("Fetching details for job %s in project %s", job_id, project_id)
 
         try:
             response = self.session.get(url, timeout=30)
@@ -159,8 +159,8 @@ class LogFetcher:
             logger.debug("Successfully fetched details for job %s", job_id)
             return job_data
 
-        except requests.RequestException as e:
-            logger.error("Failed to fetch details for job %s: {str(e)}", job_id)
+        except requests.RequestException:
+            logger.error("Failed to fetch details for job %s", job_id)
             raise
 
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
@@ -193,7 +193,7 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/pipelines/{pipeline_id}/jobs"
 
-        logger.info("Fetching jobs for pipeline %s in project {project_id}", pipeline_id)
+        logger.info("Fetching jobs for pipeline %s in project %s", pipeline_id, project_id)
 
         all_jobs = []
         page = 1
@@ -213,7 +213,7 @@ class LogFetcher:
                     break
 
                 all_jobs.extend(jobs)
-                logger.debug("Fetched page %s with {len(jobs)} jobs", page)
+                logger.debug("Fetched page %s with %s jobs", page, len(jobs))
 
                 # Check if there are more pages
                 if len(jobs) < per_page:
@@ -221,11 +221,11 @@ class LogFetcher:
 
                 page += 1
 
-            logger.info("Successfully fetched %s jobs for pipeline {pipeline_id}", len(all_jobs))
+            logger.info("Successfully fetched %s jobs for pipeline %s", len(all_jobs), pipeline_id)
             return all_jobs
 
-        except requests.RequestException as e:
-            logger.error("Failed to fetch jobs for pipeline %s: {str(e)}", pipeline_id)
+        except requests.RequestException:
+            logger.error("Failed to fetch jobs for pipeline %s", pipeline_id)
             raise
 
     def fetch_all_logs_for_pipeline(
@@ -275,7 +275,7 @@ class LogFetcher:
                     'log': log_content
                 }
             except Exception as e:
-                logger.error("Failed to fetch log for job %s: {str(e)}", job_id)
+                logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
                 all_logs[job_id] = {
                     'details': job,
                     'log': f"[Error fetching log: {str(e)}]"
@@ -315,8 +315,8 @@ class LogFetcher:
             logger.debug("Successfully fetched details for pipeline %s", pipeline_id)
             return pipeline_data
 
-        except requests.RequestException as e:
-            logger.error("Failed to fetch details for pipeline %s: {str(e)}", pipeline_id)
+        except requests.RequestException:
+            logger.error("Failed to fetch details for pipeline %s", pipeline_id)
             raise
 
     def close(self):
