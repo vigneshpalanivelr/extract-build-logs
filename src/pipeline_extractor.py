@@ -162,11 +162,11 @@ class PipelineExtractor:
 
         if source == "parent_pipeline":
             return PipelineType.CHILD
-        elif source in ["push", "web", "schedule", "trigger", "api"]:
+        if source in ["push", "web", "schedule", "trigger", "api"]:
             return PipelineType.MAIN
-        else:
-            logger.warning("Unknown pipeline source: %s", source)
-            return PipelineType.UNKNOWN
+
+        logger.warning("Unknown pipeline source: %s", source)
+        return PipelineType.UNKNOWN
 
     @staticmethod
     def _extract_job_info(builds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

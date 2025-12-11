@@ -357,11 +357,11 @@ class ApiPoster:
             # Parse JSON response to check status field
             try:
                 response_json = response.json()
-            except ValueError:
+            except ValueError as exc:
                 logger.error("API returned non-JSON response: %s", response_body[:500])
                 raise requests.exceptions.RequestException(
                     f"API returned non-JSON response after {duration_ms}ms"
-                )
+                ) from exc
 
             # Check "status" field in response body (not HTTP status code)
             # API returns: {"status": "ok", "results": [...]}
@@ -389,20 +389,20 @@ class ApiPoster:
                     )
 
                 return response.status_code, response_body, duration_ms
-            else:
-                # Failure - status is not "ok"
-                logger.error(
-                    "API returned failure status",
-                    extra={
-                        'response_status': response_status,
-                        'http_status': response.status_code,
-                        'duration_ms': duration_ms,
-                        'response_body': response_body[:1000]
-                    }
-                )
-                raise requests.exceptions.RequestException(
-                    f"API returned status '{response_status}' (expected 'ok') after {duration_ms}ms"
-                )
+
+            # Failure - status is not "ok"
+            logger.error(
+                "API returned failure status",
+                extra={
+                    'response_status': response_status,
+                    'http_status': response.status_code,
+                    'duration_ms': duration_ms,
+                    'response_body': response_body[:1000]
+                }
+            )
+            raise requests.exceptions.RequestException(
+                f"API returned status '{response_status}' (expected 'ok') after {duration_ms}ms"
+            )
 
         except requests.exceptions.HTTPError as e:
             # HTTP error (4xx, 5xx) - log payload for debugging
@@ -840,16 +840,16 @@ class ApiPoster:
                     }
                 )
                 return True
-            else:
-                logger.warning(
-                    f"API returned non-success status code for Jenkins build: {status_code}",
-                    extra={
-                        'job_name': jenkins_payload['job_name'],
-                        'build_number': jenkins_payload['build_number'],
-                        'status_code': status_code
-                    }
-                )
-                return False
+
+            logger.warning(
+                f"API returned non-success status code for Jenkins build: {status_code}",
+                extra={
+                    'job_name': jenkins_payload['job_name'],
+                    'build_number': jenkins_payload['build_number'],
+                    'status_code': status_code
+                }
+            )
+            return False
 
         except Exception as e:
             logger.error(

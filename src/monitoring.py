@@ -245,9 +245,9 @@ class PipelineMonitor:
             cursor = self.conn.cursor(cursor_factory=RealDictCursor)
             cursor.execute(pg_query, params)
             return cursor
-        else:
-            # SQLite uses ? placeholders
-            return self.conn.execute(query, params)
+
+        # SQLite uses ? placeholders
+        return self.conn.execute(query, params)
 
     def track_request(
         self,
@@ -527,7 +527,7 @@ class PipelineMonitor:
 
         logger.info("Exported %s requests to %s", len(rows), filepath)
 
-    def get_status_timeline(self, hours: int = 24, interval_minutes: int = 60) -> List[Dict[str, Any]]:
+    def get_status_timeline(self, hours: int = 24, _interval_minutes: int = 60) -> List[Dict[str, Any]]:
         """
         Get timeline of request statuses over time.
 
