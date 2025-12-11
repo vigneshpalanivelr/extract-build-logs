@@ -344,7 +344,7 @@ def setup_logging(log_dir: str = './logs', log_level: str = 'INFO') -> LoggingCo
     Returns:
         LoggingConfig instance
     """
-    global _logging_config
+    global _logging_config  # pylint: disable=global-statement
     # Allow re-initialization to support updating log level from configuration
     # This fixes the issue where DEBUG logging was not working even after setting
     # LOG_LEVEL=DEBUG in .env, because the singleton was locked to the initial INFO level
@@ -415,9 +415,9 @@ if __name__ == "__main__":
     # Test the logging configuration
     setup_logging(log_level='DEBUG')
 
-    logger = get_logger(__name__)
-    access_logger = get_access_logger()
-    perf_logger = get_performance_logger()
+    logger = get_logger(__name__)  # pylint: disable=redefined-outer-name
+    access_logger = get_access_logger()  # pylint: disable=redefined-outer-name
+    perf_logger = get_performance_logger()  # pylint: disable=redefined-outer-name
 
     # Test basic logging
     set_request_id('test123')
