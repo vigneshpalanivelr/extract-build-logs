@@ -458,46 +458,6 @@ class TestShowStatus(unittest.TestCase):
         self.assertTrue(result)
 
 
-class TestCalculateCpuPercent(unittest.TestCase):
-    """Test cases for calculate_cpu_percent function."""
-
-    def test_calculate_cpu_percent(self):
-        """Test CPU percentage calculation."""
-        stats = {
-            'cpu_stats': {
-                'cpu_usage': {'total_usage': 2000},
-                'system_cpu_usage': 4000,
-                'online_cpus': 2
-            },
-            'precpu_stats': {
-                'cpu_usage': {'total_usage': 1000},
-                'system_cpu_usage': 2000
-            }
-        }
-
-        result = manage_container.calculate_cpu_percent(stats)
-
-        self.assertEqual(result, 100.0)
-
-    def test_calculate_cpu_percent_zero_delta(self):
-        """Test CPU calculation with zero delta."""
-        stats = {
-            'cpu_stats': {
-                'cpu_usage': {'total_usage': 1000},
-                'system_cpu_usage': 2000,
-                'online_cpus': 1
-            },
-            'precpu_stats': {
-                'cpu_usage': {'total_usage': 1000},
-                'system_cpu_usage': 2000
-            }
-        }
-
-        result = manage_container.calculate_cpu_percent(stats)
-
-        self.assertEqual(result, 0.0)
-
-
 class TestOpenShell(unittest.TestCase):
     """Test cases for open_shell function."""
 

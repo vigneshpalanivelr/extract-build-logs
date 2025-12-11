@@ -79,6 +79,23 @@ console = Console()
 # Configuration Management (merged from show_config.py)
 # ============================================================================
 
+def format_bytes(bytes_val: int) -> str:
+    """
+    Format bytes to human-readable size.
+
+    Args:
+        bytes_val: Size in bytes
+
+    Returns:
+        Formatted string (e.g., "1.2 GB")
+    """
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes_val < 1024.0:
+            return f"{bytes_val:.1f} {unit}"
+        bytes_val /= 1024.0
+    return f"{bytes_val:.1f} PB"
+
+
 def mask_value(value: Optional[str], show_chars: int = 8) -> str:
     """
     Mask sensitive values, showing only first N characters.
@@ -97,23 +114,29 @@ def mask_value(value: Optional[str], show_chars: int = 8) -> str:
     return f"{value[:show_chars]}****"
 
 
-def get_host_ip() -> str:
+def create_config_table(title: str) -> Table:
     """
-    Get the local IP address of the host machine.
+    Create a standardized configuration table with consistent styling.
+
+    Args:
+        title: Table title
 
     Returns:
-        IP address as string, or '127.0.0.1' if unable to determine
+        Configured Rich Table ready for adding rows
     """
+    table = Table(title=title, show_header=True, header_style="bold cyan")
+    table.add_column("Setting", style="yellow", width=30)
+    table.add_column("Value", style="green")
+    return table
+
+
+def get_host_ip() -> str:
+    """Get the local IP address of the host machine."""
     try:
-        # Create a socket to determine the local IP
-        # This doesn't actually connect, just determines which interface would be used
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
-        return ip
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(('8.8.8.8', 80))
+            return s.getsockname()[0]
     except Exception:
-        # Fallback to localhost if unable to determine IP
         return '127.0.0.1'
 
 
@@ -150,30 +173,27 @@ def load_config(env_file: Path = Path(ENV_FILE)) -> Optional[Dict[str, str]]:
     return config
 
 
-def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
-    """
-    Validate configuration and return lists of errors and warnings.
-
-    Args:
-        config: Configuration dictionary
-
-    Returns:
-        Tuple of (errors, warnings) lists
-    """
+def validate_required_fields(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate required configuration fields."""
     errors = []
     warnings = []
 
-    # Critical validations (errors)
     if not config.get('GITLAB_URL'):
         errors.append("GITLAB_URL is not set (required)")
-
     if not config.get('GITLAB_TOKEN'):
         errors.append("GITLAB_TOKEN is not set (required)")
-
-    # Non-critical validations (warnings)
     if not config.get('WEBHOOK_SECRET'):
         warnings.append("WEBHOOK_SECRET is not set (webhooks will be unauthenticated)")
 
+    return errors, warnings
+
+
+def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate logging and retry configuration."""
+    errors = []
+    warnings = []
+
+    # Log level validation
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
     log_level = config.get('LOG_LEVEL', '').upper()
     if log_level not in valid_levels:
@@ -202,13 +222,19 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
     except ValueError:
         warnings.append(f"RETRY_DELAY '{config.get('RETRY_DELAY')}' is not a valid number")
 
-    # API Posting validation
+    return errors, warnings
+
+
+def validate_api_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate API posting configuration."""
+    errors = []
+    warnings = []
+
     api_enabled = config.get('API_POST_ENABLED', 'false').lower() == 'true'
     if api_enabled:
         if not config.get('BFA_HOST'):
             errors.append("API_POST_ENABLED is true but BFA_HOST is not set")
 
-        # Validate timeout
         try:
             timeout = int(config.get('API_POST_TIMEOUT', '30'))
             if timeout < 1:
@@ -218,7 +244,14 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
         except ValueError:
             warnings.append(f"API_POST_TIMEOUT '{config.get('API_POST_TIMEOUT')}' is not a valid number")
 
-    # Jenkins validation
+    return errors, warnings
+
+
+def validate_jenkins_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate Jenkins integration configuration."""
+    errors = []
+    warnings = []
+
     jenkins_enabled = config.get('JENKINS_ENABLED', 'false').lower() == 'true'
     if jenkins_enabled:
         if not config.get('JENKINS_URL'):
@@ -228,20 +261,25 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
 
         if not config.get('JENKINS_USER'):
             errors.append("JENKINS_ENABLED is true but JENKINS_USER is not set")
-
         if not config.get('JENKINS_API_TOKEN'):
             errors.append("JENKINS_ENABLED is true but JENKINS_API_TOKEN is not set")
-
         if not config.get('JENKINS_WEBHOOK_SECRET'):
             warnings.append("JENKINS_WEBHOOK_SECRET is not set (Jenkins webhooks will be unauthenticated)")
 
-    # Log filtering validation
+    return errors, warnings
+
+
+def validate_log_filters(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate log filtering configuration."""
+    errors = []
+    warnings = []
+
     valid_statuses = ['all', 'failed', 'success', 'running', 'canceled', 'skipped']
+
     pipeline_status = config.get('LOG_SAVE_PIPELINE_STATUS', 'all').lower()
     if pipeline_status not in valid_statuses and ',' not in pipeline_status:
         warnings.append(f"LOG_SAVE_PIPELINE_STATUS '{pipeline_status}' is invalid")
     elif ',' in pipeline_status:
-        # Validate comma-separated values
         for status in pipeline_status.split(','):
             if status.strip() not in valid_statuses:
                 warnings.append(f"LOG_SAVE_PIPELINE_STATUS contains invalid status '{status.strip()}'")
@@ -251,18 +289,24 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
     if job_status not in valid_statuses and ',' not in job_status:
         warnings.append(f"LOG_SAVE_JOB_STATUS '{job_status}' is invalid")
     elif ',' in job_status:
-        # Validate comma-separated values
         for status in job_status.split(','):
             if status.strip() not in valid_statuses:
                 warnings.append(f"LOG_SAVE_JOB_STATUS contains invalid status '{status.strip()}'")
                 break
 
-    # System validations
+    return errors, warnings
+
+
+def validate_system_resources(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate system resources (disk space, permissions, directories)."""
+    errors = []
+    warnings = []
+
     # Check disk space
     try:
         import shutil
         stat = shutil.disk_usage(Path.cwd())
-        gb_free = stat.free / (1024 ** 3)  # Convert to GB
+        gb_free = stat.free / (1024 ** 3)
         if gb_free < 1:
             warnings.append(f"Low disk space: Only {gb_free:.1f} GB available")
         elif gb_free < 5:
@@ -274,10 +318,9 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
     env_file = Path(ENV_FILE)
     if env_file.exists():
         try:
-            import stat
+            import stat as stat_mod
             st = env_file.stat()
-            mode = st.st_mode
-            perms = oct(mode)[-3:]
+            perms = oct(st.st_mode)[-3:]
             if perms not in ['600', '400']:
                 warnings.append(f".env file has insecure permissions ({perms}), consider setting to 600 or 400")
         except Exception:
@@ -291,6 +334,36 @@ def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
         errors.append(f"Log directory '{log_dir}' is not writable")
 
     return errors, warnings
+
+
+def validate_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """
+    Validate configuration with comprehensive checks.
+
+    Args:
+        config: Configuration dictionary
+
+    Returns:
+        Tuple of (errors, warnings) lists
+    """
+    all_errors, all_warnings = [], []
+
+    # Run all validation functions
+    validators = [
+        validate_required_fields,
+        validate_logging_config,
+        validate_api_config,
+        validate_jenkins_config,
+        validate_log_filters,
+        validate_system_resources
+    ]
+
+    for validator in validators:
+        errors, warnings = validator(config)
+        all_errors.extend(errors)
+        all_warnings.extend(warnings)
+
+    return all_errors, all_warnings
 
 
 def get_directory_size(path: Path) -> str:
@@ -312,12 +385,7 @@ def get_directory_size(path: Path) -> str:
             if entry.is_file():
                 total_size += entry.stat().st_size
 
-        # Convert to human-readable
-        for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-            if total_size < 1024.0:
-                return f"{total_size:.1f} {unit}"
-            total_size /= 1024.0
-        return f"{total_size:.1f} PB"
+        return format_bytes(total_size)
     except Exception:
         return "Unknown"
 
@@ -335,13 +403,6 @@ def get_disk_space(path: Path) -> Tuple[str, str, float]:
     try:
         import shutil
         stat = shutil.disk_usage(path)
-
-        def format_bytes(bytes_val):
-            for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-                if bytes_val < 1024.0:
-                    return f"{bytes_val:.1f} {unit}"
-                bytes_val /= 1024.0
-            return f"{bytes_val:.1f} PB"
 
         available = format_bytes(stat.free)
         total = format_bytes(stat.total)
@@ -390,10 +451,7 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
         return
 
     # Environment Configuration
-    env_table = Table(title="Configuration Review", show_header=True, header_style="bold cyan")
-    env_table.add_column("Setting", style="yellow", width=30)
-    env_table.add_column("Value", style="green")
-
+    env_table = create_config_table("Configuration Review")
     env_table.add_row("GitLab URL", config.get('GITLAB_URL', '[dim]Not Set[/dim]'))
     env_table.add_row("GitLab Token", mask_value(config.get('GITLAB_TOKEN', 'Not Set'), 8))
     env_table.add_row("Webhook Port", config.get('WEBHOOK_PORT', '8000'))
@@ -402,21 +460,16 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     env_table.add_row("Log Directory", config.get('LOG_OUTPUT_DIR', './logs'))
     env_table.add_row("Retry Attempts", config.get('RETRY_ATTEMPTS', '3'))
     env_table.add_row("Retry Delay", f"{config.get('RETRY_DELAY', '2')}s")
-
     console.print(env_table)
     console.print()
 
     # Log Filtering Configuration
-    log_filter_table = Table(title="Log Filtering Settings", show_header=True, header_style="bold cyan")
-    log_filter_table.add_column("Setting", style="yellow", width=30)
-    log_filter_table.add_column("Value", style="green")
-
+    log_filter_table = create_config_table("Log Filtering Settings")
     log_filter_table.add_row("Pipeline Status Filter", config.get('LOG_SAVE_PIPELINE_STATUS', 'all'))
     log_filter_table.add_row("Job Status Filter", config.get('LOG_SAVE_JOB_STATUS', 'all'))
 
     save_projects = config.get('LOG_SAVE_PROJECTS', '').strip()
     exclude_projects = config.get('LOG_EXCLUDE_PROJECTS', '').strip()
-
     if save_projects:
         log_filter_table.add_row("Save Projects (IDs)", save_projects)
     elif exclude_projects:
@@ -425,93 +478,65 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
         log_filter_table.add_row("Project Filter", "[dim]All Projects[/dim]")
 
     log_filter_table.add_row("Save Metadata Always", config.get('LOG_SAVE_METADATA_ALWAYS', 'true'))
-
     console.print(log_filter_table)
     console.print()
 
     # API Posting Configuration (if enabled)
     api_enabled = config.get('API_POST_ENABLED', 'false').lower() == 'true'
     if api_enabled:
-        api_table = Table(title="API Posting Configuration", show_header=True, header_style="bold cyan")
-        api_table.add_column("Setting", style="yellow", width=30)
-        api_table.add_column("Value", style="green")
-
+        api_table = create_config_table("API Posting Configuration")
         api_table.add_row("API Posting Enabled", "[bold green]Yes[/bold green]")
 
-        # Construct API URL from BFA_HOST
         bfa_host = config.get('BFA_HOST', '')
         api_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else '[dim]Not Set (BFA_HOST missing)[/dim]'
         api_table.add_row("API URL", api_url)
-
         api_table.add_row("Auth Token", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[dim]Not Set[/dim]')
         api_table.add_row("API Timeout", f"{config.get('API_POST_TIMEOUT', '30')}s")
         api_table.add_row("API Retry Enabled", config.get('API_POST_RETRY_ENABLED', 'true'))
         api_table.add_row("Also Save to File", config.get('API_POST_SAVE_TO_FILE', 'false'))
-
         console.print(api_table)
         console.print()
 
     # Jenkins Integration (if enabled)
     jenkins_enabled = config.get('JENKINS_ENABLED', 'false').lower() == 'true'
     if jenkins_enabled:
-        jenkins_table = Table(title="Jenkins Integration", show_header=True, header_style="bold cyan")
-        jenkins_table.add_column("Setting", style="yellow", width=30)
-        jenkins_table.add_column("Value", style="green")
-
+        jenkins_table = create_config_table("Jenkins Integration")
         jenkins_table.add_row("Jenkins Enabled", "[bold green]Yes[/bold green]")
         jenkins_table.add_row("Jenkins URL", config.get('JENKINS_URL', '[dim]Not Set[/dim]'))
         jenkins_table.add_row("Jenkins User", config.get('JENKINS_USER', '[dim]Not Set[/dim]'))
         jenkins_table.add_row("Jenkins API Token", mask_value(config.get('JENKINS_API_TOKEN', ''), 8) if config.get('JENKINS_API_TOKEN') else '[dim]Not Set[/dim]')
         jenkins_table.add_row("Jenkins Webhook Secret", mask_value(config.get('JENKINS_WEBHOOK_SECRET', ''), 4) if config.get('JENKINS_WEBHOOK_SECRET') else '[dim]Not Set[/dim]')
-
         console.print(jenkins_table)
         console.print()
 
     # BFA Token Generation Configuration
-    bfa_table = Table(title="BFA JWT Token Generation", show_header=True, header_style="bold cyan")
-    bfa_table.add_column("Setting", style="yellow", width=30)
-    bfa_table.add_column("Value", style="green")
-
+    bfa_table = create_config_table("BFA JWT Token Generation")
     bfa_table.add_row("BFA Host", config.get('BFA_HOST', '[dim]Not Set[/dim]'))
     bfa_table.add_row("BFA Secret Key", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[bold red]Not Set[/bold red]')
     bfa_table.add_row("Token Endpoint", "/api/token")
     bfa_table.add_row("Token Usage", "Dynamic JWT for API authentication")
-
-    # Add warning if BFA_SECRET_KEY is not set
     if not config.get('BFA_SECRET_KEY'):
         bfa_table.add_row("Status", "[bold red]⚠ Token generation disabled[/bold red]")
-
     console.print(bfa_table)
     console.print()
 
     # Container Configuration
-    container_table = Table(title="Container Settings", show_header=True, header_style="bold cyan")
-    container_table.add_column("Setting", style="yellow", width=30)
-    container_table.add_column("Value", style="green")
-
+    container_table = create_config_table("Container Settings")
     container_table.add_row("Container Name", CONTAINER_NAME)
     container_table.add_row("Image Name", IMAGE_NAME)
     container_table.add_row("Logs Volume", f"{Path.cwd()}/{LOGS_DIR}")
-
     console.print(container_table)
     console.print()
 
     # System Information
-    system_table = Table(title="System Information", show_header=True, header_style="bold cyan")
-    system_table.add_column("Property", style="yellow", width=30)
-    system_table.add_column("Value", style="green")
-
-    # Log directory size
+    system_table = create_config_table("System Information")
     log_dir = Path(config.get('LOG_OUTPUT_DIR', './logs'))
-    log_size = get_directory_size(log_dir)
-    system_table.add_row("Log Directory Size", log_size)
+    system_table.add_row("Log Directory Size", get_directory_size(log_dir))
 
-    # Disk space
     available, total, percent_used = get_disk_space(Path.cwd())
     disk_color = "green" if percent_used < 80 else ("yellow" if percent_used < 90 else "red")
     system_table.add_row("Disk Available", f"[{disk_color}]{available} / {total} ({percent_used:.1f}% used)[/{disk_color}]")
 
-    # .env file permissions
     env_file = Path(ENV_FILE)
     if env_file.exists():
         perms, is_secure = check_file_permissions(env_file)
@@ -983,7 +1008,18 @@ def show_status(client: docker.DockerClient) -> bool:
             # Resource usage
             try:
                 stats = container.stats(stream=False)
-                cpu_percent = calculate_cpu_percent(stats)
+
+                # Calculate CPU percentage
+                cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - \
+                           stats['precpu_stats']['cpu_usage']['total_usage']
+                system_delta = stats['cpu_stats']['system_cpu_usage'] - \
+                              stats['precpu_stats']['system_cpu_usage']
+                if system_delta > 0 and cpu_delta > 0:
+                    cpu_count = stats['cpu_stats'].get('online_cpus', 1)
+                    cpu_percent = (cpu_delta / system_delta) * cpu_count * 100.0
+                else:
+                    cpu_percent = 0.0
+
                 mem_usage = stats['memory_stats'].get('usage', 0) / (1024 * 1024)  # MB
                 mem_limit = stats['memory_stats'].get('limit', 0) / (1024 * 1024)  # MB
 
@@ -1040,27 +1076,6 @@ def show_status(client: docker.DockerClient) -> bool:
     except APIError as e:
         console.print(f"[bold red]✗ Failed to get status:[/bold red] {str(e)}", style="red")
         return False
-
-
-def calculate_cpu_percent(stats: dict) -> float:
-    """
-    Calculate CPU percentage from Docker stats.
-
-    Args:
-        stats: Docker stats dictionary
-
-    Returns:
-        CPU percentage
-    """
-    cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - \
-                stats['precpu_stats']['cpu_usage']['total_usage']
-    system_delta = stats['cpu_stats']['system_cpu_usage'] - \
-                   stats['precpu_stats']['system_cpu_usage']
-
-    if system_delta > 0 and cpu_delta > 0:
-        cpu_count = stats['cpu_stats'].get('online_cpus', 1)
-        return (cpu_delta / system_delta) * cpu_count * 100.0
-    return 0.0
 
 
 def remove_container(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:
