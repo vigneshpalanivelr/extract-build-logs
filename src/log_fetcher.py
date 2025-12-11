@@ -331,22 +331,22 @@ class LogFetcher:
 
 if __name__ == "__main__":
     # Example usage
-    import sys
-    from config_loader import ConfigLoader
+    import sys  # pylint: disable=import-outside-toplevel
+    from config_loader import ConfigLoader  # pylint: disable=import-outside-toplevel
 
     logging.basicConfig(level=logging.INFO)
 
     try:
         # Load configuration
-        config = ConfigLoader.load()
+        config = ConfigLoader.load()  # pylint: disable=redefined-outer-name
 
         # Create log fetcher
         fetcher = LogFetcher(config)
 
         # Example: Fetch logs for a specific job
         if len(sys.argv) >= 3:
-            project_id = int(sys.argv[1])
-            job_id = int(sys.argv[2])
+            project_id = int(sys.argv[1])  # pylint: disable=redefined-outer-name
+            job_id = int(sys.argv[2])  # pylint: disable=redefined-outer-name
 
             print(f"Fetching log for job {job_id} in project {project_id}...")
             log = fetcher.fetch_job_log(project_id, job_id)
