@@ -729,45 +729,27 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
     """
     try:
         port = int(config.get('WEBHOOK_PORT', '8000'))
-
-        # Create logs directory first (before any container operations)
-        # This ensures it exists with proper permissions on the host
         logs_path = Path(LOGS_DIR)
         if not logs_path.exists():
             logs_path.mkdir(parents=True, exist_ok=True)
-            # Set permissions to ensure container can write
-            # 0o755 = rwxr-xr-x (owner can read/write/execute, others can read/execute)
             logs_path.chmod(0o755)
-            console.print(f"[green]✓ Created logs directory:[/green] {LOGS_DIR}")
-        else:
-            # Directory exists, verify it's writable
-            if not os.access(logs_path, os.W_OK):
-                console.print(f"[yellow]⚠ Warning: logs directory exists but may not be writable:[/yellow] {LOGS_DIR}")
-                console.print(f"[yellow]  Run: sudo chown -R $USER:$USER {LOGS_DIR}[/yellow]")
+            console.print(f"[green]✓ Created logs directory: {LOGS_DIR}[/green]")
+        elif not os.access(logs_path, os.W_OK):
+            console.print(f"[yellow]⚠ Warning: {LOGS_DIR} may not be writable. Run: sudo chown -R $USER:$USER {LOGS_DIR}[/yellow]")
 
-        # Check if container already exists
         if container_exists(client):
             if container_running(client):
-                console.print("[yellow]!  Container is already running.[/yellow]")
-                console.print("Use 'restart' command to restart it.")
+                console.print("[yellow]!  Container is already running. Use 'restart' to restart it.[/yellow]")
                 return True
-            else:
-                console.print("[blue]Starting existing container...[/blue]")
-                container = client.containers.get(CONTAINER_NAME)
-                container.start()
-                console.print("[bold green]✓ Container started![/bold green]")
-                console.print(f"[dim]Shell equivalent: docker start {CONTAINER_NAME}[/dim]")
-                show_endpoints(port)
-                return True
+            console.print("[blue]Starting existing container...[/blue]")
+            client.containers.get(CONTAINER_NAME).start()
+            console.print("[bold green]✓ Container started![/bold green]")
+            show_endpoints(port)
+            return True
 
-        # Start new container
-        console.print(f"[bold blue]Starting new container:[/bold blue] {CONTAINER_NAME}")
-        console.print(f"[blue]Using port:[/blue] {port}")
-
+        console.print(f"[bold blue]Starting new container: {CONTAINER_NAME} (port {port})[/bold blue]")
         container = client.containers.run(
-            IMAGE_NAME,
-            name=CONTAINER_NAME,
-            detach=True,
+            IMAGE_NAME, name=CONTAINER_NAME, detach=True,
             ports={f'{port}/tcp': port},
             volumes={
                 str(Path.cwd() / LOGS_DIR): {'bind': '/app/logs', 'mode': 'rw'},
@@ -775,32 +757,14 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             },
             restart_policy={"Name": "unless-stopped"}
         )
-
         console.print("[bold green]✓ Container started successfully![/bold green]")
-
-        # Show shell equivalent
-        logs_path = Path.cwd() / LOGS_DIR
-        env_path = Path.cwd() / ENV_FILE
-        shell_cmd = (
-            f"docker run -d --name {CONTAINER_NAME} "
-            f"-p {port}:{port} "
-            f"-v {logs_path}:/app/logs:rw "
-            f"-v {env_path}:/app/.env:ro "
-            f"--restart unless-stopped "
-            f"{IMAGE_NAME}"
-        )
-        console.print(f"[dim]Shell equivalent:[/dim]")
-        console.print(f"[dim]{shell_cmd}[/dim]\n")
-
         show_endpoints(port)
         return True
-
     except ImageNotFound:
-        console.print(f"[bold red]✗ Image '{IMAGE_NAME}' not found.[/bold red]")
-        console.print("Run 'build' command first to create the image.")
+        console.print(f"[bold red]✗ Image '{IMAGE_NAME}' not found. Run 'build' command first.[/bold red]")
         return False
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to start container:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red]✗ Failed to start container: {str(e)}[/bold red]")
         return False
 
 
@@ -947,112 +911,72 @@ def show_status(client: docker.DockerClient) -> bool:
         True if successful, False otherwise
     """
     console.print("[bold blue]Container Status:[/bold blue]\n")
-
     if not container_exists(client):
-        console.print("[yellow]!  Container does not exist.[/yellow]")
-        console.print("Use 'start' command to create it.")
+        console.print("[yellow]!  Container does not exist. Use 'start' command to create it.[/yellow]")
         return True
 
     try:
         container = client.containers.get(CONTAINER_NAME)
-
         if container.status == 'running':
             console.print("[bold green]✓ Container is RUNNING[/bold green]\n")
 
-            # Container info
             info_table = Table(show_header=True, header_style="bold cyan")
             info_table.add_column("Property", style="yellow")
             info_table.add_column("Value", style="green")
-
             info_table.add_row("Container Name", container.name)
             info_table.add_row("Container ID", container.short_id)
             info_table.add_row("Status", container.status)
             info_table.add_row("Created", container.attrs['Created'][:19])
 
-            # Calculate uptime
             from datetime import datetime, timezone
             import re
             started_at = container.attrs['State'].get('StartedAt')
             if started_at:
-                # Docker returns nanosecond precision, but Python only handles microseconds
-                # Truncate to 6 decimal places: 2025-11-05T09:40:28.666285451+00:00 -> 2025-11-05T09:40:28.666285+00:00
                 started_at = re.sub(r'(\.\d{6})\d+', r'\1', started_at)
                 start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
                 uptime = datetime.now(timezone.utc) - start_time
-                days = uptime.days
-                hours, remainder = divmod(uptime.seconds, 3600)
-                minutes, seconds = divmod(remainder, 60)
-                if days > 0:
-                    uptime_str = f"{days}d {hours}h {minutes}m"
-                elif hours > 0:
-                    uptime_str = f"{hours}h {minutes}m"
-                else:
-                    uptime_str = f"{minutes}m {seconds}s"
+                days, hours = uptime.days, uptime.seconds // 3600
+                minutes = (uptime.seconds % 3600) // 60
+                uptime_str = f"{days}d {hours}h {minutes}m" if days > 0 else (f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m")
                 info_table.add_row("Uptime", uptime_str)
 
-            # Ports
             ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
             port_str = ", ".join([f"{k} -> {v[0]['HostPort']}" for k, v in ports.items() if v])
             info_table.add_row("Ports", port_str if port_str else "None")
-
             console.print(info_table)
             console.print()
 
-            # Health status
             health = container.attrs.get('State', {}).get('Health', {}).get('Status')
             if health:
                 health_color = "green" if health == "healthy" else "yellow"
-                console.print(f"[{health_color}]Health Status: {health}[/{health_color}]")
-                console.print()
+                console.print(f"[{health_color}]Health Status: {health}[/{health_color}]\n")
 
-            # Resource usage
             try:
                 stats = container.stats(stream=False)
-
-                # Calculate CPU percentage
-                cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - \
-                           stats['precpu_stats']['cpu_usage']['total_usage']
-                system_delta = stats['cpu_stats']['system_cpu_usage'] - \
-                              stats['precpu_stats']['system_cpu_usage']
-                if system_delta > 0 and cpu_delta > 0:
-                    cpu_count = stats['cpu_stats'].get('online_cpus', 1)
-                    cpu_percent = (cpu_delta / system_delta) * cpu_count * 100.0
-                else:
-                    cpu_percent = 0.0
-
-                mem_usage = stats['memory_stats'].get('usage', 0) / (1024 * 1024)  # MB
-                mem_limit = stats['memory_stats'].get('limit', 0) / (1024 * 1024)  # MB
+                cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
+                system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
+                cpu_percent = (cpu_delta / system_delta) * stats['cpu_stats'].get('online_cpus', 1) * 100.0 if system_delta > 0 and cpu_delta > 0 else 0.0
+                mem_usage = stats['memory_stats'].get('usage', 0) / (1024 * 1024)
+                mem_limit = stats['memory_stats'].get('limit', 0) / (1024 * 1024)
 
                 resource_table = Table(show_header=True, header_style="bold cyan")
                 resource_table.add_column("Resource", style="yellow")
                 resource_table.add_column("Usage", style="green")
-
                 resource_table.add_row("CPU", f"{cpu_percent:.2f}%")
                 resource_table.add_row("Memory", f"{mem_usage:.1f} MB / {mem_limit:.1f} MB")
-
                 console.print(resource_table)
                 console.print()
-
             except Exception as e:
                 console.print(f"[yellow]!  Could not fetch resource usage: {str(e)}[/yellow]")
 
-            # Recent errors
             try:
-                # Get last 100 lines of logs
                 logs = container.logs(tail=100, timestamps=True).decode('utf-8', errors='ignore')
-                error_lines = []
-                for line in logs.split('\n'):
-                    # Look for ERROR, CRITICAL, or exception patterns
-                    line_lower = line.lower()
-                    if any(pattern in line_lower for pattern in ['error', 'critical', 'exception', 'traceback', 'failed']):
-                        # Limit line length for display
-                        if len(line) > 100:
-                            line = line[:97] + '...'
-                        error_lines.append(line)
+                error_lines = [line[:97] + '...' if len(line) > 100 else line
+                              for line in logs.split('\n')
+                              if any(p in line.lower() for p in ['error', 'critical', 'exception', 'traceback', 'failed'])]
 
                 if error_lines:
                     console.print("[bold yellow]Recent Errors (last 100 log lines):[/bold yellow]")
-                    # Show up to 5 most recent errors
                     for error_line in error_lines[-5:]:
                         console.print(f"[red]  {error_line}[/red]")
                     if len(error_lines) > 5:
@@ -1060,16 +984,12 @@ def show_status(client: docker.DockerClient) -> bool:
                     console.print()
                 else:
                     console.print("[green]✓ No recent errors found[/green]\n")
-
             except Exception as e:
                 console.print(f"[yellow]!  Could not fetch recent logs: {str(e)}[/yellow]\n")
         else:
-            console.print(f"[yellow]!  Container exists but is NOT RUNNING[/yellow]")
-            console.print(f"Status: {container.status}\n")
+            console.print(f"[yellow]!  Container exists but is NOT RUNNING (Status: {container.status})[/yellow]")
             console.print("Use 'start' command to start it.")
-
         return True
-
     except NotFound:
         console.print(f"[bold red]✗ Container '{CONTAINER_NAME}' not found.[/bold red]")
         return False
@@ -1091,9 +1011,7 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         True if successful, False otherwise
     """
     try:
-        # Check what exists
         container_exists_flag = container_exists(client)
-
         try:
             client.images.get(IMAGE_NAME)
             image_exists_flag = True
@@ -1104,82 +1022,55 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
             console.print(f"[yellow]!  Neither container nor image exist.[/yellow]")
             return True
 
-        # Ask user what to remove (if not forced)
         remove_image = False
         if not force:
-            console.print(f"[bold yellow]What would you like to remove?[/bold yellow]")
-            console.print(f"  Logs will be preserved in {LOGS_DIR}")
-            console.print()
-
+            console.print(f"[bold yellow]What would you like to remove? (Logs preserved in {LOGS_DIR})[/bold yellow]")
             if container_exists_flag and image_exists_flag:
-                console.print("[cyan]1.[/cyan] Container only")
-                console.print("[cyan]2.[/cyan] Container and image")
-                console.print("[cyan]3.[/cyan] Cancel")
-
+                console.print("[cyan]1.[/cyan] Container only\n[cyan]2.[/cyan] Container and image\n[cyan]3.[/cyan] Cancel")
                 choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="3")
-
                 if choice == "3":
                     console.print("[blue]Cancelled.[/blue]")
                     return False
-                elif choice == "2":
-                    remove_image = True
+                remove_image = (choice == "2")
             elif container_exists_flag:
-                console.print("[cyan]Container exists, image does not.[/cyan]")
                 if not confirm_action("Remove container?", False):
                     console.print("[blue]Cancelled.[/blue]")
                     return False
             elif image_exists_flag:
-                console.print("[cyan]Image exists, container does not.[/cyan]")
                 if not confirm_action("Remove image?", False):
                     console.print("[blue]Cancelled.[/blue]")
                     return False
 
-        # Remove container if it exists
         if container_exists_flag:
-            console.print(f"[blue]Removing container:[/blue] {CONTAINER_NAME}")
+            console.print(f"[blue]Removing container: {CONTAINER_NAME}[/blue]")
             container = client.containers.get(CONTAINER_NAME)
-
-            # Try to stop first (if not force_remove)
-            if not force_remove:
+            if not force_remove and container.status in ['running', 'restarting']:
                 try:
-                    if container.status in ['running', 'restarting']:
-                        console.print("[blue]Stopping container first...[/blue]")
-                        container.stop(timeout=10)
+                    console.print("[blue]Stopping container first...[/blue]")
+                    container.stop(timeout=10)
                 except Exception as e:
-                    console.print(f"[yellow]!  Could not stop container: {e}[/yellow]")
-                    console.print("[yellow]Attempting force removal...[/yellow]")
+                    console.print(f"[yellow]!  Could not stop: {e}. Attempting force removal...[/yellow]")
                     force_remove = True
-
-            # Remove container (with force if needed)
             container.remove(force=force_remove)
-
             console.print("[bold green]✓ Container removed![/bold green]")
-            if force_remove:
-                console.print(f"[dim]Shell equivalent: docker rm -f {CONTAINER_NAME}[/dim]")
-            else:
-                console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
 
-        # Remove image if requested and it exists
         if remove_image and image_exists_flag:
             try:
-                console.print(f"[blue]Removing image:[/blue] {IMAGE_NAME}")
+                console.print(f"[blue]Removing image: {IMAGE_NAME}[/blue]")
                 client.images.remove(IMAGE_NAME, force=force_remove)
                 console.print("[bold green]✓ Image removed![/bold green]")
-                console.print(f"[dim]Shell equivalent: docker rmi {IMAGE_NAME}[/dim]")
             except APIError as e:
-                console.print(f"[bold red]✗ Failed to remove image:[/bold red] {str(e)}", style="red")
+                console.print(f"[bold red]✗ Failed to remove image: {str(e)}[/bold red]")
                 if not force_remove:
-                    console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
+                    console.print("[yellow]💡 Tip: Try --force-remove flag[/yellow]")
                 return False
-
         return True
-
     except NotFound:
         console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
         return True
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to remove:[/bold red] {str(e)}", style="red")
-        console.print("[yellow]💡 Tip: Try running with --force-remove flag[/yellow]")
+        console.print(f"[bold red]✗ Failed to remove: {str(e)}[/bold red]")
+        console.print("[yellow]💡 Tip: Try --force-remove flag[/yellow]")
         return False
 
 
@@ -1503,94 +1394,57 @@ def cmd_test(args):
 
 def main():
     """Main CLI entry point using argparse."""
-
     parser = argparse.ArgumentParser(
         prog='manage_container.py',
-        description='GitLab Pipeline Log Extractor - Container Management Script',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  %(prog)s build                    # Build Docker image
-  %(prog)s start                    # Start container with confirmation
-  %(prog)s start --yes              # Start container without confirmation
-  %(prog)s logs                     # Follow logs in real-time
-  %(prog)s logs --no-follow         # Show logs without following
-  %(prog)s status                   # Show container status
-  %(prog)s monitor --hours 24       # Show monitoring dashboard
-  %(prog)s export data.csv          # Export monitoring data
-  %(prog)s test                     # Send test webhook
-  %(prog)s remove                   # Remove container/image (interactive)
-
-For more information, see OPERATIONS.md
-        """
+        description='GitLab Pipeline Log Extractor - Container Management Script'
     )
-
     parser.add_argument('--version', action='version', version='%(prog)s 2.0.0')
+    subparsers = parser.add_subparsers(dest='command', help='Available commands', required=True)
 
-    subparsers = parser.add_subparsers(dest='command', help='Available commands')
-    subparsers.required = True
-
-    # config command
     parser_config = subparsers.add_parser('config', help='Display and validate configuration')
-    parser_config.add_argument('--env-file', default=ENV_FILE, help=f'Path to .env file (default: {ENV_FILE})')
+    parser_config.add_argument('--env-file', default=ENV_FILE, help=f'Path to .env file')
     parser_config.add_argument('-q', '--quiet', action='store_true', help='Minimal output')
-    parser_config.add_argument('--validate-only', action='store_true', help='Only validate configuration')
+    parser_config.add_argument('--validate-only', action='store_true', help='Only validate')
     parser_config.set_defaults(func=cmd_config)
 
-    # build command
     parser_build = subparsers.add_parser('build', help='Build the Docker image')
     parser_build.set_defaults(func=cmd_build)
 
-    # start command
-    parser_start = subparsers.add_parser('start', help='Start the container (creates if needed)')
-    parser_start.add_argument('-y', '--yes', action='store_true', help='Auto-confirm without prompting')
+    parser_start = subparsers.add_parser('start', help='Start container (creates if needed)')
+    parser_start.add_argument('-y', '--yes', action='store_true', help='Auto-confirm')
     parser_start.set_defaults(func=cmd_start)
 
-    # stop command
     parser_stop = subparsers.add_parser('stop', help='Stop the container')
     parser_stop.set_defaults(func=cmd_stop)
 
-    # restart command
     parser_restart = subparsers.add_parser('restart', help='Restart the container')
     parser_restart.set_defaults(func=cmd_restart)
 
-    # logs command
     parser_logs = subparsers.add_parser('logs', help='View container logs')
-    parser_logs.add_argument('-f', '--follow', action='store_true', default=True,
-                            help='Follow logs in real-time (default: True)')
-    parser_logs.add_argument('--no-follow', dest='follow', action='store_false',
-                            help='Show logs without following')
+    parser_logs.add_argument('-f', '--follow', action='store_true', default=True, help='Follow logs')
+    parser_logs.add_argument('--no-follow', dest='follow', action='store_false', help='No follow')
     parser_logs.set_defaults(func=cmd_logs)
 
-    # status command
-    parser_status = subparsers.add_parser('status', help='Show container status and resource usage')
+    parser_status = subparsers.add_parser('status', help='Show container status')
     parser_status.set_defaults(func=cmd_status)
 
-    # remove command
-    parser_remove = subparsers.add_parser('remove', help='Remove container and/or image (interactive)')
+    parser_remove = subparsers.add_parser('remove', help='Remove container/image')
     parser_remove.add_argument('-f', '--force', action='store_true', help='Skip confirmation')
-    parser_remove.add_argument('--force-remove', action='store_true', help='Force remove even if container is running/restarting')
+    parser_remove.add_argument('--force-remove', action='store_true', help='Force remove if running')
     parser_remove.set_defaults(func=cmd_remove)
 
-    # monitor command
     parser_monitor = subparsers.add_parser('monitor', help='View monitoring dashboard')
-    parser_monitor.add_argument('monitor_args', nargs='*', help='Arguments to pass to monitor (e.g., --hours 24)')
+    parser_monitor.add_argument('monitor_args', nargs='*', help='Monitor args')
     parser_monitor.set_defaults(func=cmd_monitor)
 
-    # export command
-    parser_export = subparsers.add_parser('export', help='Export monitoring data to CSV')
-    parser_export.add_argument('filename', nargs='?', default='monitoring_export.csv',
-                               help='Output filename (default: monitoring_export.csv)')
+    parser_export = subparsers.add_parser('export', help='Export monitoring data')
+    parser_export.add_argument('filename', nargs='?', default='monitoring_export.csv', help='Output filename')
     parser_export.set_defaults(func=cmd_export)
 
-    # test command
-    parser_test = subparsers.add_parser('test', help='Send test webhook to the container')
+    parser_test = subparsers.add_parser('test', help='Send test webhook')
     parser_test.set_defaults(func=cmd_test)
 
-    # Parse arguments
     args = parser.parse_args()
-
-    # Call the appropriate command function
     args.func(args)
 
 
