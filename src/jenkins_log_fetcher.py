@@ -64,7 +64,7 @@ class JenkinsLogFetcher:
             base_delay=config.retry_delay
         )
 
-        logger.info(f"Jenkins Log Fetcher initialized for: {self.jenkins_url}")
+        logger.info("Jenkins Log Fetcher initialized for: %s", self.jenkins_url)
 
     def fetch_build_info(self, job_name: str, build_number: int) -> Dict[str, Any]:
         """
@@ -81,7 +81,7 @@ class JenkinsLogFetcher:
             requests.exceptions.RequestException: If API request fails
         """
         url = f"{self.jenkins_url}/job/{job_name}/{build_number}/api/json"
-        logger.info(f"Fetching build info: {url}")
+        logger.info("Fetching build info: %s", url)
 
         try:
             response = self.error_handler.retry_with_backoff(
@@ -92,11 +92,11 @@ class JenkinsLogFetcher:
             )
 
             build_info = response.json()
-            logger.debug(f"Build info fetched: {build_info.get('result', 'UNKNOWN')}")
+            logger.debug("Build info fetched: %s", build_info.get('result', 'UNKNOWN'))
             return build_info
 
         except RetryExhaustedError as e:
-            logger.error(f"Failed to fetch build info after retries: {e}")
+            logger.error("Failed to fetch build info after retries: %s", e)
             raise
 
     def fetch_console_log(self, job_name: str, build_number: int) -> str:
@@ -114,7 +114,7 @@ class JenkinsLogFetcher:
             requests.exceptions.RequestException: If API request fails
         """
         url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
-        logger.info(f"Fetching console log: {url}")
+        logger.info("Fetching console log: %s", url)
 
         try:
             response = self.error_handler.retry_with_backoff(
@@ -126,11 +126,11 @@ class JenkinsLogFetcher:
 
             console_log = response.text
             log_size = len(console_log)
-            logger.info(f"Console log fetched: {log_size} bytes")
+            logger.info("Console log fetched: %s bytes", log_size)
             return console_log
 
         except RetryExhaustedError as e:
-            logger.error(f"Failed to fetch console log after retries: {e}")
+            logger.error("Failed to fetch console log after retries: %s", e)
             raise
 
     def fetch_stages(self, job_name: str, build_number: int) -> Optional[List[Dict[str, Any]]]:
@@ -152,22 +152,22 @@ class JenkinsLogFetcher:
             This is not an error - it just means we'll parse console logs instead.
         """
         url = f"{self.jenkins_url}/job/{job_name}/{build_number}/wfapi/describe"
-        logger.info(f"Fetching Blue Ocean stage info: {url}")
+        logger.info("Fetching Blue Ocean stage info: %s", url)
 
         try:
             response = self._make_request('GET', url)
 
             if response.status_code == 404:
-                logger.warning(f"Blue Ocean API not available for {job_name}/{build_number} (404)")
+                logger.warning("Blue Ocean API not available for %s/%s (404)", job_name, build_number)
                 return None
 
             stage_info = response.json()
             stages = stage_info.get('stages', [])
-            logger.info(f"Fetched {len(stages)} stages from Blue Ocean API")
+            logger.info("Fetched %s stages from Blue Ocean API", len(stages))
             return stages
 
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Failed to fetch Blue Ocean stages (non-critical): {e}")
+            logger.warning("Failed to fetch Blue Ocean stages (non-critical): %s", e)
             return None
 
     def fetch_stage_log(self, job_name: str, build_number: int, stage_id: str) -> Optional[str]:
@@ -183,19 +183,19 @@ class JenkinsLogFetcher:
             Optional[str]: Stage log content, or None if not available
         """
         url = f"{self.jenkins_url}/job/{job_name}/{build_number}/execution/node/{stage_id}/wfapi/log"
-        logger.debug(f"Fetching stage log: {url}")
+        logger.debug("Fetching stage log: %s", url)
 
         try:
             response = self._make_request('GET', url)
 
             if response.status_code == 404:
-                logger.debug(f"Stage log not available for stage {stage_id}")
+                logger.debug("Stage log not available for stage %s", stage_id)
                 return None
 
             return response.text
 
         except requests.exceptions.RequestException as e:
-            logger.warning(f"Failed to fetch stage log (non-critical): {e}")
+            logger.warning("Failed to fetch stage log (non-critical): %s", e)
             return None
 
     def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:

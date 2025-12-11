@@ -75,7 +75,7 @@ class LogErrorExtractor:
             logger.debug("No error patterns found in log content")
             return []
 
-        logger.debug(f"Found {len(error_indices)} error line(s) in log")
+        logger.debug("Found %s error line(s) in log", len(error_indices))
 
         # Extract sections with context and merge overlapping ranges
         sections = self._extract_sections_with_context(

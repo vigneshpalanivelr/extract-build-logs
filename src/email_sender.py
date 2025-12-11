@@ -45,7 +45,7 @@ class EmailSender:
         self.from_email = config.smtp_from_email
         self.devops_email = config.devops_email
 
-        logger.debug(f"EmailSender initialized: {self.smtp_host}:{self.smtp_port}")
+        logger.debug("EmailSender initialized: %s:{self.smtp_port}", self.smtp_host)
 
     def send_success_email(
         self,
@@ -92,7 +92,7 @@ class EmailSender:
             # Extract results
             results = api_response.get('results', [])
             if not results:
-                logger.info(f"No error results to send for pipeline {pipeline_id}")
+                logger.info("No error results to send for pipeline %s", pipeline_id)
                 return False
 
             # Build email
@@ -118,7 +118,7 @@ class EmailSender:
                     f"with {len(results)} error(s) analyzed"
                 )
             else:
-                logger.error(f"Failed to send success email to {user_email} for pipeline {pipeline_id}")
+                logger.error("Failed to send success email to %s for pipeline {pipeline_id}", user_email)
 
             return success
 
@@ -181,7 +181,7 @@ class EmailSender:
                     f"(status code: {status_code})"
                 )
             else:
-                logger.error(f"Failed to send failure alert to {self.devops_email} for pipeline {pipeline_id}")
+                logger.error("Failed to send failure alert to %s for pipeline {pipeline_id}", self.devops_email)
 
             return success
 
@@ -541,7 +541,7 @@ class EmailSender:
         last_error = None
         for smtp_host in smtp_hosts_to_try:
             try:
-                logger.debug(f"Attempting SMTP connection to {smtp_host}:{self.smtp_port}")
+                logger.debug("Attempting SMTP connection to %s:{self.smtp_port}", smtp_host)
 
                 with smtplib.SMTP(smtp_host, self.smtp_port, timeout=5) as server:
                     # Set debug level if needed
@@ -553,11 +553,11 @@ class EmailSender:
                     # server.login(username, password)
 
                     server.send_message(msg)
-                    logger.info(f"Email sent successfully to {to_email} via {smtp_host}:{self.smtp_port}")
+                    logger.info("Email sent successfully to %s via {smtp_host}:{self.smtp_port}", to_email)
                     return True
 
             except (smtplib.SMTPException, OSError, ConnectionError, TimeoutError, Exception) as e:
-                logger.debug(f"SMTP attempt to {smtp_host}:{self.smtp_port} failed: {type(e).__name__}: {str(e)}")
+                logger.debug("SMTP attempt to %s:{self.smtp_port} failed: {type(e).__name__}: {str(e)}", smtp_host)
                 last_error = e
                 continue  # Try next host
 
@@ -565,8 +565,8 @@ class EmailSender:
         logger.error(
             f"Failed to send email to {to_email} after trying {len(smtp_hosts_to_try)} SMTP host(s)"
         )
-        logger.error(f"Hosts attempted: {', '.join(smtp_hosts_to_try)}")
-        logger.error(f"Last error: {type(last_error).__name__}: {str(last_error)}")
+        logger.error("Hosts attempted: %s", ', '.join(smtp_hosts_to_try))
+        logger.error("Last error: %s: {str(last_error)}", type(last_error).__name__)
         logger.error(
             "Troubleshooting: "
             "1) Check if mail server is running on host "

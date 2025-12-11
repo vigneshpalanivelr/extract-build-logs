@@ -68,7 +68,7 @@ class JenkinsExtractor:
         Raises:
             ValueError: If required fields are missing from payload
         """
-        logger.debug(f"Extracting webhook data from payload: {payload.keys()}")
+        logger.debug("Extracting webhook data from payload: %s", payload.keys())
 
         # Try custom format first (from Jenkinsfile curl)
         if 'job_name' in payload and 'build_number' in payload:
@@ -172,7 +172,7 @@ class JenkinsExtractor:
                     'parallel_blocks': List[Dict] (if parallel)
                 }]
         """
-        logger.info(f"Parsing console log ({len(console_log)} bytes)")
+        logger.info("Parsing console log (%s bytes)", len(console_log))
 
         # If Blue Ocean data available, use it as the primary structure
         if blue_ocean_stages:
@@ -187,7 +187,7 @@ class JenkinsExtractor:
         stages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
         """Parse console log using Blue Ocean stage information."""
-        logger.debug(f"Parsing with Blue Ocean data: {len(stages)} stages")
+        logger.debug("Parsing with Blue Ocean data: %s stages", len(stages))
 
         result = []
         log_lines = console_log.split('\n')
@@ -235,7 +235,7 @@ class JenkinsExtractor:
                     'log_content': stage_log
                 })
 
-        logger.info(f"Parsed {len(result)} stages with Blue Ocean data")
+        logger.info("Parsed %s stages with Blue Ocean data", len(result))
         return result
 
     def _parse_console_only(self, console_log: str) -> List[Dict[str, Any]]:
@@ -308,7 +308,7 @@ class JenkinsExtractor:
         if current_stage:
             stages.append(current_stage)
 
-        logger.info(f"Parsed {len(stages)} stages from console log")
+        logger.info("Parsed %s stages from console log", len(stages))
         return stages
 
     def _extract_stage_log(self, log_lines: List[str], stage_name: str) -> str:

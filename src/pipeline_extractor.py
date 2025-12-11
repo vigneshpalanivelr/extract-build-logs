@@ -165,7 +165,7 @@ class PipelineExtractor:
         elif source in ["push", "web", "schedule", "trigger", "api"]:
             return PipelineType.MAIN
         else:
-            logger.warning(f"Unknown pipeline source: {source}")
+            logger.warning("Unknown pipeline source: %s", source)
             return PipelineType.UNKNOWN
 
     @staticmethod
@@ -235,7 +235,7 @@ class PipelineExtractor:
 
         # Only process completed pipelines
         if status in ["success", "failed"]:
-            logger.info(f"Pipeline {pipeline_info['pipeline_id']} should be processed (status: {status})")
+            logger.info("Pipeline %s should be processed (status: {status})", pipeline_info['pipeline_id'])
             return True
 
         # Skip running or pending pipelines
@@ -247,7 +247,7 @@ class PipelineExtractor:
             return False
 
         # Process other statuses (canceled, skipped, manual)
-        logger.info(f"Pipeline {pipeline_info['pipeline_id']} will be processed (status: {status})")
+        logger.info("Pipeline %s will be processed (status: {status})", pipeline_info['pipeline_id'])
         return True
 
     @staticmethod

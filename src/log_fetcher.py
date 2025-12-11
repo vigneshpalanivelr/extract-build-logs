@@ -89,13 +89,13 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/jobs/{job_id}/trace"
 
-        logger.info(f"Fetching log for job {job_id} in project {project_id}")
+        logger.info("Fetching log for job %s in project {project_id}", job_id)
 
         try:
             response = self.session.get(url, timeout=30)
 
             if response.status_code == 404:
-                logger.warning(f"Job {job_id} not found or log not available")
+                logger.warning("Job %s not found or log not available", job_id)
                 return f"[Log not available for job {job_id}]"
 
             if response.status_code == 401:
@@ -107,11 +107,11 @@ class LogFetcher:
             response.raise_for_status()
 
             log_content = response.text
-            logger.info(f"Successfully fetched log for job {job_id} ({len(log_content)} bytes)")
+            logger.info("Successfully fetched log for job %s ({len(log_content)} bytes)", job_id)
             return log_content
 
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch log for job {job_id}: {str(e)}")
+            logger.error("Failed to fetch log for job %s: {str(e)}", job_id)
             raise
 
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
@@ -149,18 +149,18 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/jobs/{job_id}"
 
-        logger.debug(f"Fetching details for job {job_id} in project {project_id}")
+        logger.debug("Fetching details for job %s in project {project_id}", job_id)
 
         try:
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
 
             job_data = response.json()
-            logger.debug(f"Successfully fetched details for job {job_id}")
+            logger.debug("Successfully fetched details for job %s", job_id)
             return job_data
 
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch details for job {job_id}: {str(e)}")
+            logger.error("Failed to fetch details for job %s: {str(e)}", job_id)
             raise
 
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
@@ -193,7 +193,7 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/pipelines/{pipeline_id}/jobs"
 
-        logger.info(f"Fetching jobs for pipeline {pipeline_id} in project {project_id}")
+        logger.info("Fetching jobs for pipeline %s in project {project_id}", pipeline_id)
 
         all_jobs = []
         page = 1
@@ -213,7 +213,7 @@ class LogFetcher:
                     break
 
                 all_jobs.extend(jobs)
-                logger.debug(f"Fetched page {page} with {len(jobs)} jobs")
+                logger.debug("Fetched page %s with {len(jobs)} jobs", page)
 
                 # Check if there are more pages
                 if len(jobs) < per_page:
@@ -221,11 +221,11 @@ class LogFetcher:
 
                 page += 1
 
-            logger.info(f"Successfully fetched {len(all_jobs)} jobs for pipeline {pipeline_id}")
+            logger.info("Successfully fetched %s jobs for pipeline {pipeline_id}", len(all_jobs))
             return all_jobs
 
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch jobs for pipeline {pipeline_id}: {str(e)}")
+            logger.error("Failed to fetch jobs for pipeline %s: {str(e)}", pipeline_id)
             raise
 
     def fetch_all_logs_for_pipeline(
@@ -259,7 +259,7 @@ class LogFetcher:
                 print(f"Job {job_id}: {job_data['details']['name']}")
                 print(job_data['log'][:100])  # First 100 chars
         """
-        logger.info(f"Fetching all logs for pipeline {pipeline_id}")
+        logger.info("Fetching all logs for pipeline %s", pipeline_id)
 
         # Fetch all jobs in the pipeline
         jobs = self.fetch_pipeline_jobs(project_id, pipeline_id)
@@ -275,13 +275,13 @@ class LogFetcher:
                     'log': log_content
                 }
             except Exception as e:
-                logger.error(f"Failed to fetch log for job {job_id}: {str(e)}")
+                logger.error("Failed to fetch log for job %s: {str(e)}", job_id)
                 all_logs[job_id] = {
                     'details': job,
                     'log': f"[Error fetching log: {str(e)}]"
                 }
 
-        logger.info(f"Successfully fetched logs for {len(all_logs)} jobs")
+        logger.info("Successfully fetched logs for %s jobs", len(all_logs))
         return all_logs
 
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
@@ -305,18 +305,18 @@ class LogFetcher:
         """
         url = f"{self.base_url}/projects/{project_id}/pipelines/{pipeline_id}"
 
-        logger.debug(f"Fetching details for pipeline {pipeline_id}")
+        logger.debug("Fetching details for pipeline %s", pipeline_id)
 
         try:
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
 
             pipeline_data = response.json()
-            logger.debug(f"Successfully fetched details for pipeline {pipeline_id}")
+            logger.debug("Successfully fetched details for pipeline %s", pipeline_id)
             return pipeline_data
 
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch details for pipeline {pipeline_id}: {str(e)}")
+            logger.error("Failed to fetch details for pipeline %s: {str(e)}", pipeline_id)
             raise
 
     def close(self):

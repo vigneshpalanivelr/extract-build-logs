@@ -34,7 +34,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
-import uvicorn
+import uvicorn  # pylint: disable=import-error
 
 from .config_loader import ConfigLoader, Config
 from .pipeline_extractor import PipelineExtractor
@@ -151,25 +151,25 @@ def init_app():
         logger.info("Configuration loaded successfully", extra={
             'operation': 'config_load'
         })
-        logger.info(f"GitLab URL: {config.gitlab_url}")
-        logger.info(f"Webhook Port: {config.webhook_port}")
-        logger.debug(f"Log Output Directory: {config.log_output_dir}")
-        logger.debug(f"Log Level: {config.log_level}")
-        logger.debug(f"Retry Attempts: {config.retry_attempts}")
+        logger.info("GitLab URL: %s", config.gitlab_url)
+        logger.info("Webhook Port: %s", config.webhook_port)
+        logger.debug("Log Output Directory: %s", config.log_output_dir)
+        logger.debug("Log Level: %s", config.log_level)
+        logger.debug("Retry Attempts: %s", config.retry_attempts)
 
         # Mask tokens in logs
         masked_token = mask_token(config.gitlab_token)
-        logger.debug(f"GitLab Token: {masked_token}")
+        logger.debug("GitLab Token: %s", masked_token)
 
         # Log BFA configuration
         if config.bfa_host:
-            logger.debug(f"BFA Host: {config.bfa_host}")
+            logger.debug("BFA Host: %s", config.bfa_host)
         else:
             logger.debug("BFA Host: Not Set")
 
         if config.bfa_secret_key:
             masked_bfa_key = mask_token(config.bfa_secret_key)
-            logger.debug(f"BFA Secret Key: {masked_bfa_key}")
+            logger.debug("BFA Secret Key: %s", masked_bfa_key)
         else:
             logger.debug("BFA Secret Key: Not Set")
 
@@ -209,10 +209,10 @@ def init_app():
         # Initialize API poster if enabled
         if config.api_post_enabled:
             logger.info("API posting is ENABLED")
-            logger.info(f"API endpoint: {config.api_post_url}")
-            logger.info(f"API timeout: {config.api_post_timeout}s")
-            logger.info(f"API retry enabled: {config.api_post_retry_enabled}")
-            logger.debug(f"Save to file: {config.api_post_save_to_file}")
+            logger.info("API endpoint: %s", config.api_post_url)
+            logger.info("API timeout: %ss", config.api_post_timeout)
+            logger.info("API retry enabled: %s", config.api_post_retry_enabled)
+            logger.debug("Save to file: %s", config.api_post_save_to_file)
             api_poster = ApiPoster(config)
             logger.debug("API poster initialized")
         else:
@@ -222,8 +222,8 @@ def init_app():
         # Initialize Jenkins components if enabled
         if config.jenkins_enabled:
             logger.info("Jenkins integration is ENABLED")
-            logger.debug(f"Jenkins URL: {config.jenkins_url}")
-            logger.debug(f"Jenkins User: {config.jenkins_user}")
+            logger.debug("Jenkins URL: %s", config.jenkins_url)
+            logger.debug("Jenkins User: %s", config.jenkins_user)
             jenkins_extractor = JenkinsExtractor()
             jenkins_log_fetcher = JenkinsLogFetcher(config)
             logger.debug("Jenkins components initialized")
@@ -236,7 +236,7 @@ def init_app():
         logger.info("=" * 70)
 
     except Exception as e:
-        logger.critical(f"Failed to initialize application: {e}", exc_info=True)
+        logger.critical("Failed to initialize application: %s", e, exc_info=True)
         sys.exit(1)
 
 
@@ -470,7 +470,7 @@ async def generate_token(request: Request):
             expires_in_minutes=expires_in
         )
 
-        logger.info(f"Generated JWT token for subject: {subject}", extra={
+        logger.info("Generated JWT token for subject: %s", subject, extra={
             'operation': 'token_generation',
             'subject': subject,
             'expires_in': expires_in
@@ -483,12 +483,12 @@ async def generate_token(request: Request):
         }
 
     except ValueError as e:
-        logger.warning(f"Invalid token request: {str(e)}", extra={
+        logger.warning("Invalid token request: %s", str(e), extra={
             'operation': 'token_generation_error'
         })
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Token generation failed: {str(e)}", extra={
+        logger.error("Token generation failed: %s", str(e), extra={
             'operation': 'token_generation_error'
         })
         raise HTTPException(status_code=500, detail="Token generation failed")
@@ -559,7 +559,7 @@ async def webhook_gitlab_handler(
     try:
         # Get request body
         body = await request.body()
-        logger.debug(f"Request body size: {len(body)} bytes")
+        logger.debug("Request body size: %s bytes", len(body))
 
         # Validate webhook secret
         if not validate_webhook_secret(body, x_gitlab_token):
@@ -826,7 +826,7 @@ async def webhook_jenkins_handler(
 
         # Get request body
         body = await request.body()
-        logger.debug(f"Request body size: {len(body)} bytes")
+        logger.debug("Request body size: %s bytes", len(body))
 
         # Validate webhook secret if configured
         if config.jenkins_webhook_secret:
@@ -852,7 +852,7 @@ async def webhook_jenkins_handler(
                     detail={"status": "error", "message": "Invalid JSON payload"}
                 )
         except Exception as e:
-            logger.error(f"Failed to parse JSON payload: {e}")
+            logger.error("Failed to parse JSON payload: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={"status": "error", "message": "Failed to parse JSON"}
@@ -911,7 +911,7 @@ async def webhook_jenkins_handler(
             }
 
         except ValueError as e:
-            logger.error(f"Failed to extract build info: {e}")
+            logger.error("Failed to extract build info: %s", e)
             raise HTTPException(
                 status_code=400,
                 detail={"status": "error", "message": f"Invalid payload: {str(e)}"}
@@ -921,7 +921,7 @@ async def webhook_jenkins_handler(
         raise
     except Exception as e:
         duration_ms = int((time.time() - start_time) * 1000)
-        logger.error(f"Failed to process Jenkins webhook: {e}", extra={
+        logger.error("Failed to process Jenkins webhook: %s", e, extra={
             'error_type': type(e).__name__,
             'duration_ms': duration_ms
         }, exc_info=True)
@@ -954,7 +954,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
     build_number = build_info['build_number']
     status = build_info['status']
 
-    logger.info(f"Processing Jenkins build: {job_name} #{build_number}", extra={
+    logger.info("Processing Jenkins build: %s #%s", job_name, build_number, extra={
         'job_name': job_name,
         'build_number': build_number,
         'status': status,
@@ -973,30 +973,30 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             build_info['timestamp'] = metadata.get('timestamp')
             build_info['result'] = metadata.get('result', status)
         except Exception as e:
-            logger.warning(f"Failed to fetch build metadata (non-critical): {e}")
+            logger.warning("Failed to fetch build metadata (non-critical): %s", e)
 
         # Fetch console log
         logger.info("Fetching console log from Jenkins")
         console_log = jenkins_log_fetcher.fetch_console_log(job_name, build_number)
-        logger.info(f"Console log fetched: {len(console_log)} bytes")
+        logger.info("Console log fetched: %s bytes", len(console_log))
 
         # Fetch Blue Ocean stages (if available)
         logger.debug("Fetching Blue Ocean stage information")
         blue_ocean_stages = jenkins_log_fetcher.fetch_stages(job_name, build_number)
 
         if blue_ocean_stages:
-            logger.info(f"Blue Ocean API available: {len(blue_ocean_stages)} stages")
+            logger.info("Blue Ocean API available: %s stages", len(blue_ocean_stages))
         else:
             logger.info("Blue Ocean API not available, will parse console log only")
 
         # Parse console log to extract stages and parallel blocks
         logger.info("Parsing console log for stages and parallel blocks")
         stages = jenkins_extractor.parse_console_log(console_log, blue_ocean_stages)
-        logger.info(f"Parsed {len(stages)} stages from console log")
+        logger.info("Parsed %s stages from console log", len(stages))
 
         # Count parallel blocks
         parallel_count = sum(1 for s in stages if s.get('is_parallel'))
-        logger.info(f"Found {parallel_count} parallel stages")
+        logger.info("Found %s parallel stages", parallel_count)
 
         # Post to API if enabled
         if config.api_post_enabled and api_poster:
@@ -1032,7 +1032,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                         'build_number': build_number
                     })
             except Exception as e:
-                logger.error(f"Error posting to API: {e}", exc_info=True)
+                logger.error("Error posting to API: %s", e, exc_info=True)
 
         # Update monitoring status
         processing_time = time.time() - start_time
@@ -1044,7 +1044,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             error_count=0
         )
 
-        logger.info(f"Jenkins build processing completed: {job_name} #{build_number}", extra={
+        logger.info("Jenkins build processing completed: %s #%s", job_name, build_number, extra={
             'job_name': job_name,
             'build_number': build_number,
             'processing_time_ms': int(processing_time * 1000),
@@ -1053,7 +1053,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
 
     except Exception as e:
         processing_time = time.time() - start_time
-        logger.error(f"Failed to process Jenkins build: {e}", extra={
+        logger.error("Failed to process Jenkins build: %s", e, extra={
             'job_name': job_name,
             'build_number': build_number,
             'error_type': type(e).__name__
@@ -1098,7 +1098,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
     project_id = pipeline_info['project_id']
     project_name = pipeline_info.get('project_name', 'unknown')
 
-    logger.info(f"Starting pipeline log extraction for '{project_name}'", extra={
+    logger.info("Starting pipeline log extraction for '%s'", project_name, extra={
         'pipeline_id': pipeline_id,
         'project_id': project_id,
         'project_name': project_name,
@@ -1117,7 +1117,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
         # Save metadata (always if configured, or if logs will be saved)
         if save_logs or config.log_save_metadata_always:
-            logger.debug(f"Saving pipeline metadata for '{project_name}'", extra={
+            logger.debug("Saving pipeline metadata for '%s'", project_name, extra={
                 'pipeline_id': pipeline_id,
                 'project_id': project_id,
                 'project_name': project_name
@@ -1164,7 +1164,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             return
 
         # Fetch job list first (lightweight API call)
-        logger.info(f"Fetching job list for pipeline in '{project_name}'", extra={
+        logger.info("Fetching job list for pipeline in '%s'", project_name, extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
             'project_name': project_name
@@ -1183,7 +1183,8 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             else:
                 skipped_before_fetch += 1
 
-        logger.info(f"Job filtering: {len(jobs_to_fetch)} jobs to fetch, {skipped_before_fetch} jobs skipped by filter", extra={
+        logger.info("Job filtering: %s jobs to fetch, %s jobs skipped by filter",
+                    len(jobs_to_fetch), skipped_before_fetch, extra={
             'pipeline_id': pipeline_id,
             'jobs_to_fetch': len(jobs_to_fetch),
             'jobs_skipped': skipped_before_fetch,
@@ -1201,7 +1202,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                     'log': log_content
                 }
             except Exception as e:
-                logger.error(f"Failed to fetch log for job {job_id}: {str(e)}")
+                logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
                 all_logs[job_id] = {
                     'details': job,
                     'log': f"[Error fetching log: {str(e)}]"
@@ -1225,7 +1226,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
         # Try API posting if enabled
         if config.api_post_enabled and api_poster:
-            logger.info(f"Posting pipeline logs to API for '{project_name}'")
+            logger.info("Posting pipeline logs to API for '%s'", project_name)
             api_start = time.time()
 
             try:
@@ -1340,7 +1341,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         save_duration_ms = int((time.time() - save_start) * 1000)
         total_duration_ms = int((time.time() - start_time) * 1000)
 
-        logger.info(f"Pipeline processing completed for '{project_name}'", extra={
+        logger.info("Pipeline processing completed for '%s'", project_name, extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
             'project_name': project_name,
@@ -1351,7 +1352,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         })
 
         if skipped_count > 0:
-            logger.info(f"Skipped {skipped_count} job(s) due to filtering", extra={
+            logger.info("Skipped %s job(s) due to filtering", skipped_count, extra={
                 'pipeline_id': pipeline_id,
                 'project_name': project_name,
                 'skipped_count': skipped_count
@@ -1359,7 +1360,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
         # Log summary
         summary = pipeline_extractor.get_pipeline_summary(pipeline_info)
-        logger.debug(f"Pipeline summary: {summary}")
+        logger.debug("Pipeline summary: %s", summary)
 
         # Performance metrics
         perf_logger.info("Pipeline processing metrics", extra={
@@ -1465,7 +1466,7 @@ async def stats():
         storage_stats = storage_manager.get_storage_stats()
         return storage_stats
     except Exception as e:
-        logger.error(f"Failed to get storage stats: {e}")
+        logger.error("Failed to get storage stats: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
@@ -1507,7 +1508,7 @@ async def monitor_summary(hours: int = Query(24, description="Number of hours to
         summary = monitor.get_summary(hours=hours)
         return summary
     except Exception as e:
-        logger.error(f"Failed to get monitor summary: {e}")
+        logger.error("Failed to get monitor summary: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
@@ -1529,7 +1530,7 @@ async def monitor_recent(limit: int = Query(50, description="Maximum number of r
         requests = monitor.get_recent_requests(limit=limit)
         return {"requests": requests, "count": len(requests)}
     except Exception as e:
-        logger.error(f"Failed to get recent requests: {e}")
+        logger.error("Failed to get recent requests: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
@@ -1551,7 +1552,7 @@ async def monitor_pipeline(pipeline_id: int):
         requests = monitor.get_pipeline_requests(pipeline_id)
         return {"pipeline_id": pipeline_id, "requests": requests, "count": len(requests)}
     except Exception as e:
-        logger.error(f"Failed to get pipeline requests: {e}")
+        logger.error("Failed to get pipeline requests: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
@@ -1588,7 +1589,7 @@ async def monitor_export_csv(
             filename=f"pipeline_monitoring_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         )
     except Exception as e:
-        logger.error(f"Failed to export CSV: {e}")
+        logger.error("Failed to export CSV: %s", e)
         raise HTTPException(
             status_code=500,
             detail={"status": "error", "message": str(e)}
@@ -1633,7 +1634,7 @@ def main():
     init_app()
 
     # Start FastAPI server with uvicorn
-    logger.info(f"Starting webhook server on port {config.webhook_port}...")
+    logger.info("Starting webhook server on port %s...", config.webhook_port)
     logger.info("Press Ctrl+C to stop")
 
     try:
@@ -1650,7 +1651,7 @@ def main():
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
     except Exception as e:
-        logger.error(f"Server error: {e}", exc_info=True)
+        logger.error("Server error: %s", e, exc_info=True)
 
 
 if __name__ == "__main__":

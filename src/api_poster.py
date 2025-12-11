@@ -83,7 +83,7 @@ class ApiPoster:
                 self.email_sender = EmailSender(config)
                 logger.info("Email notifications enabled for API responses")
             except Exception as e:
-                logger.error(f"Failed to initialize email sender: {e}", exc_info=True)
+                logger.error("Failed to initialize email sender: %s", e, exc_info=True)
                 logger.warning("Email notifications will be disabled")
 
         # Initialize token manager for JWT authentication
@@ -96,15 +96,15 @@ class ApiPoster:
                 self.token_manager = TokenManager(config.bfa_secret_key)
                 logger.info("TokenManager initialized for JWT authentication")
             except Exception as e:
-                logger.error(f"Failed to initialize TokenManager: {e}", exc_info=True)
+                logger.error("Failed to initialize TokenManager: %s", e, exc_info=True)
                 logger.warning("JWT authentication will be disabled, using raw secret key")
         elif config.bfa_host:
-            logger.info(f"BFA_SECRET_KEY not set, will fetch tokens from BFA server: {config.bfa_host}")
+            logger.info("BFA_SECRET_KEY not set, will fetch tokens from BFA server: %s", config.bfa_host)
         else:
             logger.warning("Neither BFA_SECRET_KEY nor BFA_HOST configured - API authentication may fail")
 
-        logger.info(f"API Poster initialized with endpoint: {config.api_post_url}")
-        logger.debug(f"API log file: {self.api_log_file}")
+        logger.info("API Poster initialized with endpoint: %s", config.api_post_url)
+        logger.debug("API log file: %s", self.api_log_file)
 
     def format_payload(
         self,
@@ -241,7 +241,7 @@ class ApiPoster:
         token_url = f"http://{self.config.bfa_host}:8000/api/token"
 
         try:
-            logger.info(f"Fetching JWT token from BFA server: {token_url}")
+            logger.info("Fetching JWT token from BFA server: %s", token_url)
 
             # Make request to BFA server
             response = requests.post(
@@ -256,7 +256,7 @@ class ApiPoster:
             token = token_data.get('token')
 
             if not token:
-                logger.error(f"BFA server response missing 'token' field: {token_data}")
+                logger.error("BFA server response missing 'token' field: %s", token_data)
                 return None
 
             # Cache the token (expires in 50 minutes to refresh before actual expiry)
@@ -264,14 +264,14 @@ class ApiPoster:
             self.bfa_token_cache = token
             self.bfa_token_expiry = time.time() + (50 * 60)  # 50 minutes
 
-            logger.info(f"Successfully fetched token from BFA server for subject: {subject}")
+            logger.info("Successfully fetched token from BFA server for subject: %s", subject)
             return token
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to fetch token from BFA server: {e}", exc_info=True)
+            logger.error("Failed to fetch token from BFA server: %s", e, exc_info=True)
             return None
         except (ValueError, KeyError) as e:
-            logger.error(f"Failed to parse token response from BFA server: {e}", exc_info=True)
+            logger.error("Failed to parse token response from BFA server: %s", e, exc_info=True)
             return None
 
     def _post_to_api(self, payload: Dict[str, Any]) -> Tuple[int, str, float]:
@@ -308,9 +308,9 @@ class ApiPoster:
             try:
                 jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
                 headers["Authorization"] = f"Bearer {jwt_token}"
-                logger.info(f"Generated JWT token locally for subject: {subject}")
+                logger.info("Generated JWT token locally for subject: %s", subject)
             except Exception as e:
-                logger.error(f"Failed to generate JWT token: {e}", exc_info=True)
+                logger.error("Failed to generate JWT token: %s", e, exc_info=True)
                 # Fallback to fetching from BFA server
                 if self.config.bfa_host:
                     fetched_token = self._fetch_token_from_bfa_server(subject)
@@ -326,11 +326,11 @@ class ApiPoster:
                 fetched_token = self._fetch_token_from_bfa_server(subject)
                 if fetched_token:
                     headers["Authorization"] = f"Bearer {fetched_token}"
-                    logger.info(f"Using token fetched from BFA server for subject: {subject}")
+                    logger.info("Using token fetched from BFA server for subject: %s", subject)
                 else:
                     logger.error("Failed to fetch token from BFA server, no authentication will be sent")
             except Exception as e:
-                logger.error(f"Error fetching token from BFA server: {e}", exc_info=True)
+                logger.error("Error fetching token from BFA server: %s", e, exc_info=True)
         elif self.config.bfa_secret_key:
             # Strategy 3: Use raw secret key (legacy)
             headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
@@ -358,7 +358,7 @@ class ApiPoster:
             try:
                 response_json = response.json()
             except ValueError:
-                logger.error(f"API returned non-JSON response: {response_body[:500]}")
+                logger.error("API returned non-JSON response: %s", response_body[:500])
                 raise requests.exceptions.RequestException(
                     f"API returned non-JSON response after {duration_ms}ms"
                 )
@@ -424,16 +424,16 @@ class ApiPoster:
 
             # Log complete exception details
             import traceback
-            logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Exception message: {str(e)}")
-            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Exception message: %s", str(e))
+            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
             # Log server response
-            logger.error(f"Server response status: {status_code}")
-            logger.error(f"Server response body (full):\n{response_body}")
+            logger.error("Server response status: %s", status_code)
+            logger.error("Server response body (full):\n%s", response_body)
 
             # Log the payload that caused the error
-            logger.error(f"Payload that caused {status_code} error:\n{json.dumps(payload, indent=2)}")
+            logger.error("Payload that caused %s error:\n%s", status_code, json.dumps(payload, indent=2))
 
             error_msg = str(e)[:1000]
             raise requests.exceptions.RequestException(
@@ -455,12 +455,12 @@ class ApiPoster:
 
             # Log complete exception details
             import traceback
-            logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Exception message: {str(e)}")
-            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Exception message: %s", str(e))
+            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
             # Log payload for debugging
-            logger.error(f"Payload that caused error:\n{json.dumps(payload, indent=2)}")
+            logger.error("Payload that caused error:\n%s", json.dumps(payload, indent=2))
 
             error_msg = str(e)[:1000]
             raise requests.exceptions.RequestException(
@@ -511,7 +511,7 @@ class ApiPoster:
             with open(self.api_log_file, 'a', encoding='utf-8') as f:
                 f.write(log_entry)
         except IOError as e:
-            logger.error(f"Failed to write to API log file: {e}")
+            logger.error("Failed to write to API log file: %s", e)
 
     def post_pipeline_logs(
         self,
@@ -573,7 +573,7 @@ class ApiPoster:
             )
 
             # Log full payload in DEBUG mode for troubleshooting
-            logger.debug(f"Full API payload:\n{payload_json}")
+            logger.debug("Full API payload:\n%s", payload_json)
 
         except Exception as e:
             logger.error(
@@ -589,13 +589,14 @@ class ApiPoster:
 
             # Log complete exception details
             import traceback
-            logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Exception message: {str(e)}")
-            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Exception message: %s", str(e))
+            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
             # Log pipeline_info to understand what data failed
-            logger.error(f"Pipeline info that caused formatting error: {json.dumps(pipeline_info, indent=2, default=str)}")
-            logger.error(f"Number of jobs in all_logs: {len(all_logs)}")
+            logger.error("Pipeline info that caused formatting error: %s",
+                         json.dumps(pipeline_info, indent=2, default=str))
+            logger.error("Number of jobs in all_logs: %s", len(all_logs))
 
             self._log_api_request(
                 pipeline_id, project_id, None, "", 0,
@@ -650,7 +651,7 @@ class ApiPoster:
                             api_response = json.loads(response_body)
                             self.email_sender.send_success_email(pipeline_info, api_response)
                         except json.JSONDecodeError as e:
-                            logger.warning(f"Failed to parse API response for email notification: {e}")
+                            logger.warning("Failed to parse API response for email notification: %s", e)
                     else:
                         # Failure: Send alert to DevOps team
                         self.email_sender.send_failure_email(
@@ -659,7 +660,7 @@ class ApiPoster:
                             response_body
                         )
                 except Exception as e:
-                    logger.error(f"Failed to send email notification: {e}", exc_info=True)
+                    logger.error("Failed to send email notification: %s", e, exc_info=True)
 
             return True
 
@@ -678,12 +679,12 @@ class ApiPoster:
 
             # Log complete exception details
             import traceback
-            logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Exception message: {str(e)}")
-            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Exception message: %s", str(e))
+            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
             # Log the payload that failed after all retries
-            logger.error(f"Payload that failed after all retries:\n{json.dumps(payload, indent=2)}")
+            logger.error("Payload that failed after all retries:\n%s", json.dumps(payload, indent=2))
 
             self._log_api_request(
                 pipeline_id, project_id, None, "", 0,
@@ -699,7 +700,7 @@ class ApiPoster:
                         error_message=f"Retry exhausted: {str(e)}"
                     )
                 except Exception as email_err:
-                    logger.error(f"Failed to send failure email: {email_err}", exc_info=True)
+                    logger.error("Failed to send failure email: %s", email_err, exc_info=True)
 
             return False
 
@@ -718,12 +719,12 @@ class ApiPoster:
 
             # Log complete exception details
             import traceback
-            logger.error(f"Exception type: {type(e).__name__}")
-            logger.error(f"Exception message: {str(e)}")
-            logger.error(f"Full traceback:\n{''.join(traceback.format_exception(type(e), e, e.__traceback__))}")
+            logger.error("Exception type: %s", type(e).__name__)
+            logger.error("Exception message: %s", str(e))
+            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
             # Log the payload that caused the unexpected error
-            logger.error(f"Payload that caused unexpected error:\n{json.dumps(payload, indent=2)}")
+            logger.error("Payload that caused unexpected error:\n%s", json.dumps(payload, indent=2))
 
             self._log_api_request(
                 pipeline_id, project_id, None, "", 0,
@@ -739,7 +740,7 @@ class ApiPoster:
                         error_message=f"{type(e).__name__}: {str(e)}"
                     )
                 except Exception as email_err:
-                    logger.error(f"Failed to send failure email: {email_err}", exc_info=True)
+                    logger.error("Failed to send failure email: %s", email_err, exc_info=True)
 
             return False
 
@@ -796,9 +797,13 @@ class ApiPoster:
                         exceptions=(requests.exceptions.RequestException,)
                     )
                 except RetryExhaustedError as e:
-                    logger.error(f"Retry exhausted posting Jenkins logs to API: {e}")
+                    logger.error("Retry exhausted posting Jenkins logs to API: %s", e)
+                    # Extract pipeline_id and project_id from payload
+                    pipeline_id = payload.get('build_number', 0)
+                    project_id = 0  # Jenkins doesn't have project_id concept
                     self._log_api_request(
-                        payload=payload,
+                        pipeline_id=pipeline_id,
+                        project_id=project_id,
                         status_code=None,
                         response_body=str(e),
                         duration_ms=0,
@@ -810,8 +815,12 @@ class ApiPoster:
                 status_code, response_body, duration_ms = self._post_to_api(payload)
 
             # Log the request/response
+            # Extract pipeline_id and project_id from payload
+            pipeline_id = payload.get('build_number', 0)
+            project_id = 0  # Jenkins doesn't have project_id concept
             self._log_api_request(
-                payload=payload,
+                pipeline_id=pipeline_id,
+                project_id=project_id,
                 status_code=status_code,
                 response_body=response_body,
                 duration_ms=duration_ms
@@ -851,8 +860,12 @@ class ApiPoster:
                 },
                 exc_info=True
             )
+            # Extract pipeline_id and project_id from payload
+            pipeline_id = jenkins_payload.get('build_number', 0)
+            project_id = 0  # Jenkins doesn't have project_id concept
             self._log_api_request(
-                payload=jenkins_payload,
+                pipeline_id=pipeline_id,
+                project_id=project_id,
                 status_code=None,
                 response_body="",
                 duration_ms=0,
