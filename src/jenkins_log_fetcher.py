@@ -15,8 +15,9 @@ Module Dependencies:
 """
 
 import logging
-import requests
 from typing import Dict, Any, Optional, List
+
+import requests
 from requests.auth import HTTPBasicAuth
 
 from .config_loader import Config

@@ -442,7 +442,9 @@ class EmailSender:
                     html_lines.append('</pre>')
                     in_code_block = False
                 else:
-                    html_lines.append('<pre style="background-color: #f5f5f5; padding: 10px; border: 1px solid #ddd; border-radius: 4px; overflow-x: auto;">')
+                    style = ('background-color: #f5f5f5; padding: 10px; border: 1px solid #ddd; '
+                             'border-radius: 4px; overflow-x: auto;')
+                    html_lines.append(f'<pre style="{style}">')
                     in_code_block = True
                 continue
 

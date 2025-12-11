@@ -59,7 +59,8 @@ class LogErrorExtractor:
             joined by newlines. Each line includes line numbers for reference.
 
         Example output:
-            ["Line 100: npm install started\nLine 101: Resolving dependencies...\n...\nLine 150: npm ERR! code ERESOLVE"]
+            ["Line 100: npm install started\\nLine 101: Resolving dependencies...\\n...\\n
+            Line 150: npm ERR! code ERESOLVE"]
         """
         if not log_content:
             return []

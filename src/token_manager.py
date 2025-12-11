@@ -114,8 +114,8 @@ class TokenManager:
                 algorithms=[self.algorithm]
             )
             return payload
-        except jwt.ExpiredSignatureError:
-            raise jwt.InvalidTokenError("Token has expired")
+        except jwt.ExpiredSignatureError as exc:
+            raise jwt.InvalidTokenError("Token has expired") from exc
         except jwt.InvalidTokenError as e:
             raise jwt.InvalidTokenError(f"Invalid token: {str(e)}")
 
