@@ -325,9 +325,8 @@ def validate_system_resources(config: Dict[str, str]) -> Tuple[List[str], List[s
 
     # Check log directory
     log_dir = Path(config.get('LOG_OUTPUT_DIR', './logs'))
-    if not log_dir.exists():
-        warnings.append(f"Log directory '{log_dir}' does not exist (will be created on start)")
-    elif not os.access(log_dir, os.W_OK):
+    # Only check if directory exists - if not, it will be created on start (no warning needed)
+    if log_dir.exists() and not os.access(log_dir, os.W_OK):
         errors.append(f"Log directory '{log_dir}' is not writable")
 
     return errors, warnings

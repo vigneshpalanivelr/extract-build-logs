@@ -14,7 +14,6 @@ Usage:
 
 import sys
 import argparse
-from datetime import datetime
 from pathlib import Path
 
 # Add src to path
