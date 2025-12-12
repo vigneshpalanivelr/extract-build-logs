@@ -174,7 +174,8 @@ class TestApiPoster(unittest.TestCase):
         # Mock successful response
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = '{"success": true, "message": "Logs received"}'
+        mock_response.text = '{"status": "ok", "message": "Logs received"}'
+        mock_response.json.return_value = {"status": "ok", "message": "Logs received"}
         mock_post.return_value = mock_response
 
         poster = ApiPoster(self.config)
@@ -194,13 +195,19 @@ class TestApiPoster(unittest.TestCase):
     @patch('src.api_poster.requests.post')
     def test_post_without_auth_token(self, mock_post):
         """Test POST without authentication token."""
-        # Config without auth token
-        config_no_auth = self.config
+        # Create new config without auth token
+        config_no_auth = MagicMock()
+        config_no_auth.api_post_url = "https://api.example.com/logs"
         config_no_auth.api_post_auth_token = None
+        config_no_auth.jwt_secret = "test-secret"
+        config_no_auth.jwt_expiration = 3600
+        config_no_auth.max_retries = 3
+        config_no_auth.retry_delay = 1.0
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = '{"success": true}'
+        mock_response.text = '{"status": "ok"}'
+        mock_response.json.return_value = {"status": "ok"}
         mock_post.return_value = mock_response
 
         poster = ApiPoster(config_no_auth)
@@ -349,7 +356,8 @@ class TestApiPoster(unittest.TestCase):
             time.sleep(0.1)  # Small delay for test
             mock_response = MagicMock()
             mock_response.status_code = 200
-            mock_response.text = '{"success": true, "message": "Processed"}'
+            mock_response.text = '{"status": "ok", "message": "Processed"}'
+            mock_response.json.return_value = {"status": "ok", "message": "Processed"}
             return mock_response
 
         mock_post.side_effect = slow_response
@@ -472,7 +480,8 @@ class TestApiPoster(unittest.TestCase):
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.text = '{"success": true}'
+        mock_response.text = '{"status": "ok"}'
+        mock_response.json.return_value = {"status": "ok"}
         mock_post.return_value = mock_response
 
         poster = ApiPoster(self.config)
