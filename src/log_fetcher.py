@@ -331,8 +331,8 @@ class LogFetcher:
 
 if __name__ == "__main__":
     # Example usage
-    import sys  # pylint: disable=import-outside-toplevel
-    from config_loader import ConfigLoader  # pylint: disable=import-outside-toplevel
+    import sys  # pylint: disable=import-outside-toplevel,unused-import
+    from config_loader import ConfigLoader  # pylint: disable=import-outside-toplevel,import-error
 
     logging.basicConfig(level=logging.INFO)
 
