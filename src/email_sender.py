@@ -14,6 +14,7 @@ Module Dependencies:
 
 import smtplib
 import logging
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Dict, Any, List
@@ -475,7 +476,6 @@ class EmailSender:
                     # Inline code
                     line = line.replace('`', '<code>').replace('</code>', '`')
                     # Bold
-                    import re
                     line = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', line)
                     html_lines.append(f'<p>{line}</p>')
                 else:

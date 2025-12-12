@@ -31,6 +31,7 @@ import sys
 import hmac
 import uuid
 import time
+import tempfile
 from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
@@ -1586,18 +1587,16 @@ async def monitor_export_csv(
         CSV file download
     """
     try:
-        import tempfile
-
         # Create temporary CSV file
-        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv')
-        temp_file.close()
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as temp_file:
+            temp_path = temp_file.name
 
         # Export to CSV
-        monitor.export_to_csv(temp_file.name, hours=hours)
+        monitor.export_to_csv(temp_path, hours=hours)
 
         # Return file
         return FileResponse(
-            path=temp_file.name,
+            path=temp_path,
             media_type='text/csv',
             filename=f"pipeline_monitoring_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         )
