@@ -273,7 +273,7 @@ class ApiPoster:
             logger.error("Failed to parse token response from BFA server: %s", e, exc_info=True)
             return None
 
-    def _post_to_api(self, payload: Dict[str, Any]) -> Tuple[int, str, float]:
+    def _post_to_api(self, payload: Dict[str, Any]) -> Tuple[int, str, float]:  # pylint: disable=too-many-branches
         """
         Internal method to POST payload to API.
 

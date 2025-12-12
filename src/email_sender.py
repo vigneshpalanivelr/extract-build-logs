@@ -190,7 +190,7 @@ class EmailSender:
             logger.error("Error sending failure email: %s", str(e), exc_info=True)
             return False
 
-    def _build_success_email_html(
+    def _build_success_email_html(  # pylint: disable=too-many-branches
         self,
         project_name: str,  # pylint: disable=unused-argument
         project_path: str,
