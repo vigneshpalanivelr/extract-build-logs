@@ -124,9 +124,9 @@ class PipelineExtractor:
         }
 
         logger.info(
-            f"Extracted info for pipeline {pipeline_info['pipeline_id']} "
-            f"from project '{pipeline_info['project_name']}' "
-            f"(type: {pipeline_type.value}, status: {pipeline_info['status']})",
+            "Extracted info for pipeline %s from project '%s' (type: %s, status: %s)",
+            pipeline_info['pipeline_id'], pipeline_info['project_name'],
+            pipeline_type.value, pipeline_info['status'],
             extra={'project_name': pipeline_info['project_name'], 'project_id': pipeline_info['project_id']}
         )
 
@@ -241,8 +241,8 @@ class PipelineExtractor:
         # Skip running or pending pipelines
         if status in ["running", "pending", "created"]:
             logger.info(
-                f"Skipping pipeline {pipeline_info['pipeline_id']} "
-                f"(status: {status}, not yet completed)"
+                "Skipping pipeline %s (status: %s, not yet completed)",
+                pipeline_info['pipeline_id'], status
             )
             return False
 
@@ -295,8 +295,9 @@ class PipelineExtractor:
                 filtered_jobs.append(job)
 
         logger.info(
-            f"Filtered {len(filtered_jobs)} jobs from {len(builds)} total jobs "
-            f"for pipeline {pipeline_info.get('pipeline_id', 'unknown')}"
+            "Filtered %d jobs from %d total jobs for pipeline %s",
+            len(filtered_jobs), len(builds),
+            pipeline_info.get('pipeline_id', 'unknown')
         )
 
         return filtered_jobs

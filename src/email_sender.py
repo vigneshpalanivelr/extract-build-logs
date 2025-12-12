@@ -114,16 +114,16 @@ class EmailSender:
 
             if success:
                 logger.info(
-                    f"Success email sent to {user_email} for pipeline {pipeline_id} "
-                    f"with {len(results)} error(s) analyzed"
+                    "Success email sent to %s for pipeline %s with %d error(s) analyzed",
+                    user_email, pipeline_id, len(results)
                 )
             else:
-                logger.error("Failed to send success email to %s for pipeline {pipeline_id}", user_email)
+                logger.error("Failed to send success email to %s for pipeline %s", user_email, pipeline_id)
 
             return success
 
         except Exception as e:
-            logger.error(f"Error sending success email: {str(e)}", exc_info=True)
+            logger.error("Error sending success email: %s", str(e), exc_info=True)
             return False
 
     def send_failure_email(
@@ -177,16 +177,16 @@ class EmailSender:
 
             if success:
                 logger.info(
-                    f"Failure alert sent to {self.devops_email} for pipeline {pipeline_id} "
-                    f"(status code: {status_code})"
+                    "Failure alert sent to %s for pipeline %s (status code: %s)",
+                    self.devops_email, pipeline_id, status_code
                 )
             else:
-                logger.error("Failed to send failure alert to %s for pipeline {pipeline_id}", self.devops_email)
+                logger.error("Failed to send failure alert to %s for pipeline %s", self.devops_email, pipeline_id)
 
             return success
 
         except Exception as e:
-            logger.error(f"Error sending failure email: {str(e)}", exc_info=True)
+            logger.error("Error sending failure email: %s", str(e), exc_info=True)
             return False
 
     def _build_success_email_html(
@@ -565,7 +565,8 @@ class EmailSender:
 
         # All attempts failed
         logger.error(
-            f"Failed to send email to {to_email} after trying {len(smtp_hosts_to_try)} SMTP host(s)"
+            "Failed to send email to %s after trying %d SMTP host(s)",
+            to_email, len(smtp_hosts_to_try)
         )
         logger.error("Hosts attempted: %s", ', '.join(smtp_hosts_to_try))
         logger.error("Last error: %s: {str(last_error)}", type(last_error).__name__)

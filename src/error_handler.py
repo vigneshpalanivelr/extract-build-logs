@@ -110,14 +110,14 @@ class ErrorHandler:
                 if attempt < self.max_retries:
                     delay = self._calculate_delay(attempt)
                     logger.warning(
-                        f"Attempt {attempt + 1} failed for {func.__name__}: {str(e)}. "
-                        f"Retrying in {delay:.2f} seconds..."
+                        "Attempt %d failed for %s: %s. Retrying in %.2f seconds...",
+                        attempt + 1, func.__name__, str(e), delay
                     )
                     time.sleep(delay)
                 else:
                     logger.error(
-                        f"All {self.max_retries + 1} attempts failed for {func.__name__}. "
-                        f"Last error: {str(e)}"
+                        "All %d attempts failed for %s. Last error: %s",
+                        self.max_retries + 1, func.__name__, str(e)
                     )
 
         raise RetryExhaustedError(self.max_retries + 1, last_exception)
@@ -266,8 +266,8 @@ class CircuitBreaker:
         if self.failure_count >= self.failure_threshold:
             self.state = "OPEN"
             logger.error(
-                f"Circuit breaker OPEN after {self.failure_count} failures. "
-                f"Will attempt recovery in {self.recovery_timeout} seconds"
+                "Circuit breaker OPEN after %d failures. Will attempt recovery in %d seconds",
+                self.failure_count, self.recovery_timeout
             )
 
 
