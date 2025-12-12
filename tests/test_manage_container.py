@@ -101,8 +101,10 @@ class TestLoadConfig(unittest.TestCase):
 class TestValidateConfig(unittest.TestCase):
     """Test cases for validate_config function."""
 
-    def test_validate_valid_config(self):
+    @patch('pathlib.Path.exists')
+    def test_validate_valid_config(self, mock_exists):
         """Test validation of a fully valid configuration."""
+        mock_exists.return_value = False  # Pretend .env doesn't exist to skip permission check
         config = {
             'GITLAB_URL': 'https://gitlab.com',
             'GITLAB_TOKEN': 'glpat-test123',
@@ -306,11 +308,12 @@ class TestContainerRunning(unittest.TestCase):
 class TestStartContainer(unittest.TestCase):
     """Test cases for start_container function."""
 
+    @patch('pathlib.Path.chmod')
     @patch('manage_container.console')
     @patch('manage_container.container_exists')
     @patch('manage_container.container_running')
     @patch('pathlib.Path.mkdir')
-    def test_start_container_already_running(self, mock_mkdir, mock_running, mock_exists, mock_console):
+    def test_start_container_already_running(self, mock_mkdir, mock_running, mock_exists, mock_console, mock_chmod):
         """Test start when container already running."""
         mock_exists.return_value = True
         mock_running.return_value = True
@@ -321,12 +324,13 @@ class TestStartContainer(unittest.TestCase):
 
         self.assertTrue(result)
 
+    @patch('pathlib.Path.chmod')
     @patch('manage_container.console')
     @patch('manage_container.container_exists')
     @patch('manage_container.container_running')
     @patch('pathlib.Path.mkdir')
     @patch('manage_container.show_endpoints')
-    def test_start_container_new(self, mock_endpoints, mock_mkdir, mock_running, mock_exists, mock_console):
+    def test_start_container_new(self, mock_endpoints, mock_mkdir, mock_running, mock_exists, mock_console, mock_chmod):
         """Test starting new container."""
         mock_exists.return_value = False
         mock_client = MagicMock()
@@ -370,11 +374,15 @@ class TestStopContainer(unittest.TestCase):
 class TestRestartContainer(unittest.TestCase):
     """Test cases for restart_container function."""
 
+    @patch('manage_container.container_running')
+    @patch('manage_container.container_exists')
     @patch('manage_container.start_container')
     @patch('manage_container.stop_container')
     @patch('manage_container.console')
-    def test_restart_container_success(self, mock_console, mock_stop, mock_start):
+    def test_restart_container_success(self, mock_console, mock_stop, mock_start, mock_exists, mock_running):
         """Test successful container restart."""
+        mock_exists.return_value = True
+        mock_running.return_value = True
         mock_stop.return_value = True
         mock_start.return_value = True
         mock_client = MagicMock()
@@ -438,6 +446,7 @@ class TestShowStatus(unittest.TestCase):
         mock_exists.return_value = True
         mock_client = MagicMock()
         mock_container = MagicMock()
+        mock_container.name = 'gitlab-log-extractor'
         mock_container.status = 'running'
         mock_container.short_id = 'abc123'
         mock_container.attrs = {
@@ -457,32 +466,26 @@ class TestShowStatus(unittest.TestCase):
         self.assertTrue(result)
 
 
+@unittest.skip("open_shell function removed during script condensing")
 class TestOpenShell(unittest.TestCase):
     """Test cases for open_shell function."""
 
-    @patch('manage_container.subprocess.run')
     @patch('manage_container.console')
     @patch('manage_container.container_running')
-    def test_open_shell_success(self, mock_running, mock_console, mock_subprocess):
+    def test_open_shell_success(self, mock_running, mock_console):
         """Test successful shell opening."""
         mock_running.return_value = True
         mock_client = MagicMock()
 
-        result = manage_container.open_shell(mock_client)
-
-        self.assertTrue(result)
-        mock_subprocess.assert_called_once()
+        # Function removed during condensing
+        pass
 
     @patch('manage_container.console')
     @patch('manage_container.container_running')
     def test_open_shell_not_running(self, mock_running, mock_console):
         """Test shell when container not running."""
-        mock_running.return_value = False
-        mock_client = MagicMock()
-
-        result = manage_container.open_shell(mock_client)
-
-        self.assertFalse(result)
+        # Function removed during condensing
+        pass
 
 
 class TestRemoveContainer(unittest.TestCase):
@@ -504,20 +507,15 @@ class TestRemoveContainer(unittest.TestCase):
         mock_container.remove.assert_called_once()
 
 
+@unittest.skip("cleanup function removed during script condensing")
 class TestCleanup(unittest.TestCase):
     """Test cases for cleanup function."""
 
-    @patch('manage_container.remove_container')
     @patch('manage_container.console')
-    def test_cleanup_with_force(self, mock_console, mock_remove):
+    def test_cleanup_with_force(self, mock_console):
         """Test cleanup with force flag."""
-        mock_remove.return_value = True
-        mock_client = MagicMock()
-
-        result = manage_container.cleanup(mock_client, force=True)
-
-        self.assertTrue(result)
-        mock_client.images.remove.assert_called_once()
+        # Function removed during condensing
+        pass
 
 
 class TestShowMonitor(unittest.TestCase):
@@ -554,10 +552,10 @@ class TestShowMonitor(unittest.TestCase):
 class TestExportMonitoringData(unittest.TestCase):
     """Test cases for export_monitoring_data function."""
 
-    @patch('manage_container.console')
-    @patch('manage_container.get_port_from_config')
     @patch('manage_container.requests.get')
-    def test_export_monitoring_data_success(self, mock_get, mock_port, mock_console):
+    @patch('manage_container.get_port_from_config')
+    @patch('manage_container.console')
+    def test_export_monitoring_data_success(self, mock_console, mock_port, mock_get):
         """Test successful data export."""
         mock_port.return_value = 8000
         mock_response = MagicMock()
@@ -574,10 +572,10 @@ class TestExportMonitoringData(unittest.TestCase):
 class TestTestWebhook(unittest.TestCase):
     """Test cases for test_webhook function."""
 
-    @patch('manage_container.console')
-    @patch('manage_container.get_port_from_config')
     @patch('manage_container.requests.post')
-    def test_test_webhook_success(self, mock_post, mock_port, mock_console):
+    @patch('manage_container.get_port_from_config')
+    @patch('manage_container.console')
+    def test_test_webhook_success(self, mock_console, mock_port, mock_post):
         """Test successful webhook test."""
         mock_port.return_value = 8000
         mock_response = MagicMock()
