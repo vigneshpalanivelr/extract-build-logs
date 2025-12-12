@@ -1079,7 +1079,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
         clear_request_id()
 
 
-def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, req_id: str):
+def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, req_id: str):  # pylint: disable=too-many-branches
     """
     Process a pipeline event: fetch and store logs.
 
