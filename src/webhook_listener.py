@@ -24,6 +24,7 @@ Server Architecture:
     - Optional webhook secret validation
     - Background task processing
 """
+# pylint: disable=broad-exception-caught,import-outside-toplevel,global-statement,too-many-lines
 
 import logging
 import sys
@@ -76,7 +77,6 @@ async def log_requests(request: Request, call_next):
     Middleware to log HTTP requests in our custom format.
     Replaces Uvicorn's default access logger.
     """
-    import time
     start_time = time.time()
 
     # Get request ID from context if available

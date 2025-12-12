@@ -16,6 +16,7 @@ Module Dependencies:
     - config_loader: For API configuration
     - error_handler: For retry logic
 """
+# pylint: disable=broad-exception-caught,import-outside-toplevel
 
 import json
 import logging
@@ -192,9 +193,9 @@ class ApiPoster:
                     # error_lines is a list with one string element containing all lines joined by \n
                     line_count = error_lines[0].count('\n') + 1 if error_lines else 0
                     logger.debug(
-                        f"Extracted error context from job '{step_name}': {line_count} lines "
-                        f"(context: {self.config.error_context_lines_before} before, "
-                        f"{self.config.error_context_lines_after} after)",
+                        "Extracted error context from job '%s': %d lines (context: %d before, %d after)",
+                        step_name, line_count, self.config.error_context_lines_before,
+                        self.config.error_context_lines_after,
                         extra={'job_name': step_name, 'error_line_count': line_count}
                     )
 
@@ -232,7 +233,6 @@ class ApiPoster:
 
         # Check if cached token is still valid (expires in 50 minutes, fetch new before expiry)
         if self.bfa_token_cache and self.bfa_token_expiry:
-            import time
             if time.time() < self.bfa_token_expiry:
                 logger.debug("Using cached BFA token")
                 return self.bfa_token_cache
@@ -260,7 +260,6 @@ class ApiPoster:
                 return None
 
             # Cache the token (expires in 50 minutes to refresh before actual expiry)
-            import time
             self.bfa_token_cache = token
             self.bfa_token_expiry = time.time() + (50 * 60)  # 50 minutes
 
