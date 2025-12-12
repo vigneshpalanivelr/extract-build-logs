@@ -386,13 +386,13 @@ if __name__ == "__main__":
     }
 
     extractor = PipelineExtractor()
-    pipeline_info = extractor.extract_pipeline_info(sample_payload)
+    pipeline_info = extractor.extract_pipeline_info(sample_payload)  # pylint: disable=redefined-outer-name
 
     print(extractor.get_pipeline_summary(pipeline_info))
     print(f"\nShould process: {extractor.should_process_pipeline(pipeline_info)}")
 
     failed_jobs = extractor.filter_jobs_to_fetch(
-        pipeline_info,
+        pipeline_info,  # pylint: disable=redefined-outer-name
         include_success=False,
         include_failed=True
     )

@@ -281,7 +281,7 @@ class ConfigLoader:
         )
 
     @staticmethod
-    def validate(config: Config) -> bool:
+    def validate(config: Config) -> bool:  # pylint: disable=redefined-outer-name
         """
         Validate configuration settings.
 

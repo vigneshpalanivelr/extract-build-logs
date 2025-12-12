@@ -112,12 +112,12 @@ class ErrorHandler:
         for attempt in range(self.max_retries + 1):
             try:
                 logger.debug("Attempt %s/{self.max_retries + 1} for {func.__name__}", attempt + 1)
-                result = func(*args, **kwargs)
+                result = func(*args, **kwargs)  # pylint: disable=redefined-outer-name
                 if attempt > 0:
                     logger.info("Success on attempt %s for {func.__name__}", attempt + 1)
                 return result
 
-            except exceptions as e:
+            except exceptions as e:  # pylint: disable=redefined-outer-name
                 last_exception = e
                 if attempt < self.max_retries:
                     delay = self._calculate_delay(attempt)
@@ -250,10 +250,10 @@ class CircuitBreaker:
                 raise CircuitBreakerError()
 
         try:
-            result = func(*args, **kwargs)
+            result = func(*args, **kwargs)  # pylint: disable=redefined-outer-name
             self._on_success()
             return result
-        except Exception as e:
+        except Exception as e:  # pylint: disable=redefined-outer-name
             self._on_failure()
             raise e
 
@@ -303,7 +303,7 @@ if __name__ == "__main__":
         return f"Success on attempt {unreliable_function.attempt}"
 
     try:
-        result = unreliable_function(3)
+        result = unreliable_function(3)  # pylint: disable=redefined-outer-name
         print(result)
-    except RetryExhaustedError as e:
+    except RetryExhaustedError as e:  # pylint: disable=redefined-outer-name
         print(f"Function failed: {e}")
