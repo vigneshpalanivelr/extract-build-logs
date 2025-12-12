@@ -293,8 +293,9 @@ def should_save_pipeline_logs(pipeline_info: Dict[str, Any]) -> bool:
     if 'all' not in config.log_save_pipeline_status:
         if pipeline_status not in config.log_save_pipeline_status:
             logger.info(
-                f"Pipeline {pipeline_info['pipeline_id']} from '{project_name}' skipped - "
-                f"status '{pipeline_status}' not in filter {config.log_save_pipeline_status}",
+                "Pipeline %s from '%s' skipped - status '%s' not in filter %s",
+                pipeline_info['pipeline_id'], project_name,
+                pipeline_status, config.log_save_pipeline_status,
                 extra={
                     'pipeline_id': pipeline_info['pipeline_id'],
                     'project_id': project_id,
@@ -309,8 +310,9 @@ def should_save_pipeline_logs(pipeline_info: Dict[str, Any]) -> bool:
     if config.log_save_projects:
         if project_id not in config.log_save_projects:
             logger.info(
-                f"Pipeline {pipeline_info['pipeline_id']} from '{project_name}' (ID: {project_id}) skipped - "
-                f"not in whitelist {config.log_save_projects}",
+                "Pipeline %s from '%s' (ID: %s) skipped - not in whitelist %s",
+                pipeline_info['pipeline_id'], project_name,
+                project_id, config.log_save_projects,
                 extra={
                     'pipeline_id': pipeline_info['pipeline_id'],
                     'project_id': project_id,
@@ -324,8 +326,9 @@ def should_save_pipeline_logs(pipeline_info: Dict[str, Any]) -> bool:
     if not config.log_save_projects and config.log_exclude_projects:
         if project_id in config.log_exclude_projects:
             logger.info(
-                f"Pipeline {pipeline_info['pipeline_id']} from '{project_name}' (ID: {project_id}) skipped - "
-                f"in blacklist {config.log_exclude_projects}",
+                "Pipeline %s from '%s' (ID: %s) skipped - in blacklist %s",
+                pipeline_info['pipeline_id'], project_name,
+                project_id, config.log_exclude_projects,
                 extra={
                     'pipeline_id': pipeline_info['pipeline_id'],
                     'project_id': project_id,
@@ -361,8 +364,9 @@ def should_save_job_log(job_details: Dict[str, Any], pipeline_info: Dict[str, An
     if 'all' not in config.log_save_job_status:
         if job_status not in config.log_save_job_status:
             logger.debug(
-                f"Job {job_id} '{job_name}' from '{project_name}' skipped - "
-                f"status '{job_status}' not in filter {config.log_save_job_status}",
+                "Job %s '%s' from '%s' skipped - status '%s' not in filter %s",
+                job_id, job_name, project_name,
+                job_status, config.log_save_job_status,
                 extra={
                     'job_id': job_id,
                     'job_name': job_name,
@@ -630,8 +634,9 @@ async def webhook_gitlab_handler(
 
             # Log request ID tracking info for easy correlation
             logger.info(
-                f"Request ID {req_id} tracking pipeline {pipeline_info['pipeline_id']} "
-                f"from project '{pipeline_info['project_name']}' (ID: {pipeline_info['project_id']})",
+                "Request ID %s tracking pipeline %s from project '%s' (ID: %s)",
+                req_id, pipeline_info['pipeline_id'],
+                pipeline_info['project_name'], pipeline_info['project_id'],
                 extra={
                     'pipeline_id': pipeline_info['pipeline_id'],
                     'project_id': pipeline_info['project_id'],
@@ -866,7 +871,8 @@ async def webhook_jenkins_handler(
             status = build_info['status']
 
             logger.info(
-                f"Jenkins build extracted: {job_name} #{build_number} - {status}",
+                "Jenkins build extracted: %s #%s - %s",
+                job_name, build_number, status,
                 extra={
                     'job_name': job_name,
                     'build_number': build_number,
@@ -893,7 +899,8 @@ async def webhook_jenkins_handler(
 
             duration_ms = int((time.time() - start_time) * 1000)
             logger.info(
-                f"Jenkins build queued for processing: {job_name} #{build_number}",
+                "Jenkins build queued for processing: %s #%s",
+                job_name, build_number,
                 extra={
                     'job_name': job_name,
                     'build_number': build_number,
@@ -1145,7 +1152,8 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         # Skip log fetching if filtered out
         if not save_logs:
             logger.info(
-                f"Pipeline {pipeline_id} from '{project_name}' - logs filtered, only metadata saved",
+                "Pipeline %s from '%s' - logs filtered, only metadata saved",
+                pipeline_id, project_name,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
@@ -1237,7 +1245,8 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 
                 if api_post_success:
                     logger.info(
-                        f"Successfully posted pipeline {pipeline_id} logs to API",
+                        "Successfully posted pipeline %s logs to API",
+                        pipeline_id,
                         extra={
                             'pipeline_id': pipeline_id,
                             'project_id': project_id,
@@ -1248,7 +1257,8 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                     )
                 else:
                     logger.warning(
-                        f"Failed to post pipeline {pipeline_id} logs to API",
+                        "Failed to post pipeline %s logs to API",
+                        pipeline_id,
                         extra={
                             'pipeline_id': pipeline_id,
                             'project_id': project_id,
@@ -1258,7 +1268,8 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             except Exception as e:
                 api_duration_ms = int((time.time() - api_start) * 1000)
                 logger.error(
-                    f"Unexpected error posting to API: {e}",
+                    "Unexpected error posting to API: %s",
+                    e,
                     extra={
                         'pipeline_id': pipeline_id,
                         'project_id': project_id,
