@@ -308,33 +308,41 @@ class TestContainerRunning(unittest.TestCase):
 class TestStartContainer(unittest.TestCase):
     """Test cases for start_container function."""
 
-    @patch('pathlib.Path.chmod')
+    @patch('manage_container.Path')
     @patch('manage_container.console')
     @patch('manage_container.container_exists')
     @patch('manage_container.container_running')
-    @patch('pathlib.Path.mkdir')
-    def test_start_container_already_running(self, mock_mkdir, mock_running, mock_exists, mock_console, mock_chmod):
+    def test_start_container_already_running(self, mock_running, mock_exists, mock_console, mock_path):
         """Test start when container already running."""
         mock_exists.return_value = True
         mock_running.return_value = True
         mock_client = MagicMock()
         config = {'WEBHOOK_PORT': '8000'}
 
+        # Mock Path instance
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = True
+        mock_path.return_value = mock_path_instance
+
         result = manage_container.start_container(mock_client, config, skip_confirm=True)
 
         self.assertTrue(result)
 
-    @patch('pathlib.Path.chmod')
+    @patch('manage_container.Path')
     @patch('manage_container.console')
     @patch('manage_container.container_exists')
     @patch('manage_container.container_running')
-    @patch('pathlib.Path.mkdir')
     @patch('manage_container.show_endpoints')
-    def test_start_container_new(self, mock_endpoints, mock_mkdir, mock_running, mock_exists, mock_console, mock_chmod):
+    def test_start_container_new(self, mock_endpoints, mock_running, mock_exists, mock_console, mock_path):
         """Test starting new container."""
         mock_exists.return_value = False
         mock_client = MagicMock()
         config = {'WEBHOOK_PORT': '8000'}
+
+        # Mock Path instance
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = False
+        mock_path.return_value = mock_path_instance
 
         result = manage_container.start_container(mock_client, config, skip_confirm=True)
 
