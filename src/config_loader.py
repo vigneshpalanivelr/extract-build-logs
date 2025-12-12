@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 
 @dataclass
-class Config:
+class Config:  # pylint: disable=too-many-instance-attributes
     """
     Configuration data class holding all application settings.
 
@@ -104,7 +104,7 @@ class ConfigLoader:
     """
 
     @staticmethod
-    def load() -> Config:
+    def load() -> Config:  # pylint: disable=too-many-branches
         """
         Load configuration from environment variables.
 
