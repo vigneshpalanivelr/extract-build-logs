@@ -24,7 +24,7 @@ Server Architecture:
     - Optional webhook secret validation
     - Background task processing
 """
-# pylint: disable=broad-exception-caught,import-outside-toplevel,global-statement,too-many-lines
+# pylint: disable=too-many-lines
 
 import logging
 import sys

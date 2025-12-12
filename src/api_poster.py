@@ -16,11 +16,11 @@ Module Dependencies:
     - config_loader: For API configuration
     - error_handler: For retry logic
 """
-# pylint: disable=broad-exception-caught,import-outside-toplevel
 
 import json
 import logging
 import time
+import traceback
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -382,9 +382,9 @@ class ApiPoster:
                 # Log each result for debugging
                 for idx, result in enumerate(results):
                     logger.debug(
-                        f"Result {idx + 1}: step={result.get('step_name')}, "
-                        f"error_hash={result.get('error_hash')}, "
-                        f"source={result.get('source')}"
+                        "Result %d: step=%s, error_hash=%s, source=%s",
+                        idx + 1, result.get('step_name'),
+                        result.get('error_hash'), result.get('source')
                     )
 
                 return response.status_code, response_body, duration_ms
@@ -411,7 +411,8 @@ class ApiPoster:
 
             # Log the error with full exception details
             logger.error(
-                f"API returned {status_code} error",
+                "API returned %d error",
+                status_code,
                 extra={
                     'status_code': status_code,
                     'duration_ms': duration_ms,
@@ -422,7 +423,6 @@ class ApiPoster:
             )
 
             # Log complete exception details
-            import traceback
             logger.error("Exception type: %s", type(e).__name__)
             logger.error("Exception message: %s", str(e))
             logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
@@ -443,7 +443,7 @@ class ApiPoster:
             # Other request errors (timeout, connection, etc.)
             duration_ms = int((time.time() - start_time) * 1000)
             logger.error(
-                f"API request failed (timeout/connection): {str(e)}",
+                "API request failed (timeout/connection): %s", str(e),
                 extra={
                     'duration_ms': duration_ms,
                     'error_type': type(e).__name__,
@@ -453,7 +453,6 @@ class ApiPoster:
             )
 
             # Log complete exception details
-            import traceback
             logger.error("Exception type: %s", type(e).__name__)
             logger.error("Exception message: %s", str(e))
             logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
@@ -542,7 +541,8 @@ class ApiPoster:
         project_name = pipeline_info.get('project_name', 'unknown')
 
         logger.info(
-            f"Posting pipeline logs to API for '{project_name}' (pipeline {pipeline_id})",
+            "Posting pipeline logs to API for '%s' (pipeline %s)",
+            project_name, pipeline_id,
             extra={
                 'pipeline_id': pipeline_id,
                 'project_id': project_id,
@@ -559,7 +559,8 @@ class ApiPoster:
 
             # Always log payload summary
             logger.info(
-                f"Formatted API payload for pipeline {pipeline_id}",
+                "Formatted API payload for pipeline %s",
+                pipeline_id,
                 extra={
                     'pipeline_id': pipeline_id,
                     'repo': payload.get('repo'),
@@ -576,7 +577,8 @@ class ApiPoster:
 
         except Exception as e:
             logger.error(
-                f"Failed to format API payload for pipeline {pipeline_id}: {e}",
+                "Failed to format API payload for pipeline %s: %s",
+                pipeline_id, e,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
@@ -587,7 +589,6 @@ class ApiPoster:
             )
 
             # Log complete exception details
-            import traceback
             logger.error("Exception type: %s", type(e).__name__)
             logger.error("Exception message: %s", str(e))
             logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
@@ -625,7 +626,8 @@ class ApiPoster:
 
             # Success
             logger.info(
-                f"Successfully posted pipeline {pipeline_id} logs to API",
+                "Successfully posted pipeline %s logs to API",
+                pipeline_id,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
@@ -677,7 +679,6 @@ class ApiPoster:
             )
 
             # Log complete exception details
-            import traceback
             logger.error("Exception type: %s", type(e).__name__)
             logger.error("Exception message: %s", str(e))
             logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
@@ -717,7 +718,6 @@ class ApiPoster:
             )
 
             # Log complete exception details
-            import traceback
             logger.error("Exception type: %s", type(e).__name__)
             logger.error("Exception message: %s", str(e))
             logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
