@@ -667,7 +667,8 @@ class ApiPoster:
 
         except RetryExhaustedError as e:
             logger.error(
-                f"Failed to post pipeline {pipeline_id} logs after retries: {e}",
+                "Failed to post pipeline %s logs after retries: %s",
+                pipeline_id, e,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
@@ -706,7 +707,8 @@ class ApiPoster:
 
         except Exception as e:
             logger.error(
-                f"Unexpected error posting pipeline {pipeline_id} logs: {e}",
+                "Unexpected error posting pipeline %s logs: %s",
+                pipeline_id, e,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
@@ -774,7 +776,8 @@ class ApiPoster:
             return False
 
         logger.info(
-            f"Posting Jenkins build to API: {jenkins_payload['job_name']} #{jenkins_payload['build_number']}"
+            "Posting Jenkins build to API: %s #%s",
+            jenkins_payload['job_name'], jenkins_payload['build_number']
         )
 
         try:
@@ -830,7 +833,8 @@ class ApiPoster:
                 job_name = jenkins_payload['job_name']
                 build_num = jenkins_payload['build_number']
                 logger.info(
-                    f"Successfully posted Jenkins build {job_name} #{build_num} to API",
+                    "Successfully posted Jenkins build %s #%s to API",
+                    job_name, build_num,
                     extra={
                         'job_name': job_name,
                         'build_number': build_num,
@@ -841,7 +845,8 @@ class ApiPoster:
                 return True
 
             logger.warning(
-                f"API returned non-success status code for Jenkins build: {status_code}",
+                "API returned non-success status code for Jenkins build: %s",
+                status_code,
                 extra={
                     'job_name': jenkins_payload['job_name'],
                     'build_number': jenkins_payload['build_number'],
@@ -852,7 +857,8 @@ class ApiPoster:
 
         except Exception as e:
             logger.error(
-                f"Unexpected error posting Jenkins logs to API: {e}",
+                "Unexpected error posting Jenkins logs to API: %s",
+                e,
                 extra={
                     'job_name': jenkins_payload.get('job_name', 'unknown'),
                     'build_number': jenkins_payload.get('build_number', 0),
