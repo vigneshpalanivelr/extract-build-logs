@@ -142,31 +142,27 @@ class TestApiPoster(unittest.TestCase):
         poster = ApiPoster(self.config)
         payload = poster.format_payload(self.pipeline_info, self.all_logs)
 
-        # Verify structure
-        self.assertEqual(payload["pipeline_id"], 12345)
-        self.assertEqual(payload["project_id"], 123)
-        self.assertEqual(payload["project_name"], "test-project")
-        self.assertEqual(payload["status"], "success")
-        self.assertEqual(len(payload["jobs"]), 2)
+        # Verify structure - new simplified format
+        self.assertEqual(payload["pipeline_id"], "12345")  # String now
+        self.assertEqual(payload["repo"], "test-project")
+        self.assertEqual(payload["branch"], "main")
+        self.assertEqual(payload["commit"], "abc123d")  # First 7 chars of sha
+        self.assertEqual(payload["triggered_by"], "Test User")
+        self.assertEqual(len(payload["job_name"]), 2)
+        self.assertEqual(len(payload["failed_steps"]), 0)  # No failed jobs
 
-        # Verify first job
-        job1 = payload["jobs"][0]
-        self.assertEqual(job1["job_id"], 456)
-        self.assertEqual(job1["job_name"], "build:production")
-        self.assertIn("Build started", job1["log_content"])
-
-        # Verify second job
-        job2 = payload["jobs"][1]
-        self.assertEqual(job2["job_id"], 457)
-        self.assertEqual(job2["job_name"], "test:unit")
+        # Verify job names are present
+        self.assertIn("build:production", payload["job_name"])
+        self.assertIn("test:unit", payload["job_name"])
 
     def test_format_payload_empty_jobs(self):
         """Test payload formatting with no jobs."""
         poster = ApiPoster(self.config)
         payload = poster.format_payload(self.pipeline_info, {})
 
-        self.assertEqual(payload["pipeline_id"], 12345)
-        self.assertEqual(len(payload["jobs"]), 0)
+        self.assertEqual(payload["pipeline_id"], "12345")  # String now
+        self.assertEqual(len(payload["job_name"]), 0)
+        self.assertEqual(len(payload["failed_steps"]), 0)
 
     @patch('src.api_poster.requests.post')
     def test_successful_post(self, mock_post):
@@ -189,20 +185,50 @@ class TestApiPoster(unittest.TestCase):
         call_kwargs = mock_post.call_args.kwargs
 
         self.assertEqual(call_kwargs['headers']['Content-Type'], 'application/json')
-        self.assertEqual(call_kwargs['headers']['Authorization'], 'Bearer test-api-token')
+        # Auth header uses bfa_secret_key from config
+        self.assertEqual(call_kwargs['headers']['Authorization'], 'Bearer test-secret-key')
         self.assertEqual(call_kwargs['timeout'], 30)
 
     @patch('src.api_poster.requests.post')
     def test_post_without_auth_token(self, mock_post):
         """Test POST without authentication token."""
-        # Create new config without auth token
-        config_no_auth = MagicMock()
-        config_no_auth.api_post_url = "https://api.example.com/logs"
-        config_no_auth.api_post_auth_token = None
-        config_no_auth.jwt_secret = "test-secret"
-        config_no_auth.jwt_expiration = 3600
-        config_no_auth.max_retries = 3
-        config_no_auth.retry_delay = 1.0
+        # Create new config without auth token (no bfa_secret_key or bfa_host)
+        import tempfile
+        temp_dir = tempfile.mkdtemp()
+        config_no_auth = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key=None,  # No auth
+            email_notifications_enabled=False,
+            smtp_host="localhost",
+            smtp_port=25,
+            smtp_from_email=None,
+            devops_email=None,
+            error_context_lines_before=50,
+            error_context_lines_after=10
+        )
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -456,12 +482,12 @@ class TestApiPoster(unittest.TestCase):
         payload = poster.format_payload(minimal_pipeline_info, minimal_logs)
 
         # Verify required fields are present
-        self.assertEqual(payload["pipeline_id"], 12345)
-        self.assertEqual(payload["project_id"], 123)
-
-        # Verify optional fields are None or default
-        self.assertIsNone(payload.get("ref"))
-        self.assertIsNone(payload.get("sha"))
+        self.assertEqual(payload["pipeline_id"], "12345")  # String now
+        self.assertEqual(payload["repo"], "unknown")  # Default when project_name missing
+        self.assertEqual(payload["branch"], "unknown")  # Default when ref missing
+        self.assertEqual(payload["commit"], "unknown")  # Default when sha missing
+        self.assertEqual(len(payload["job_name"]), 1)
+        self.assertEqual(payload["job_name"][0], "test-job")
 
     @patch('src.api_poster.requests.post')
     def test_post_with_large_payload(self, mock_post):
@@ -495,9 +521,10 @@ class TestApiPoster(unittest.TestCase):
         poster = ApiPoster(self.config)
         payload = poster.format_payload(self.pipeline_info, self.all_logs)
 
-        # Verify jobs are in order (456, 457)
-        self.assertEqual(payload["jobs"][0]["job_id"], 456)
-        self.assertEqual(payload["jobs"][1]["job_id"], 457)
+        # Verify job names are in order
+        self.assertEqual(len(payload["job_name"]), 2)
+        self.assertEqual(payload["job_name"][0], "build:production")
+        self.assertEqual(payload["job_name"][1], "test:unit")
 
 
 if __name__ == "__main__":
