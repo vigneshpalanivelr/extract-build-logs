@@ -317,9 +317,9 @@ class PipelineMonitor:
         # Get inserted ID (different for PostgreSQL vs SQLite)
         if self.db_type == 'postgresql':
             cursor.execute("SELECT lastval()")
-            request_id = cursor.fetchone()[0]
+            request_id = cursor.fetchone()[0]  # pylint: disable=redefined-outer-name
         else:
-            request_id = cursor.lastrowid
+            request_id = cursor.lastrowid  # pylint: disable=redefined-outer-name
 
         logger.info(
             "Tracked request #%s: pipeline=%s, status=%s",
@@ -328,7 +328,7 @@ class PipelineMonitor:
 
         return request_id
 
-    def update_request(
+    def update_request(  # pylint: disable=redefined-outer-name
         self,
         request_id: int,
         status: RequestStatus,

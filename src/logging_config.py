@@ -140,7 +140,7 @@ class PipeDelimitedFormatter(logging.Formatter):
         level = record.levelname.ljust(self.LEVEL_WIDTH)
 
         # Truncate or pad logger name
-        logger = record.name
+        logger = record.name  # pylint: disable=redefined-outer-name
         if len(logger) > self.LOGGER_WIDTH:
             logger = logger[:self.LOGGER_WIDTH - 3] + '...'
         else:
@@ -263,7 +263,7 @@ class LoggingConfig:
         access_handler.addFilter(SensitiveDataFilter())
 
         # Access logger is separate
-        access_logger = logging.getLogger('access')
+        access_logger = logging.getLogger('access')  # pylint: disable=redefined-outer-name
         access_logger.setLevel(logging.INFO)
         access_logger.addHandler(access_handler)
         access_logger.propagate = False  # Don't propagate to root
@@ -280,7 +280,7 @@ class LoggingConfig:
         perf_handler.addFilter(RequestIdFilter())
 
         # Performance logger is separate
-        perf_logger = logging.getLogger('performance')
+        perf_logger = logging.getLogger('performance')  # pylint: disable=redefined-outer-name
         perf_logger.setLevel(logging.INFO)
         perf_logger.addHandler(perf_handler)
         perf_logger.propagate = False  # Don't propagate to root
