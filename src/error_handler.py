@@ -40,6 +40,18 @@ class RetryExhaustedError(Exception):
         )
 
 
+class CircuitBreakerError(Exception):
+    """
+    Raised when circuit breaker is open and blocking requests.
+
+    This exception indicates that the circuit breaker has detected too many
+    failures and is temporarily blocking requests to prevent cascading failures.
+    """
+
+    def __init__(self, message: str = "Circuit breaker is OPEN, request blocked"):
+        super().__init__(message)
+
+
 class ErrorHandler:
     """
     Error handler with retry logic and exponential backoff.
@@ -235,7 +247,7 @@ class CircuitBreaker:
                 self.state = "HALF_OPEN"
                 logger.info("Circuit breaker entering HALF_OPEN state")
             else:
-                raise Exception("Circuit breaker is OPEN, request blocked")
+                raise CircuitBreakerError()
 
         try:
             result = func(*args, **kwargs)
@@ -275,6 +287,9 @@ if __name__ == "__main__":
     # Example usage
     logging.basicConfig(level=logging.DEBUG)
 
+    class TestError(Exception):
+        """Exception for testing retry logic."""
+
     @retry_on_failure(max_retries=3, base_delay=1.0)
     def unreliable_function(success_on_attempt: int):
         """Test function that succeeds on specified attempt."""
@@ -283,7 +298,7 @@ if __name__ == "__main__":
         unreliable_function.attempt += 1
 
         if unreliable_function.attempt < success_on_attempt:
-            raise Exception(f"Failed on attempt {unreliable_function.attempt}")
+            raise TestError(f"Failed on attempt {unreliable_function.attempt}")
 
         return f"Success on attempt {unreliable_function.attempt}"
 
