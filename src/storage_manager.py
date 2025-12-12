@@ -170,7 +170,7 @@ class StorageManager:
         # Create sanitized filename
         sanitized_name = self._sanitize_filename(job_name)
         log_filename = f"job_{job_id}_{sanitized_name}.log"
-        log_path = pipeline_dir / log_filename
+        log_path = pipeline_dir / log_filename  # pylint: disable=redefined-outer-name
 
         # Save log content
         try:
@@ -403,7 +403,7 @@ class StorageManager:
                 "total_size_mb": 43.56
             }
         """
-        stats = {
+        stats = {  # pylint: disable=redefined-outer-name
             "total_projects": 0,
             "total_pipelines": 0,
             "total_jobs": 0,
