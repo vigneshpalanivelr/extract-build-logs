@@ -322,8 +322,8 @@ class PipelineMonitor:
             request_id = cursor.lastrowid
 
         logger.info(
-            f"Tracked request #{request_id}: "
-            f"pipeline={pipeline_id}, status={status.value}"
+            "Tracked request #%s: pipeline=%s, status=%s",
+            request_id, pipeline_id, status.value
         )
 
         return request_id
