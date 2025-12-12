@@ -90,7 +90,7 @@ async def log_requests(request: Request, call_next):
     duration_ms = int((time.time() - start_time) * 1000)
 
     # Get access logger (defined in logging_config.py)
-    access_logger = logging.getLogger('access')
+    access_logger = logging.getLogger('access')  # pylint: disable=redefined-outer-name
 
     # Log in our custom format with context
     access_logger.info(
