@@ -483,7 +483,6 @@ class TestOpenShell(unittest.TestCase):
     def test_open_shell_success(self, mock_running, mock_console):
         """Test successful shell opening."""
         mock_running.return_value = True
-        mock_client = MagicMock()
 
         # Function removed during condensing
         pass
@@ -570,7 +569,7 @@ class TestExportMonitoringData(unittest.TestCase):
         mock_response.text = "csv,data"
         mock_get.return_value = mock_response
 
-        with patch('builtins.open', mock_open()) as _mock_file:
+        with patch('builtins.open', mock_open()):
             result = manage_container.export_monitoring_data("test.csv")
 
         self.assertTrue(result)

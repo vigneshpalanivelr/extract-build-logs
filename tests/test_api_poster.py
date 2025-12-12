@@ -33,6 +33,14 @@ class TestApiPoster(unittest.TestCase):
         """Set up test fixtures."""
         self.temp_dir = tempfile.mkdtemp()
 
+        # Patch TokenManager to prevent JWT token generation in tests
+        # This ensures tests use raw secret key instead of JWT tokens
+        self.token_manager_patcher = patch('src.api_poster.TokenManager')
+        self.mock_token_manager_class = self.token_manager_patcher.start()
+        # Make TokenManager raise exception on initialization
+        # so ApiPoster falls back to using raw bfa_secret_key
+        self.mock_token_manager_class.side_effect = Exception("TokenManager disabled in tests")
+
         self.config = Config(
             gitlab_url="https://gitlab.example.com",
             gitlab_token="test-token",
@@ -121,6 +129,8 @@ class TestApiPoster(unittest.TestCase):
         """Clean up test fixtures."""
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+        # Stop the TokenManager patcher
+        self.token_manager_patcher.stop()
 
     def test_initialization(self):
         """Test ApiPoster initialization."""
@@ -237,7 +247,7 @@ class TestApiPoster(unittest.TestCase):
         mock_post.return_value = mock_response
 
         poster = ApiPoster(config_no_auth)
-        _result = poster.post_pipeline_logs(self.pipeline_info, self.all_logs)
+        poster.post_pipeline_logs(self.pipeline_info, self.all_logs)
 
         # Verify auth header not present
         call_kwargs = mock_post.call_args.kwargs
