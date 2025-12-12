@@ -253,7 +253,7 @@ class CircuitBreaker:
             result = func(*args, **kwargs)  # pylint: disable=redefined-outer-name
             self._on_success()
             return result
-        except Exception as e:  # pylint: disable=redefined-outer-name
+        except Exception as e:  # pylint: disable=redefined-outer-name,broad-exception-caught
             self._on_failure()
             raise e
 

@@ -274,7 +274,7 @@ class LogFetcher:
                     'details': job,
                     'log': log_content
                 }
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
                 all_logs[job_id] = {
                     'details': job,
@@ -355,5 +355,5 @@ if __name__ == "__main__":
 
         fetcher.close()
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         print(f"Error: {e}")

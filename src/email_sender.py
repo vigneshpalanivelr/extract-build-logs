@@ -123,7 +123,7 @@ class EmailSender:
 
             return success
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Error sending success email: %s", str(e), exc_info=True)
             return False
 
@@ -186,7 +186,7 @@ class EmailSender:
 
             return success
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Error sending failure email: %s", str(e), exc_info=True)
             return False
 

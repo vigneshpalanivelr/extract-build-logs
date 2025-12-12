@@ -238,7 +238,7 @@ def init_app():
         logger.info("All components initialized successfully")
         logger.info("=" * 70)
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.critical("Failed to initialize application: %s", e, exc_info=True)
         sys.exit(1)
 
@@ -494,7 +494,7 @@ async def generate_token(request: Request):
             'operation': 'token_generation_error'
         })
         raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Token generation failed: %s", str(e), extra={
             'operation': 'token_generation_error'
         })
@@ -621,7 +621,7 @@ async def webhook_gitlab_handler(
                     detail={"status": "error", "message": "Invalid JSON payload"}
                 )
             logger.debug("JSON payload parsed successfully")
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to parse JSON payload", extra={
                 'error_type': type(e).__name__,
                 'error': str(e)
@@ -737,7 +737,7 @@ async def webhook_gitlab_handler(
                 "db_request_id": db_request_id
             }
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to extract pipeline info", extra={
                 'error_type': type(e).__name__,
                 'error': str(e)
@@ -752,7 +752,7 @@ async def webhook_gitlab_handler(
         duration_ms = int((time.time() - start_time) * 1000)
         logger.debug("Request failed with HTTP exception", extra={'duration_ms': duration_ms})
         raise
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         duration_ms = int((time.time() - start_time) * 1000)
         logger.error("Failed to process webhook", extra={
             'error_type': type(e).__name__,
@@ -859,7 +859,7 @@ async def webhook_jenkins_handler(
                     status_code=400,
                     detail={"status": "error", "message": "Invalid JSON payload"}
                 )
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to parse JSON payload: %s", e)
             raise HTTPException(
                 status_code=400,
@@ -929,7 +929,7 @@ async def webhook_jenkins_handler(
 
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         duration_ms = int((time.time() - start_time) * 1000)
         logger.error("Failed to process Jenkins webhook: %s", e, extra={
             'error_type': type(e).__name__,
@@ -982,7 +982,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             build_info['duration_ms'] = metadata.get('duration', 0)
             build_info['timestamp'] = metadata.get('timestamp')
             build_info['result'] = metadata.get('result', status)
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Failed to fetch build metadata (non-critical): %s", e)
 
         # Fetch console log
@@ -1041,7 +1041,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                         'job_name': job_name,
                         'build_number': build_number
                     })
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Error posting to API: %s", e, exc_info=True)
 
         # Update monitoring status
@@ -1061,7 +1061,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             'stage_count': len(stages)
         })
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         processing_time = time.time() - start_time
         logger.error("Failed to process Jenkins build: %s", e, extra={
             'job_name': job_name,
@@ -1214,7 +1214,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                     'details': job,
                     'log': log_content
                 }
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
                 all_logs[job_id] = {
                     'details': job,
@@ -1268,7 +1268,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                             'project_name': project_name
                         }
                     )
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 api_duration_ms = int((time.time() - api_start) * 1000)
                 logger.error(
                     "Unexpected error posting to API: %s",
@@ -1342,7 +1342,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
                         'job_name': job_details['name']
                     })
 
-                except Exception as e:
+                except Exception as e:  # pylint: disable=broad-exception-caught
                     error_count += 1
                     logger.error("Failed to save job log to file", extra={
                         'pipeline_id': pipeline_id,
@@ -1431,7 +1431,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             'operation': 'pipeline_processing'
         })
 
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         total_duration_ms = int((time.time() - start_time) * 1000)
         logger.error("Unexpected error processing pipeline", extra={
             'pipeline_id': pipeline_id,
@@ -1481,7 +1481,7 @@ async def stats():
     try:
         storage_stats = storage_manager.get_storage_stats()
         return storage_stats
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get storage stats: %s", e)
         raise HTTPException(
             status_code=500,
@@ -1523,7 +1523,7 @@ async def monitor_summary(hours: int = Query(24, description="Number of hours to
     try:
         summary = monitor.get_summary(hours=hours)
         return summary
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get monitor summary: %s", e)
         raise HTTPException(
             status_code=500,
@@ -1545,7 +1545,7 @@ async def monitor_recent(limit: int = Query(50, description="Maximum number of r
     try:
         requests = monitor.get_recent_requests(limit=limit)
         return {"requests": requests, "count": len(requests)}
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get recent requests: %s", e)
         raise HTTPException(
             status_code=500,
@@ -1567,7 +1567,7 @@ async def monitor_pipeline(pipeline_id: int):
     try:
         requests = monitor.get_pipeline_requests(pipeline_id)
         return {"pipeline_id": pipeline_id, "requests": requests, "count": len(requests)}
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get pipeline requests: %s", e)
         raise HTTPException(
             status_code=500,
@@ -1602,7 +1602,7 @@ async def monitor_export_csv(
             media_type='text/csv',
             filename=f"pipeline_monitoring_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
         )
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to export CSV: %s", e)
         raise HTTPException(
             status_code=500,
@@ -1664,7 +1664,7 @@ def main():
         )
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
-    except Exception as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Server error: %s", e, exc_info=True)
 
 

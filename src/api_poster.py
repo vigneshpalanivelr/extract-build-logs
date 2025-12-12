@@ -83,7 +83,7 @@ class ApiPoster:
             try:
                 self.email_sender = EmailSender(config)
                 logger.info("Email notifications enabled for API responses")
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to initialize email sender: %s", e, exc_info=True)
                 logger.warning("Email notifications will be disabled")
 
@@ -96,7 +96,7 @@ class ApiPoster:
             try:
                 self.token_manager = TokenManager(config.bfa_secret_key)
                 logger.info("TokenManager initialized for JWT authentication")
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to initialize TokenManager: %s", e, exc_info=True)
                 logger.warning("JWT authentication will be disabled, using raw secret key")
         elif config.bfa_host:
@@ -308,7 +308,7 @@ class ApiPoster:
                 jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
                 headers["Authorization"] = f"Bearer {jwt_token}"
                 logger.info("Generated JWT token locally for subject: %s", subject)
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to generate JWT token: %s", e, exc_info=True)
                 # Fallback to fetching from BFA server
                 if self.config.bfa_host:
@@ -328,7 +328,7 @@ class ApiPoster:
                     logger.info("Using token fetched from BFA server for subject: %s", subject)
                 else:
                     logger.error("Failed to fetch token from BFA server, no authentication will be sent")
-            except Exception as e:
+            except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Error fetching token from BFA server: %s", e, exc_info=True)
         elif self.config.bfa_secret_key:
             # Strategy 3: Use raw secret key (legacy)
@@ -575,7 +575,7 @@ class ApiPoster:
             # Log full payload in DEBUG mode for troubleshooting
             logger.debug("Full API payload:\n%s", payload_json)
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error(
                 "Failed to format API payload for pipeline %s: %s",
                 pipeline_id, e,
@@ -660,7 +660,7 @@ class ApiPoster:
                             status_code,
                             response_body
                         )
-                except Exception as e:
+                except Exception as e:  # pylint: disable=broad-exception-caught
                     logger.error("Failed to send email notification: %s", e, exc_info=True)
 
             return True
@@ -700,12 +700,12 @@ class ApiPoster:
                         status_code=0,
                         error_message=f"Retry exhausted: {str(e)}"
                     )
-                except Exception as email_err:
+                except Exception as email_err:  # pylint: disable=broad-exception-caught
                     logger.error("Failed to send failure email: %s", email_err, exc_info=True)
 
             return False
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error(
                 "Unexpected error posting pipeline %s logs: %s",
                 pipeline_id, e,
@@ -740,7 +740,7 @@ class ApiPoster:
                         status_code=0,
                         error_message=f"{type(e).__name__}: {str(e)}"
                     )
-                except Exception as email_err:
+                except Exception as email_err:  # pylint: disable=broad-exception-caught
                     logger.error("Failed to send failure email: %s", email_err, exc_info=True)
 
             return False
@@ -855,7 +855,7 @@ class ApiPoster:
             )
             return False
 
-        except Exception as e:
+        except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error(
                 "Unexpected error posting Jenkins logs to API: %s",
                 e,
