@@ -40,6 +40,7 @@ import socket
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
+import requests
 
 try:
     import docker
@@ -1124,7 +1125,6 @@ def export_monitoring_data(filename: str = "monitoring_export.csv") -> bool:
 
         console.print(f"[blue]Exporting monitoring data to:[/blue] {filename}")
 
-        import requests
         response = requests.get(f"http://{host}:{port}/monitor/export/csv", timeout=30)
         response.raise_for_status()
 
@@ -1188,7 +1188,6 @@ def test_webhook() -> bool:
             ]
         }
 
-        import requests
         response = requests.post(
             f"http://{host}:{port}/webhook/gitlab",
             json=sample_payload,
