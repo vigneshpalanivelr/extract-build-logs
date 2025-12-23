@@ -46,7 +46,7 @@ class EmailSender:
         self.from_email = config.smtp_from_email
         self.devops_email = config.devops_email
 
-        logger.debug("EmailSender initialized: %s:{self.smtp_port}", self.smtp_host)
+        logger.debug("EmailSender initialized: %s:%s", self.smtp_host, self.smtp_port)
 
     def send_success_email(
         self,
@@ -543,7 +543,7 @@ class EmailSender:
         last_error = None
         for smtp_host in smtp_hosts_to_try:
             try:
-                logger.debug("Attempting SMTP connection to %s:{self.smtp_port}", smtp_host)
+                logger.debug("Attempting SMTP connection to %s:%s", smtp_host, self.smtp_port)
 
                 with smtplib.SMTP(smtp_host, self.smtp_port, timeout=5) as server:
                     # Set debug level if needed
@@ -555,11 +555,11 @@ class EmailSender:
                     # server.login(username, password)
 
                     server.send_message(msg)
-                    logger.info("Email sent successfully to %s via {smtp_host}:{self.smtp_port}", to_email)
+                    logger.info("Email sent successfully to %s via %s:%s", to_email, smtp_host, self.smtp_port)
                     return True
 
             except (smtplib.SMTPException, OSError, ConnectionError, TimeoutError, Exception) as e:
-                logger.debug("SMTP attempt to %s:{self.smtp_port} failed: {type(e).__name__}: {str(e)}", smtp_host)
+                logger.debug("SMTP attempt to %s:%s failed: %s: %s", smtp_host, self.smtp_port, type(e).__name__, str(e))
                 last_error = e
                 continue  # Try next host
 
@@ -569,7 +569,7 @@ class EmailSender:
             to_email, len(smtp_hosts_to_try)
         )
         logger.error("Hosts attempted: %s", ', '.join(smtp_hosts_to_try))
-        logger.error("Last error: %s: {str(last_error)}", type(last_error).__name__)
+        logger.error("Last error: %s: %s", type(last_error).__name__, str(last_error))
         logger.error(
             "Troubleshooting: "
             "1) Check if mail server is running on host "
