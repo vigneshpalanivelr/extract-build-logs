@@ -111,10 +111,10 @@ class ErrorHandler:
 
         for attempt in range(self.max_retries + 1):
             try:
-                logger.debug("Attempt %s/{self.max_retries + 1} for {func.__name__}", attempt + 1)
+                logger.debug("Attempt %s/%s for %s", attempt + 1, self.max_retries + 1, func.__name__)
                 result = func(*args, **kwargs)  # pylint: disable=redefined-outer-name
                 if attempt > 0:
-                    logger.info("Success on attempt %s for {func.__name__}", attempt + 1)
+                    logger.info("Success on attempt %s for %s", attempt + 1, func.__name__)
                 return result
 
             except exceptions as e:  # pylint: disable=redefined-outer-name
