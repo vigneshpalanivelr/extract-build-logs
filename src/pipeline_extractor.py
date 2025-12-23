@@ -235,7 +235,7 @@ class PipelineExtractor:
 
         # Only process completed pipelines
         if status in ["success", "failed"]:
-            logger.info("Pipeline %s should be processed (status: {status})", pipeline_info['pipeline_id'])
+            logger.info("Pipeline %s should be processed (status: %s)", pipeline_info['pipeline_id'], status)
             return True
 
         # Skip running or pending pipelines
@@ -247,7 +247,7 @@ class PipelineExtractor:
             return False
 
         # Process other statuses (canceled, skipped, manual)
-        logger.info("Pipeline %s will be processed (status: {status})", pipeline_info['pipeline_id'])
+        logger.info("Pipeline %s will be processed (status: %s)", pipeline_info['pipeline_id'], status)
         return True
 
     @staticmethod
