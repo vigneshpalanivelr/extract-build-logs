@@ -207,14 +207,8 @@ class ApiPoster:
                     "error_lines": error_lines
                 })
 
-        # Use pipeline URL from GitLab webhook (preferred), or construct as fallback
+        # Use pipeline URL provided by GitLab webhook
         pipeline_url = pipeline_info.get('pipeline_url')
-        if not pipeline_url:
-            # Fallback: construct URL manually
-            project_path = pipeline_info.get('project_path', 'unknown')
-            pipeline_id = pipeline_info['pipeline_id']
-            gitlab_url = self.config.gitlab_url.rstrip('/')
-            pipeline_url = f"{gitlab_url}/{project_path}/-/pipelines/{pipeline_id}"
 
         # Build complete payload
         payload = {
