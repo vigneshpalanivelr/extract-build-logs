@@ -105,6 +105,7 @@ class PipelineExtractor:
         pipeline_info = {
             "event_type": object_kind,
             "pipeline_id": object_attrs.get("id"),
+            "pipeline_url": object_attrs.get("url"),  # GitLab provides the full pipeline URL
             "project_id": project.get("id"),
             "project_name": project.get("name"),
             "project_path": project.get("path_with_namespace"),
