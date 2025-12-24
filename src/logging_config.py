@@ -20,6 +20,13 @@ Example:
 2024-01-01 10:15:30.123 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345 project_id=100
 
 Note: All logs including errors are kept in application.log to maintain context and traceability.
+
+We don't need below handlers
+- access_logger
+src.logging_config.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import logging
@@ -436,10 +443,7 @@ if __name__ == "__main__":
     })
 
     # Test performance logging
-    perf_logger.info("Request completed", extra={
-        'pipeline_id': 12345,
-        'duration_ms': 1234
-    })
+    perf_logger.info("Request completed", extra={'pipeline_id': 12345, 'duration_ms': 1234})
 
     # Test exception logging
     try:

@@ -7,11 +7,10 @@ It implements exponential backoff and configurable retry strategies to handle tr
 Data Flow:
     Function Call → retry_with_backoff() → [Attempt → Error → Wait → Retry] → Success/Failure
 
-Module Dependencies:
-    - time: For sleep between retries
-    - logging: For error logging
-    - typing: For type hints
-    - functools: For decorator functionality
+src.error_handler.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import time

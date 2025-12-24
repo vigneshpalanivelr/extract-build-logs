@@ -3,6 +3,11 @@ Log Error Extractor
 
 Extracts error sections from build logs with configurable context.
 Provides surrounding lines before and after errors for better LLM analysis.
+
+src.log_error_extractor.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import re
@@ -29,12 +34,7 @@ class LogErrorExtractor:
         'compilation error', 'build failed'
     ]
 
-    def __init__(
-        self,
-        lines_before: int = 50,
-        lines_after: int = 10,
-        max_line_length: int = 1000
-    ):
+    def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000):
         """
         Initialize the error extractor.
 
@@ -79,10 +79,7 @@ class LogErrorExtractor:
         logger.debug("Found %s error line(s) in log", len(error_indices))
 
         # Extract sections with context and merge overlapping ranges
-        sections = self._extract_sections_with_context(
-            cleaned_lines,
-            error_indices
-        )
+        sections = self._extract_sections_with_context(cleaned_lines, error_indices)
 
         # Join all lines into a single string with newlines and return as list with one element
         return ['\n'.join(sections)]
@@ -144,11 +141,7 @@ class LogErrorExtractor:
 
         return error_indices
 
-    def _extract_sections_with_context(
-        self,
-        lines: List[str],
-        error_indices: List[int]
-    ) -> List[str]:
+    def _extract_sections_with_context(self, lines: List[str], error_indices: List[int]) -> List[str]:
         """
         Extract sections with context around error lines and merge overlapping ranges.
 
@@ -220,11 +213,7 @@ class LogErrorExtractor:
         return merged
 
 
-def extract_error_sections(
-    log_content: str,
-    lines_before: int = 50,
-    lines_after: int = 10
-) -> List[str]:
+def extract_error_sections(log_content: str, lines_before: int = 50, lines_after: int = 10) -> List[str]:
     """
     Convenience function to extract error sections from log content.
 
@@ -236,8 +225,5 @@ def extract_error_sections(
     Returns:
         List with single string element containing all error lines with context, joined by newlines
     """
-    extractor = LogErrorExtractor(
-        lines_before=lines_before,
-        lines_after=lines_after
-    )
+    extractor = LogErrorExtractor(lines_before=lines_before, lines_after=lines_after)
     return extractor.extract_error_sections(log_content)

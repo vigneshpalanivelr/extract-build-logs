@@ -7,11 +7,13 @@ handles pagination, and manages API authentication.
 Data Flow:
     Pipeline Event → extract_job_ids() → fetch_job_log() → GitLab API → Raw Log Content
 
-Module Dependencies:
-    - requests: For HTTP API calls
-    - logging: For operation logging
-    - config_loader: For GitLab credentials
-    - error_handler: For retry logic
+Can we import these at the top ?
+    import sys  # pylint: disable=import-outside-toplevel,unused-import
+    from config_loader import ConfigLoader  # pylint: disable=import-outside-toplevel,import-error
+src.log_fetcher.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import logging
@@ -55,10 +57,7 @@ class LogFetcher:
         """
         self.config = config
         self.session = requests.Session()
-        self.session.headers.update({
-            'PRIVATE-TOKEN': config.gitlab_token,
-            'Content-Type': 'application/json'
-        })
+        self.session.headers.update({'PRIVATE-TOKEN': config.gitlab_token, 'Content-Type': 'application/json'})
         self.base_url = f"{config.gitlab_url}/api/v4"
 
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
@@ -201,11 +200,7 @@ class LogFetcher:
 
         try:
             while True:
-                response = self.session.get(
-                    url,
-                    params={'page': page, 'per_page': per_page},
-                    timeout=30
-                )
+                response = self.session.get(url, params={'page': page, 'per_page': per_page}, timeout=30)
                 response.raise_for_status()
 
                 jobs = response.json()
@@ -228,11 +223,7 @@ class LogFetcher:
             logger.error("Failed to fetch jobs for pipeline %s", pipeline_id)
             raise
 
-    def fetch_all_logs_for_pipeline(
-        self,
-        project_id: int,
-        pipeline_id: int
-    ) -> Dict[int, Dict[str, Any]]:
+    def fetch_all_logs_for_pipeline(self, project_id: int, pipeline_id: int) -> Dict[int, Dict[str, Any]]:
         """
         Fetch logs for all jobs in a pipeline.
 
@@ -270,16 +261,10 @@ class LogFetcher:
             job_id = job['id']
             try:
                 log_content = self.fetch_job_log(project_id, job_id)
-                all_logs[job_id] = {
-                    'details': job,
-                    'log': log_content
-                }
+                all_logs[job_id] = {'details': job, 'log': log_content}
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
-                all_logs[job_id] = {
-                    'details': job,
-                    'log': f"[Error fetching log: {str(e)}]"
-                }
+                all_logs[job_id] = {'details': job, 'log': f"[Error fetching log: {str(e)}]"}
 
         logger.info("Successfully fetched logs for %s jobs", len(all_logs))
         return all_logs

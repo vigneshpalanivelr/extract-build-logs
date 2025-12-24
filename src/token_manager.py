@@ -16,6 +16,11 @@ Token Claims:
   - iat: Issued at timestamp
   - exp: Expiration timestamp (default: 1 hour)
   - jti: JWT ID (unique token identifier)
+
+src.token_manager.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import uuid

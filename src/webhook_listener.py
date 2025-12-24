@@ -8,21 +8,16 @@ Data Flow:
     GitLab → POST /webhook → validate_webhook() → process_pipeline_event() →
     PipelineExtractor → LogFetcher → StorageManager → Disk Storage
 
-Module Dependencies:
-    - fastapi: Web server framework
-    - uvicorn: ASGI server
-    - logging: Application logging
-    - config_loader: Configuration management
-    - pipeline_extractor: Event parsing
-    - log_fetcher: GitLab API interaction
-    - storage_manager: Log persistence
-    - error_handler: Error handling and retries
-
 Server Architecture:
     - FastAPI application listening on configured port (default: 8000)
     - Single webhook endpoint: POST /webhook
     - Optional webhook secret validation
     - Background task processing
+
+src.token_manager.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 # pylint: disable=too-many-lines
 
@@ -75,8 +70,7 @@ app = FastAPI(
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     """
-    Middleware to log HTTP requests in our custom format.
-    Replaces Uvicorn's default access logger.
+    Middleware to log HTTP requests in our custom format. Replaces Uvicorn's default access logger.
     """
     start_time = time.time()
 
@@ -151,9 +145,7 @@ def init_app():
         logger.info("GitLab Pipeline Log Extractor - Initializing")
         logger.info("=" * 70)
 
-        logger.info("Configuration loaded successfully", extra={
-            'operation': 'config_load'
-        })
+        logger.info("Configuration loaded successfully", extra={'operation': 'config_load'})
         logger.info("GitLab URL: %s", config.gitlab_url)
         logger.info("Webhook Port: %s", config.webhook_port)
         logger.debug("Log Output Directory: %s", config.log_output_dir)
@@ -251,8 +243,7 @@ def validate_webhook_secret(_payload: bytes, signature: Optional[str]) -> bool:
         payload (bytes): Raw request body
         signature (Optional[str]): X-Gitlab-Token header value
 
-    Returns:
-        bool: True if validation passes or no secret is configured
+    Returns: bool: True if validation passes or no secret is configured
 
     GitLab sends the token in the X-Gitlab-Token header.
     """
@@ -277,12 +268,8 @@ def should_save_pipeline_logs(pipeline_info: Dict[str, Any]) -> bool:
     """
     Determine if logs should be saved for this pipeline based on filtering config.
 
-    Args:
-        pipeline_info: Pipeline information dictionary
-
-    Returns:
-        bool: True if logs should be saved
-
+    Args:    pipeline_info: Pipeline information dictionary
+    Returns: bool: True if logs should be saved
     Checks:
         1. Pipeline status filter (LOG_SAVE_PIPELINE_STATUS)
         2. Project whitelist (LOG_SAVE_PROJECTS)
@@ -352,9 +339,7 @@ def should_save_job_log(job_details: Dict[str, Any], pipeline_info: Dict[str, An
         job_details: Job information dictionary
         pipeline_info: Pipeline information dictionary
 
-    Returns:
-        bool: True if job log should be saved
-
+    Returns: bool: True if job log should be saved
     Checks:
         1. Job status filter (LOG_SAVE_JOB_STATUS)
     """
@@ -387,10 +372,7 @@ def should_save_job_log(job_details: Dict[str, Any], pipeline_info: Dict[str, An
 async def health_check():
     """
     Health check endpoint.
-
-    Returns:
-        JSON response with server status
-
+    Returns: JSON response with server status
     Example Response:
         {
             "status": "healthy",
@@ -398,11 +380,7 @@ async def health_check():
             "version": "1.0.0"
         }
     """
-    return {
-        "status": "healthy",
-        "service": "gitlab-log-extractor",
-        "version": "1.0.0"
-    }
+    return {"status": "healthy", "service": "gitlab-log-extractor", "version": "1.0.0"}
 
 
 @app.post('/api/token')
@@ -459,23 +437,14 @@ async def generate_token(request: Request):
         expires_in = body.get('expires_in', 60)
 
         if not subject:
-            raise HTTPException(
-                status_code=400,
-                detail="Missing required field: subject"
-            )
+            raise HTTPException(status_code=400, detail="Missing required field: subject")
 
         # Validate expires_in
         if not isinstance(expires_in, int) or expires_in < 1 or expires_in > 1440:
-            raise HTTPException(
-                status_code=400,
-                detail="expires_in must be an integer between 1 and 1440 minutes"
-            )
+            raise HTTPException(status_code=400, detail="expires_in must be an integer between 1 and 1440 minutes")
 
         # Generate token
-        token = token_manager.generate_token(
-            subject=subject,
-            expires_in_minutes=expires_in
-        )
+        token = token_manager.generate_token(subject=subject, expires_in_minutes=expires_in)
 
         logger.info("Generated JWT token for subject: %s", subject, extra={
             'operation': 'token_generation',
@@ -483,21 +452,13 @@ async def generate_token(request: Request):
             'expires_in': expires_in
         })
 
-        return {
-            "token": token,
-            "subject": subject,
-            "expires_in": expires_in
-        }
+        return {"token": token, "subject": subject, "expires_in": expires_in}
 
     except ValueError as e:
-        logger.warning("Invalid token request: %s", str(e), extra={
-            'operation': 'token_generation_error'
-        })
+        logger.warning("Invalid token request: %s", str(e), extra={'operation': 'token_generation_error'})
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.error("Token generation failed: %s", str(e), extra={
-            'operation': 'token_generation_error'
-        })
+        logger.error("Token generation failed: %s", str(e), extra={'operation': 'token_generation_error'})
         raise HTTPException(status_code=500, detail="Token generation failed") from e
 
 
@@ -551,10 +512,7 @@ async def webhook_gitlab_handler(
     client_host = request.client.host if request.client else "unknown"
 
     # Log webhook received
-    logger.info("Webhook received", extra={
-        'event_type': x_gitlab_event or 'unknown',
-        'source_ip': client_host
-    })
+    logger.info("Webhook received", extra={'event_type': x_gitlab_event or 'unknown', 'source_ip': client_host})
 
     # Access log
     access_logger.info("Webhook request", extra={
@@ -570,33 +528,19 @@ async def webhook_gitlab_handler(
 
         # Validate webhook secret
         if not validate_webhook_secret(body, x_gitlab_token):
-            logger.warning("Webhook authentication failed", extra={
-                'source_ip': client_host,
-                'reason': 'invalid_token'
-            })
-            access_logger.warning("Authentication failed", extra={
-                'source_ip': client_host,
-                'event_type': x_gitlab_event or 'unknown'
-            })
-            raise HTTPException(
-                status_code=401,
-                detail={"status": "error", "message": "Authentication failed"}
-            )
+            logger.warning("Webhook authentication failed",
+                           extra={'source_ip': client_host, 'reason': 'invalid_token'})
+            access_logger.warning("Authentication failed",
+                                  extra={'source_ip': client_host, 'event_type': x_gitlab_event or 'unknown'})
+            raise HTTPException(status_code=401, detail={"status": "error", "message": "Authentication failed"})
 
         logger.debug("Webhook authentication successful")
 
         # Check event type
         if x_gitlab_event != 'Pipeline Hook':
-            logger.info("Ignoring non-pipeline event", extra={
-                'event_type': x_gitlab_event,
-                'source_ip': client_host
-            })
+            logger.info("Ignoring non-pipeline event", extra={'event_type': x_gitlab_event, 'source_ip': client_host})
             # Track ignored request
-            monitor.track_request(
-                status=RequestStatus.IGNORED,
-                event_type=x_gitlab_event,
-                client_ip=client_host
-            )
+            monitor.track_request(status=RequestStatus.IGNORED, event_type=x_gitlab_event, client_ip=client_host)
 
             duration_ms = int((time.time() - start_time) * 1000)
             access_logger.info("Request ignored", extra={
@@ -616,20 +560,11 @@ async def webhook_gitlab_handler(
             payload = await request.json()
             if not payload:
                 logger.error("Empty or invalid JSON payload")
-                raise HTTPException(
-                    status_code=400,
-                    detail={"status": "error", "message": "Invalid JSON payload"}
-                )
+                raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid JSON payload"})
             logger.debug("JSON payload parsed successfully")
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to parse JSON payload", extra={
-                'error_type': type(e).__name__,
-                'error': str(e)
-            })
-            raise HTTPException(
-                status_code=400,
-                detail={"status": "error", "message": "Failed to parse JSON"}
-            ) from e
+            logger.error("Failed to parse JSON payload", extra={'error_type': type(e).__name__, 'error': str(e)})
+            raise HTTPException(status_code=400, detail={"status": "error", "message": "Failed to parse JSON"}) from e
 
         # Extract pipeline information
         try:
@@ -738,10 +673,9 @@ async def webhook_gitlab_handler(
             }
 
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.error("Failed to extract pipeline info", extra={
-                'error_type': type(e).__name__,
-                'error': str(e)
-            }, exc_info=True)
+            logger.error("Failed to extract pipeline info",
+                         extra={'error_type': type(e).__name__, 'error': str(e)},
+                         exc_info=True)
             raise HTTPException(
                 status_code=500,
                 detail={"status": "error", "message": f"Failed to extract pipeline info: {str(e)}"}
@@ -818,10 +752,7 @@ async def webhook_jenkins_handler(
     start_time = time.time()
     client_host = request.client.host if request.client else "unknown"
 
-    logger.info("Jenkins webhook received", extra={
-        'source_ip': client_host,
-        'source': 'jenkins'
-    })
+    logger.info("Jenkins webhook received", extra={'source_ip': client_host, 'source': 'jenkins'})
 
     try:
         # Check if Jenkins is enabled
@@ -840,31 +771,19 @@ async def webhook_jenkins_handler(
         if config.jenkins_webhook_secret:
             if not x_jenkins_token:
                 logger.warning("Jenkins webhook secret configured but no token provided")
-                raise HTTPException(
-                    status_code=401,
-                    detail={"status": "error", "message": "Authentication required"}
-                )
+                raise HTTPException(status_code=401, detail={"status": "error", "message": "Authentication required"})
             if not hmac.compare_digest(x_jenkins_token, config.jenkins_webhook_secret):
                 logger.warning("Jenkins webhook authentication failed")
-                raise HTTPException(
-                    status_code=401,
-                    detail={"status": "error", "message": "Authentication failed"}
-                )
+                raise HTTPException(status_code=401, detail={"status": "error", "message": "Authentication failed"})
 
         # Parse JSON payload
         try:
             payload = await request.json()
             if not payload:
-                raise HTTPException(
-                    status_code=400,
-                    detail={"status": "error", "message": "Invalid JSON payload"}
-                )
+                raise HTTPException(status_code=400, detail={"status": "error", "message": "Invalid JSON payload"})
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.error("Failed to parse JSON payload: %s", e)
-            raise HTTPException(
-                status_code=400,
-                detail={"status": "error", "message": "Failed to parse JSON"}
-            ) from e
+            raise HTTPException(status_code=400, detail={"status": "error", "message": "Failed to parse JSON"}) from e
 
         # Extract build information
         try:
@@ -876,12 +795,7 @@ async def webhook_jenkins_handler(
             logger.info(
                 "Jenkins build extracted: %s #%s - %s",
                 job_name, build_number, status,
-                extra={
-                    'job_name': job_name,
-                    'build_number': build_number,
-                    'status': status,
-                    'source': 'jenkins'
-                }
+                extra={'job_name': job_name, 'build_number': build_number, 'status': status, 'source': 'jenkins'}
             )
 
             # Track request in monitoring
@@ -893,22 +807,13 @@ async def webhook_jenkins_handler(
             )
 
             # Queue background processing
-            background_tasks.add_task(
-                process_jenkins_build,
-                build_info,
-                db_request_id,
-                req_id
-            )
+            background_tasks.add_task(process_jenkins_build, build_info, db_request_id, req_id)
 
             duration_ms = int((time.time() - start_time) * 1000)
             logger.info(
                 "Jenkins build queued for processing: %s #%s",
                 job_name, build_number,
-                extra={
-                    'job_name': job_name,
-                    'build_number': build_number,
-                    'duration_ms': duration_ms
-                }
+                extra={'job_name': job_name, 'build_number': build_number, 'duration_ms': duration_ms}
             )
 
             return {
@@ -1210,16 +1115,10 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             job_id = job['id']
             try:
                 log_content = log_fetcher.fetch_job_log(project_id, job_id)
-                all_logs[job_id] = {
-                    'details': job,
-                    'log': log_content
-                }
+                all_logs[job_id] = {'details': job, 'log': log_content}
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
-                all_logs[job_id] = {
-                    'details': job,
-                    'log': f"[Error fetching log: {str(e)}]"
-                }
+                all_logs[job_id] = {'details': job, 'log': f"[Error fetching log: {str(e)}]"}
 
         fetch_duration_ms = int((time.time() - fetch_start) * 1000)
 
@@ -1466,10 +1365,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
 async def stats():
     """
     Get storage statistics.
-
-    Returns:
-        JSON response with storage statistics
-
+    Returns: JSON response with storage statistics
     Example Response:
         {
             "total_projects": 5,
@@ -1483,23 +1379,15 @@ async def stats():
         return storage_stats
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get storage stats: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "error", "message": str(e)}
-        ) from e
+        raise HTTPException(status_code=500, detail={"status": "error", "message": str(e)}) from e
 
 
 @app.get('/monitor/summary')
 async def monitor_summary(hours: int = Query(24, description="Number of hours to include")):
     """
     Get monitoring summary statistics.
-
-    Args:
-        hours (int): Number of hours to include in summary (default: 24)
-
-    Returns:
-        JSON response with monitoring statistics
-
+    Args:    hours (int): Number of hours to include in summary (default: 24)
+    Returns: JSON response with monitoring statistics
     Example Response:
         {
             "time_period_hours": 24,
@@ -1525,54 +1413,37 @@ async def monitor_summary(hours: int = Query(24, description="Number of hours to
         return summary
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get monitor summary: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "error", "message": str(e)}
-        ) from e
+        raise HTTPException(status_code=500, detail={"status": "error", "message": str(e)}) from e
 
 
 @app.get('/monitor/recent')
 async def monitor_recent(limit: int = Query(50, description="Maximum number of requests")):
     """
     Get recent pipeline requests.
-
-    Args:
-        limit (int): Maximum number of requests to return (default: 50)
-
-    Returns:
-        JSON response with recent requests
+    Args:    limit (int): Maximum number of requests to return (default: 50)
+    Returns: JSON response with recent requests
     """
     try:
         requests = monitor.get_recent_requests(limit=limit)
         return {"requests": requests, "count": len(requests)}
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get recent requests: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "error", "message": str(e)}
-        ) from e
+        raise HTTPException(status_code=500, detail={"status": "error", "message": str(e)}) from e
 
 
 @app.get('/monitor/pipeline/{pipeline_id}')
 async def monitor_pipeline(pipeline_id: int):
     """
     Get all requests for a specific pipeline.
-
-    Args:
-        pipeline_id (int): Pipeline ID
-
-    Returns:
-        JSON response with pipeline requests
+    Args:    pipeline_id (int): Pipeline ID
+    Returns: JSON response with pipeline requests
     """
     try:
         requests = monitor.get_pipeline_requests(pipeline_id)
         return {"pipeline_id": pipeline_id, "requests": requests, "count": len(requests)}
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to get pipeline requests: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "error", "message": str(e)}
-        ) from e
+        raise HTTPException(status_code=500, detail={"status": "error", "message": str(e)}) from e
 
 
 @app.get('/monitor/export/csv')
@@ -1581,12 +1452,8 @@ async def monitor_export_csv(
 ):
     """
     Export monitoring data to CSV file.
-
-    Args:
-        hours (Optional[int]): Only export requests from last N hours (None = all)
-
-    Returns:
-        CSV file download
+    Args:    hours (Optional[int]): Only export requests from last N hours (None = all)
+    Returns: CSV file download
     """
     try:
         # Create temporary CSV file
@@ -1604,29 +1471,18 @@ async def monitor_export_csv(
         )
     except Exception as e:  # pylint: disable=broad-exception-caught
         logger.error("Failed to export CSV: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail={"status": "error", "message": str(e)}
-        ) from e
+        raise HTTPException(status_code=500, detail={"status": "error", "message": str(e)}) from e
 
 
 @app.on_event("startup")
 async def startup_event():
-    """
-    FastAPI startup event handler.
-
-    Initializes application components when the server starts.
-    """
+    """FastAPI startup event handler. Initializes application components when the server starts"""
     init_app()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """
-    FastAPI shutdown event handler.
-
-    Performs cleanup when the server stops.
-    """
+    """FastAPI shutdown event handler. Performs cleanup when the server stops"""
     if log_fetcher:
         log_fetcher.close()
     if monitor:
@@ -1635,11 +1491,7 @@ async def shutdown_event():
 
 
 def main():
-    """
-    Main entry point for the application.
-
-    Initializes the application and starts the FastAPI server with uvicorn.
-    """
+    """Main entry point for the application. Initializes the application and starts the FastAPI server with uvicorn."""
     logger.info("=" * 60)
     logger.info("GitLab Pipeline Log Extraction System")
     logger.info("=" * 60)
@@ -1652,9 +1504,6 @@ def main():
     logger.info("Press Ctrl+C to stop")
 
     try:
-        # Configure uvicorn to use our custom logging
-        # access_log=False disables Uvicorn's default access logger
-        # We use our custom middleware instead
         uvicorn.run(
             app,
             host='0.0.0.0',

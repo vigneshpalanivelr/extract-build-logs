@@ -8,12 +8,10 @@ for easy retrieval and analysis.
 Data Flow:
     Log Data + Metadata → save_log() → File System (organized directory structure)
 
-Module Dependencies:
-    - os: For file system operations
-    - json: For metadata serialization
-    - datetime: For timestamps
-    - pathlib: For path manipulation
-    - logging: For operation logging
+src.storage_manager.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import json

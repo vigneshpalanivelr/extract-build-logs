@@ -664,6 +664,13 @@ logs/project_123/pipeline_789/metadata.json
 ### Prerequisites
 
 - Python 3.8 or higher
+```
+sudo apt update
+sudo apt upgrade
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt install python3.8 python3.8-venv python3.8-distutils
+sudo apt install docker.io
+```
 - GitLab instance (GitLab.com or self-hosted)
 - GitLab Personal Access Token with `api` scope
 - Network connectivity to GitLab API

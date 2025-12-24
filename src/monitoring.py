@@ -17,12 +17,12 @@ Features:
     - Real-time statistics
     - Supports both PostgreSQL and SQLite
 
-Module Dependencies:
-    - psycopg2: For PostgreSQL (production)
-    - sqlite3: For SQLite (fallback)
-    - csv: For CSV export
-    - datetime: For timestamps
-    - typing: For type hints
+We don't need postgres DB implementation, can you remove that across all the scripts
+sqlite DB implemetation is enough, sometimes when i step the container sqlite is crashing, can you fix it
+src.monitoring.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import csv
@@ -50,12 +50,12 @@ logger = logging.getLogger(__name__)
 class RequestStatus(Enum):
     """Status of pipeline processing request."""
     RECEIVED = "received"           # Webhook received
-    QUEUED = "queued"              # Queued for processing
+    QUEUED = "queued"               # Queued for processing
     PROCESSING = "processing"       # Currently processing
     COMPLETED = "completed"         # Successfully completed
-    FAILED = "failed"              # Failed with error
-    SKIPPED = "skipped"            # Skipped (not ready)
-    IGNORED = "ignored"            # Ignored (wrong event type)
+    FAILED = "failed"               # Failed with error
+    SKIPPED = "skipped"             # Skipped (not ready)
+    IGNORED = "ignored"             # Ignored (wrong event type)
 
 
 class PipelineMonitor:

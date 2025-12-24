@@ -46,7 +46,7 @@ http://your-server-ip:8000/webhook
 ```
 
 **Examples:**
-- Production: `https://logs.company.com/webhook`
+- Production: `https://logs.internal.com/webhook`
 - Local (with ngrok): `https://abc123.ngrok.io/webhook`
 - Local network: `http://192.168.1.100:8000/webhook`
 

@@ -7,11 +7,9 @@ It retrieves console logs, stage information (Blue Ocean API), and build metadat
 Data Flow:
     Jenkins Build → REST API → fetch_console_log() / fetch_stages() → Log Data
 
-Module Dependencies:
-    - requests: For HTTP requests to Jenkins API
-    - logging: For operation logging
-    - config_loader: For Jenkins configuration
-    - error_handler: For retry logic
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import logging

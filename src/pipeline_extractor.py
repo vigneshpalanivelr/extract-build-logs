@@ -7,9 +7,10 @@ This module analyzes GitLab webhook events and pipeline data to identify pipelin
 Data Flow:
     Webhook Event → extract_pipeline_info() → Pipeline Type & Metadata → Log Fetcher
 
-Module Dependencies:
-    - logging: For operation logging
-    - typing: For type hints
+src.pipeline_extractor.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import logging
@@ -134,10 +135,7 @@ class PipelineExtractor:
         return pipeline_info
 
     @staticmethod
-    def _determine_pipeline_type(
-        object_attrs: Dict[str, Any],
-        webhook_payload: Dict[str, Any]
-    ) -> PipelineType:
+    def _determine_pipeline_type(object_attrs: Dict[str, Any], webhook_payload: Dict[str, Any]) -> PipelineType:
         """
         Determine the type of pipeline from webhook data.
 

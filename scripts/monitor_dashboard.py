@@ -139,35 +139,11 @@ Examples:
         """
     )
 
-    parser.add_argument(
-        '--db',
-        default='./logs/monitoring.db',
-        help='Path to monitoring database (default: ./logs/monitoring.db)'
-    )
-    parser.add_argument(
-        '--hours',
-        type=int,
-        default=24,
-        help='Number of hours to include in summary (default: 24)'
-    )
-    parser.add_argument(
-        '--recent',
-        type=int,
-        metavar='N',
-        help='Show N most recent requests'
-    )
-    parser.add_argument(
-        '--pipeline',
-        type=int,
-        metavar='ID',
-        help='Show details for specific pipeline ID'
-    )
-    parser.add_argument(
-        '--export',
-        metavar='FILE',
-        help='Export data to CSV file'
-    )
-
+    parser.add_argument('--db', default='./logs/monitoring.db', help='Path to monitoring database (default: ./logs/monitoring.db)')
+    parser.add_argument('--hours', type=int, default=24, help='Number of hours to include in summary (default: 24)')
+    parser.add_argument('--recent', type=int, metavar='N', help='Show N most recent requests')
+    parser.add_argument('--pipeline', type=int, metavar='ID', help='Show details for specific pipeline ID')
+    parser.add_argument('--export', metavar='FILE', help='Export data to CSV file')
     args = parser.parse_args()
 
     # Check if database exists
