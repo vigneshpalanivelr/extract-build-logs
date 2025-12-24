@@ -8,13 +8,17 @@ a configured API for centralized storage and processing.
 Data Flow:
     Pipeline Info + All Logs → format_payload() → POST to API → Log Response
 
-Module Dependencies:
-    - requests: For HTTP POST requests
-    - json: For JSON serialization
-    - logging: For operation logging
-    - time: For duration tracking
-    - config_loader: For API configuration
-    - error_handler: For retry logic
+Questions:
+src.api_poster.py
+1. import try-catch needed ? if not needed can we remove "raise ImportError" block or function
+2. requests.exceptions.RequestException its loo lengthy can we import RequestException separately it might redude the line length
+3. Remove email notifications and its refernces (across all script)
+   - Initialize email sender
+   - email sender script
+src.api_poster.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import json
@@ -44,10 +48,8 @@ logger = logging.getLogger(__name__)
 class ApiPoster:
     """
     Posts pipeline logs to external API endpoint.
-
-    This class formats pipeline logs and job data into JSON payloads
-    and POSTs them to a configured API endpoint with authentication
-    and retry support.
+    This class formats pipeline logs and job data into JSON payloads and POSTs them to a configured API endpoint with
+    authentication and retry support.
 
     Attributes:
         config (Config): Application configuration
@@ -107,11 +109,7 @@ class ApiPoster:
         logger.info("API Poster initialized with endpoint: %s", config.api_post_url)
         logger.debug("API log file: %s", self.api_log_file)
 
-    def format_payload(
-        self,
-        pipeline_info: Dict[str, Any],
-        all_logs: Dict[int, Dict[str, Any]]
-    ) -> Dict[str, Any]:
+    def format_payload(self, pipeline_info: Dict[str, Any], all_logs: Dict[int, Dict[str, Any]]) -> Dict[str, Any]:
         """
         Format pipeline and job data into simplified API payload.
 
@@ -138,34 +136,23 @@ class ApiPoster:
                 ]
             }
 
-        Note: error_lines are sanitized to ASCII-only (chars 32-126) to avoid
-              JSON encoding issues with special characters.
+        Note: error_lines are sanitized to ASCII-only to avoid JSON encoding issues with special characters.
         """
-        # Extract repository name (short form)
-        # "my-org/demo-repo" -> "demo-repo"
+        # Extract repository name (short form) "my-org/demo-repo" -> "demo-repo"
         project_name = pipeline_info.get('project_name', 'unknown')
         repo = project_name.split('/')[-1] if '/' in project_name else project_name
-
         # Extract branch
         branch = pipeline_info.get('ref', 'unknown')
-
         # Extract short commit SHA (first 7 characters)
         sha = pipeline_info.get('sha', '')
         commit = sha[:7] if sha else 'unknown'
+        # Build job_name str (all jobs)
+        job_names = ",".join(job_data.get("details", {}).get("name", "unknown") for job_data in all_logs.values())
 
-        # Build job_name list (all jobs)
-        job_names = []
-        for job_data in all_logs.values():
-            job_details = job_data.get('details', {})
-            job_name = job_details.get('name', 'unknown')
-            job_names.append(job_name)
-
-        # Extract triggered_by
-        # Priority: user.username -> user.name -> source
+        # Extract triggered_by Priority: user.username -> user.name -> source
         user_info = pipeline_info.get('user', {})
         if isinstance(user_info, dict):
             triggered_by = user_info.get('username') or user_info.get('name')
-            # Add @internal.com suffix to username
             if triggered_by:
                 triggered_by = f"{triggered_by}@internal.com"
         else:
@@ -202,10 +189,7 @@ class ApiPoster:
                         extra={'job_name': step_name, 'error_line_count': line_count}
                     )
 
-                failed_steps.append({
-                    "step_name": step_name,
-                    "error_lines": error_lines
-                })
+                failed_steps.append({"step_name": step_name, "error_lines": error_lines})
 
         # Use pipeline URL provided by GitLab webhook
         pipeline_url = pipeline_info.get('pipeline_url')
@@ -250,11 +234,7 @@ class ApiPoster:
             logger.info("Fetching JWT token from BFA server: %s", token_url)
 
             # Make request to BFA server
-            response = requests.post(
-                token_url,
-                json={"subject": subject, "expires_in": 60},
-                timeout=10
-            )
+            response = requests.post(token_url, json={"subject": subject, "expires_in": 60}, timeout=10)
             response.raise_for_status()
 
             # Parse response
@@ -517,16 +497,10 @@ class ApiPoster:
         except IOError as e:
             logger.error("Failed to write to API log file: %s", e)
 
-    def post_pipeline_logs(
-        self,
-        pipeline_info: Dict[str, Any],
-        all_logs: Dict[int, Dict[str, Any]]
-    ) -> bool:
+    def post_pipeline_logs(self, pipeline_info: Dict[str, Any], all_logs: Dict[int, Dict[str, Any]]) -> bool:
         """
         Post pipeline logs to API endpoint.
-
-        This is the main method to call for posting pipeline logs.
-        It handles formatting, posting, retrying, and logging.
+        This method to call for posting pipeline logs. It handles formatting, posting, retrying, and logging.
 
         Args:
             pipeline_info (Dict[str, Any]): Pipeline metadata
@@ -604,10 +578,7 @@ class ApiPoster:
                          json.dumps(pipeline_info, indent=2, default=str))
             logger.error("Number of jobs in all_logs: %s", len(all_logs))
 
-            self._log_api_request(
-                pipeline_id, project_id, None, "", 0,
-                error=f"Payload formatting failed: {str(e)}"
-            )
+            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Payload formatting failed: {str(e)}")
             return False
 
         # POST to API (with retry if enabled)
@@ -644,10 +615,7 @@ class ApiPoster:
             )
 
             # Log to file
-            self._log_api_request(
-                pipeline_id, project_id, status_code,
-                response_body, duration_ms
-            )
+            self._log_api_request(pipeline_id, project_id, status_code, response_body, duration_ms)
 
             # Send email notifications if enabled
             if self.email_sender:
@@ -693,10 +661,7 @@ class ApiPoster:
             # Log the payload that failed after all retries
             logger.error("Payload that failed after all retries:\n%s", json.dumps(payload, indent=2))
 
-            self._log_api_request(
-                pipeline_id, project_id, None, "", 0,
-                error=f"Retry exhausted: {str(e)}"
-            )
+            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Retry exhausted: {str(e)}")
 
             # Send failure email to DevOps
             if self.email_sender:
@@ -733,10 +698,7 @@ class ApiPoster:
             # Log the payload that caused the unexpected error
             logger.error("Payload that caused unexpected error:\n%s", json.dumps(payload, indent=2))
 
-            self._log_api_request(
-                pipeline_id, project_id, None, "", 0,
-                error=f"{type(e).__name__}: {str(e)}"
-            )
+            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"{type(e).__name__}: {str(e)}")
 
             # Send failure email to DevOps
             if self.email_sender:
@@ -754,7 +716,6 @@ class ApiPoster:
     def post_jenkins_logs(self, jenkins_payload: Dict[str, Any]) -> bool:
         """
         Post Jenkins build logs to the API endpoint.
-
         Formats and sends Jenkins build data including stages and parallel blocks.
 
         Args:

@@ -224,12 +224,12 @@ class EmailSender:
                 # If fix is a dict, try to extract text content
                 # Common fields: 'text', 'content', 'description', 'solution'
                 fix_text = (
-                    fix.get('text') or
-                    fix.get('content') or
-                    fix.get('description') or
-                    fix.get('solution') or
-                    fix.get('fix') or
-                    str(fix)  # Fallback to string representation
+                    fix.get('text')
+                    or fix.get('content')
+                    or fix.get('description')
+                    or fix.get('solution')
+                    or fix.get('fix')
+                    or str(fix)  # Fallback to string representation
                 )
             else:
                 fix_text = str(fix) if fix else 'No fix provided'

@@ -8,10 +8,9 @@ Data Flow:
     Webhook Payload → extract_webhook_data() → Job Info
     Console Log + Blue Ocean Data → parse_console_log() → Structured Stages
 
-Module Dependencies:
-    - re: For regex pattern matching in console logs
-    - typing: For type hints
-    - logging: For operation logging
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import re

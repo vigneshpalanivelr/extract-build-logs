@@ -4,107 +4,60 @@ stages:
   - coverage
   - build
 
-variables:
-  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
-  DOCKER_IMAGE_TAG: "$CI_COMMIT_SHORT_SHA"
-
-cache:
-  key: "${CI_COMMIT_REF_SLUG}"
-  paths:
-    - .cache/pip
-
-
-.python_base:
-  image: artifact.internal.com:9999/python:3.11-slim
-  tags:
-    - executor:dind-socket
-  before_script:
-    - python --version
-    - pip config set 'global.index-url' https://$ARTIFACTORY_USER:$ARTIFACTORY_PASS@artifact.internal.com/artifactory/api/pypi/pypi.org/simple
-    - pip install --trusted-host artifact.internal.com pylint  pytest pytest-cov
-    - pip install --upgrade pip --trusted-host artifact.internal.com -r requirements.txt
-
-# ============================================================================
-# LINT STAGE - Code Quality Checks
-# ============================================================================
 
 flake8:
+  image: artifactory.internal.com:9999/bfa-pre-built:latest
   stage: formatcheck
-  image: git.internal.com:9999/repo/flake8-py37
   script:
     - flake8 --max-line-length 120
   allow_failure: true
 
 pylint:
-  extends: .python_base
+  image: artifactory.internal.com:9999/bfa-pre-built:latest
   stage: formatcheck
   script:
-    - echo "Running pylint on entire project"
     - pylint src/ --max-line-length=120
   allow_failure: true
 
-# ============================================================================
-# TEST STAGE - Unit Tests
-# ============================================================================
-
 pytest:
-  extends: .python_base
+  image: artifactory.internal.com:9999/bfa-pre-built:latest
   stage: test
   script:
-    - pytest tests/ --ignore=tests/test_manage_container.py -v --tb=short
+    - pytest tests/ -v --tb=short --cov=src --cov-report=term-missing --cov-fail-under=90
   allow_failure: true
 
-# ============================================================================
-# COVERAGE STAGE - Code Coverage Analysis
-# ============================================================================
-
-coverage:
-  extends: .python_base
-  stage: coverage
-  script:
-    - pip install pytest pytest-cov
-    - pytest tests/ --ignore=tests/test_manage_container.py
-        --cov=src
-        --cov-report=term-missing
-        --cov-report=html:coverage_html
-        --cov-report=xml:coverage.xml
-        --junitxml=report.xml
-    - coverage report
-    - coverage xml
-  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
-  allow_failure: true
-
-# ============================================================================
-# BUILD STAGE - Docker Image Build
-# ============================================================================
 
 build-docker-image:
   stage: build
   image: docker:24-dind
   services:
-    - docker:24-dind
+    - name: docker:24-dind
+      command: ["--registry-mirror", "https://artifactory.internal.com:9999/"]
   tags:
     - executor:dind-socket
   variables:
     DOCKER_TLS_CERTDIR: "/certs"
-    # Construct registry image path if CI_REGISTRY_IMAGE is not set
-    # Uses: <registry>/<namespace>/<project>
-    REGISTRY_IMAGE: "${CI_REGISTRY_IMAGE:-$CI_REGISTRY/$CI_PROJECT_PATH}"
-    IMAGE_TAG: $REGISTRY_IMAGE:$CI_COMMIT_REF_SLUG
-    LATEST_TAG: $REGISTRY_IMAGE:latest
-  before_script:
-    - echo "Registry image will be $REGISTRY_IMAGE"
-    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+    # Use branch name for tagging instead of commit SHA
+    IMAGE_TAG: ${CI_PROJECT_PATH}:${CI_COMMIT_REF_NAME}
+    LATEST_TAG: ${CI_PROJECT_PATH}:latest
+    ARTIFACTORY_PUSH: "artifactory.internal.com:9999"
   script:
-    - echo "Building Docker image for branch $CI_COMMIT_REF_NAME"
-    - docker build -t $IMAGE_TAG -t $LATEST_TAG .
-    - echo "Pushing image with tag $CI_COMMIT_REF_SLUG"
-    - docker push $IMAGE_TAG
+    - export
+    - echo "Gitlab Registry ${CI_REGISTRY}"
+    - echo $CI_REGISTRY_PASSWORD | docker login -u ${CI_REGISTRY_USER} --password-stdin ${CI_REGISTRY}
+    - echo "Building Docker image for branch '${IMAGE_TAG}'"
+    - docker build -t "${ARTIFACTORY_PUSH}/${IMAGE_TAG}" -t "${ARTIFACTORY_PUSH}/${LATEST_TAG}" .
+    #- docker build -t ${CI_REGISTRY}/${IMAGE_TAG} -t ${CI_REGISTRY}/${LATEST_TAG} .
+    - docker login -u "$ARTIFACTORY_USER" -p "${ARTIFACTORY_PASSWORD}" "${ARTIFACTORY_PUSH}"
+    - docker push "${ARTIFACTORY_PUSH}/${IMAGE_TAG}"
+    #- echo "Pushing image with branch tag ${CI_REGISTRY}/${IMAGE_TAG}"
+    #- docker push ${CI_REGISTRY}/${IMAGE_TAG}
+    #- docker push ${CI_REGISTRY}/${LATEST_TAG}
     # Only push 'latest' tag from main/master branch
     - |
-      if [ "$CI_COMMIT_REF_NAME" = "main" ] || [ "$CI_COMMIT_REF_NAME" = "master" ]; then
-        echo "Pushing latest tag from $CI_COMMIT_REF_NAME branch"
-        docker push $LATEST_TAG
+      if [ "${CI_COMMIT_REF_NAME}" = "main" ] || [ "${CI_COMMIT_REF_NAME}" = "master" ]; then
+        echo "Pushing image with latest tag from ${CI_COMMIT_REF_NAME} branch"
+        docker push "${ARTIFACTORY_PUSH}/${IMAGE_TAG}"
       else
         echo "Skipping latest tag push (not on main/master branch)"
       fi

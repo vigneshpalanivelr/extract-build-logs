@@ -73,10 +73,7 @@ EXIT_CANCELLED = 4
 console = Console()
 
 
-# ============================================================================
 # Configuration Management (merged from show_config.py)
-# ============================================================================
-
 def format_bytes(bytes_val: int) -> str:
     """
     Format bytes to human-readable size.
@@ -595,10 +592,7 @@ def confirm_action(message: str = "Continue with this configuration?", auto_yes:
             return False
 
 
-# ============================================================================
 # Docker Operations
-# ============================================================================
-
 def get_docker_client() -> Optional[docker.DockerClient]:
     """
     Get Docker client, return None if Docker is not available.
@@ -753,6 +747,21 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             restart_policy={"Name": "unless-stopped"}
         )
         console.print("[bold green]✓ Container started successfully![/bold green]")
+
+        # Show shell equivalent
+        logs_path = Path.cwd() / LOGS_DIR
+        env_path = Path.cwd() / ENV_FILE
+        shell_cmd = (
+            f"docker run -d --name {CONTAINER_NAME} "
+            f"-p {port}:{port} "
+            f"-v {logs_path}:/app/logs:rw "
+            f"-v {env_path}:/app/.env:ro "
+            f"--restart unless-stopped "
+            f"{IMAGE_NAME}"
+        )
+        console.print("[dim]Shell equivalent:[/dim]")
+        console.print(f"[dim]{shell_cmd}[/dim]\n")
+
         show_endpoints(port)
         return True
     except ImageNotFound:
@@ -1071,10 +1080,7 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         return False
 
 
-# ============================================================================
 # Monitoring Operations
-# ============================================================================
-
 def show_monitor(client: docker.DockerClient, args: List[str]) -> bool:
     """
     Show monitoring dashboard.
@@ -1138,10 +1144,7 @@ def export_monitoring_data(filename: str = "monitoring_export.csv") -> bool:
         return False
 
 
-# ============================================================================
 # Testing Operations
-# ============================================================================
-
 def test_webhook() -> bool:
     """
     Send test webhook to container.
@@ -1212,10 +1215,7 @@ def test_webhook() -> bool:
         return False
 
 
-# ============================================================================
 # CLI Commands (argparse)
-# ============================================================================
-
 def cmd_config(args):
     """Display and validate configuration from .env file."""
 
@@ -1391,8 +1391,25 @@ def main():
     """Main CLI entry point using argparse."""
     parser = argparse.ArgumentParser(
         prog='manage_container.py',
-        description='GitLab Pipeline Log Extractor - Container Management Script'
+        description='GitLab Pipeline Log Extractor - Container Management Script',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s build                    # Build Docker image
+  %(prog)s start                    # Start container with confirmation
+  %(prog)s start --yes              # Start container without confirmation
+  %(prog)s logs                     # Follow logs in real-time
+  %(prog)s logs --no-follow         # Show logs without following
+  %(prog)s status                   # Show container status
+  %(prog)s monitor --hours 24       # Show monitoring dashboard
+  %(prog)s export data.csv          # Export monitoring data
+  %(prog)s test                     # Send test webhook
+  %(prog)s remove                   # Remove container/image (interactive)
+
+For more information, see OPERATIONS.md
+        """
     )
+
     parser.add_argument('--version', action='version', version='%(prog)s 2.0.0')
     subparsers = parser.add_subparsers(dest='command', help='Available commands', required=True)
 

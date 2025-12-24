@@ -8,9 +8,22 @@ log extraction application.
 Data Flow:
     Environment Variables → ConfigLoader.load() → Configuration Object → Other Modules
 
-Module Dependencies:
-    - os: For reading environment variables
-    - typing: For type hints
+src.config_loader.py
+what is @dataclass, mention that in doc string of class Config
+Can you organize the doc string of class Config to more readable
+---
+gitlab_url (str): GitLab instance URL (e.g., https://gitlab.com)
+gitlab_token (str): Private token for GitLab API authentication
+webhook_secret (Optional[str]): Secret token for webhook validation
+---
+gitlab_url     -> (str)           -> GitLab instance URL (e.g., https://gitlab.com)
+gitlab_token   -> (str)           -> Private token for GitLab API authentication
+webhook_secret -> (Optional[str]) -> Secret token for webhook validation
+---
+src.config_loader.py
+# Mention the script that are invoking this script
+- script1
+- script2
 """
 
 import os
@@ -94,7 +107,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
 class ConfigLoader:
     """
     Configuration loader and validator.
-
     This class is responsible for loading configuration from environment variables,
     validating required settings, and providing default values where appropriate.
 

@@ -2,7 +2,7 @@
 
 # Web Framework
 fastapi==0.109.0
-uvicorn[standard]==0.27.0
+uvicorn==0.27.1
 
 # HTTP Client for API calls
 requests==2.31.0
@@ -30,6 +30,6 @@ rich>=13.0.0  # Rich terminal output with colors, tables, and progress bars
 # Commented out: Not available for Python 3.8 without compilation
 # Application uses SQLite by default, PostgreSQL is optional
 
-# Code quality tools (for development and CI/CD)
-flake8==6.1.0           # Code style checker (Python 3.8 compatible)
-pylint==2.17.7          # Comprehensive linting (Python 3.8 compatible)
+# Code quality tools (for CI/CD only - not needed in Docker image)
+flake8==6.1.0           # Code style checker (downgraded for Python 3.8)
+pylint==2.17.6          # Comprehensive linting (downgraded for Python 3.8)
