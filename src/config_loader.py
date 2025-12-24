@@ -8,22 +8,8 @@ log extraction application.
 Data Flow:
     Environment Variables → ConfigLoader.load() → Configuration Object → Other Modules
 
-src.config_loader.py
-what is @dataclass, mention that in doc string of class Config
-Can you organize the doc string of class Config to more readable
----
-gitlab_url (str): GitLab instance URL (e.g., https://gitlab.com)
-gitlab_token (str): Private token for GitLab API authentication
-webhook_secret (Optional[str]): Secret token for webhook validation
----
-gitlab_url     -> (str)           -> GitLab instance URL (e.g., https://gitlab.com)
-gitlab_token   -> (str)           -> Private token for GitLab API authentication
-webhook_secret -> (Optional[str]) -> Secret token for webhook validation
----
-src.config_loader.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener, log_fetcher, jenkins_log_fetcher, api_poster
+Invokes: None
 """
 
 import os
@@ -36,39 +22,37 @@ class Config:  # pylint: disable=too-many-instance-attributes
     """
     Configuration data class holding all application settings.
 
+    @dataclass: Python decorator that auto-generates __init__(), __repr__(), and __eq__() methods
+                from class attributes, eliminating boilerplate code for data classes.
+
     Attributes:
-        gitlab_url (str): GitLab instance URL (e.g., https://gitlab.com)
-        gitlab_token (str): Private token for GitLab API authentication
-        webhook_port (int): Port for webhook listener server
-        webhook_secret (Optional[str]): Secret token for webhook validation
-        log_output_dir (str): Directory where logs will be stored
-        retry_attempts (int): Number of retry attempts for failed API calls
-        retry_delay (int): Delay in seconds between retry attempts
-        log_level (str): Logging level (DEBUG, INFO, WARNING, ERROR)
-        log_save_pipeline_status (List[str]): Which pipeline statuses to save logs for
-        log_save_projects (List[str]): Whitelist of project IDs to save logs for (empty = all)
-        log_exclude_projects (List[str]): Blacklist of project IDs to exclude from logging
-        log_save_job_status (List[str]): Which job statuses to save logs for
-        log_save_metadata_always (bool): Whether to save metadata even if logs are filtered out
-        api_post_enabled (bool): Enable API POST for pipeline logs
-        api_post_url (Optional[str]): API endpoint URL (auto-constructed from BFA_HOST)
-        api_post_timeout (int): Request timeout in seconds for API calls
-        api_post_retry_enabled (bool): Enable retry logic for failed API requests
-        api_post_save_to_file (bool): Also save to file when API posting is enabled
-        jenkins_enabled (bool): Enable Jenkins webhook support
-        jenkins_url (Optional[str]): Jenkins instance URL (e.g., https://jenkins.example.com)
-        jenkins_user (Optional[str]): Jenkins username for API authentication
-        jenkins_api_token (Optional[str]): Jenkins API token for authentication
-        jenkins_webhook_secret (Optional[str]): Secret token for Jenkins webhook validation
-        bfa_host (Optional[str]): BFA server hostname/IP (used to construct API endpoint)
-        bfa_secret_key (Optional[str]): Secret key for BFA JWT token generation (required for /api/token endpoint)
-        email_notifications_enabled (bool): Enable email notifications for API response processing
-        smtp_host (str): SMTP server hostname
-        smtp_port (int): SMTP server port
-        smtp_from_email (Optional[str]): Email address to send notifications from
-        devops_email (Optional[str]): DevOps team email address for failure notifications
-        error_context_lines_before (int): Number of log lines to include before error lines (default: 50)
-        error_context_lines_after (int): Number of log lines to include after error lines (default: 10)
+        gitlab_url                  -> (str)           -> GitLab instance URL
+        gitlab_token                -> (str)           -> GitLab API token
+        webhook_port                -> (int)           -> Webhook listener port
+        webhook_secret              -> (Optional[str]) -> Webhook validation secret
+        log_output_dir              -> (str)           -> Log storage directory
+        retry_attempts              -> (int)           -> API retry attempts
+        retry_delay                 -> (int)           -> Retry delay (seconds)
+        log_level                   -> (str)           -> Logging level
+        log_save_pipeline_status    -> (List[str])     -> Pipeline statuses to save
+        log_save_projects           -> (List[str])     -> Project IDs whitelist
+        log_exclude_projects        -> (List[str])     -> Project IDs blacklist
+        log_save_job_status         -> (List[str])     -> Job statuses to save
+        log_save_metadata_always    -> (bool)          -> Save metadata always
+        api_post_enabled            -> (bool)          -> Enable API posting
+        api_post_url                -> (Optional[str]) -> API endpoint URL
+        api_post_timeout            -> (int)           -> API timeout (seconds)
+        api_post_retry_enabled      -> (bool)          -> Enable API retry
+        api_post_save_to_file       -> (bool)          -> Save to file when posting
+        jenkins_enabled             -> (bool)          -> Enable Jenkins support
+        jenkins_url                 -> (Optional[str]) -> Jenkins instance URL
+        jenkins_user                -> (Optional[str]) -> Jenkins username
+        jenkins_api_token           -> (Optional[str]) -> Jenkins API token
+        jenkins_webhook_secret      -> (Optional[str]) -> Jenkins webhook secret
+        bfa_host                    -> (Optional[str]) -> BFA server hostname
+        bfa_secret_key              -> (Optional[str]) -> BFA JWT secret key
+        error_context_lines_before  -> (int)           -> Error context lines before
+        error_context_lines_after   -> (int)           -> Error context lines after
     """
     gitlab_url: str
     gitlab_token: str
@@ -95,11 +79,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
     jenkins_webhook_secret: Optional[str]
     bfa_host: Optional[str]
     bfa_secret_key: Optional[str]
-    email_notifications_enabled: bool
-    smtp_host: str
-    smtp_port: int
-    smtp_from_email: Optional[str]
-    devops_email: Optional[str]
     error_context_lines_before: int
     error_context_lines_after: int
 
@@ -208,15 +187,6 @@ class ConfigLoader:
         # Auto-construct API POST URL from BFA_HOST
         api_post_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else None
 
-        # Email notification configuration
-        email_notifications_enabled_str = os.getenv('EMAIL_NOTIFICATIONS_ENABLED', 'false').lower()
-        email_notifications_enabled = email_notifications_enabled_str in ['true', '1', 'yes', 'on']
-
-        smtp_host = os.getenv('SMTP_HOST', 'localhost')
-        smtp_port = int(os.getenv('SMTP_PORT', '25'))
-        smtp_from_email = os.getenv('SMTP_FROM_EMAIL')
-        devops_email = os.getenv('DEVOPS_EMAIL')
-
         # Error context extraction settings
         error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
         error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
@@ -248,15 +218,6 @@ class ConfigLoader:
             if not jenkins_api_token:
                 raise ValueError("JENKINS_API_TOKEN is required when JENKINS_ENABLED is true")
 
-        # Validate Email notification configuration
-        if email_notifications_enabled:
-            if not smtp_from_email:
-                raise ValueError("SMTP_FROM_EMAIL is required when EMAIL_NOTIFICATIONS_ENABLED is true")
-            if not devops_email:
-                raise ValueError("DEVOPS_EMAIL is required when EMAIL_NOTIFICATIONS_ENABLED is true")
-            if smtp_port < 1 or smtp_port > 65535:
-                raise ValueError(f"Invalid SMTP_PORT: {smtp_port}. Must be between 1 and 65535")
-
         return Config(
             gitlab_url=gitlab_url,
             gitlab_token=gitlab_token,
@@ -283,11 +244,6 @@ class ConfigLoader:
             jenkins_webhook_secret=jenkins_webhook_secret,
             bfa_host=bfa_host,
             bfa_secret_key=bfa_secret_key,
-            email_notifications_enabled=email_notifications_enabled,
-            smtp_host=smtp_host,
-            smtp_port=smtp_port,
-            smtp_from_email=smtp_from_email,
-            devops_email=devops_email,
             error_context_lines_before=error_context_lines_before,
             error_context_lines_after=error_context_lines_after
         )

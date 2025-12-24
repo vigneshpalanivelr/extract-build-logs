@@ -5,13 +5,11 @@ This module provides comprehensive logging configuration for the GitLab Pipeline
 Log Extraction System with the following features:
 
 - Pipe-delimited plain text format
-- Multiple log files (application, access, performance)
+- Application log file
 - Request ID correlation across all logs
 - Sensitive data masking (tokens, secrets)
 - Log rotation with size limits
-- DEBUG level logging
 - Console and file output
-- API endpoints for log querying
 
 Format:
 timestamp | level | logger | request_id | message | context
@@ -19,14 +17,8 @@ timestamp | level | logger | request_id | message | context
 Example:
 2024-01-01 10:15:30.123 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345 project_id=100
 
-Note: All logs including errors are kept in application.log to maintain context and traceability.
-
-We don't need below handlers
-- access_logger
-src.logging_config.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: None
 """
 
 import logging
@@ -197,7 +189,7 @@ class LoggingConfig:
     Centralized logging configuration manager.
 
     Sets up:
-    - Multiple log files (application, access, performance)
+    - Application log file
     - Console output
     - Log rotation
     - Request ID tracking
@@ -254,41 +246,6 @@ class LoggingConfig:
         app_handler.addFilter(SensitiveDataFilter())
         root_logger.addHandler(app_handler)
 
-        # 3. Access Log File - for webhook access logging
-        access_handler = logging.handlers.RotatingFileHandler(
-            filename=self.log_dir / 'access.log',
-            maxBytes=50 * 1024 * 1024,  # 50MB
-            backupCount=20,
-            encoding='utf-8'
-        )
-        access_handler.setLevel(logging.INFO)
-        access_handler.setFormatter(formatter)
-        access_handler.addFilter(RequestIdFilter())
-        access_handler.addFilter(SensitiveDataFilter())
-
-        # Access logger is separate
-        access_logger = logging.getLogger('access')  # pylint: disable=redefined-outer-name
-        access_logger.setLevel(logging.INFO)
-        access_logger.addHandler(access_handler)
-        access_logger.propagate = False  # Don't propagate to root
-
-        # 4. Performance Log File - for performance metrics
-        perf_handler = logging.handlers.RotatingFileHandler(
-            filename=self.log_dir / 'performance.log',
-            maxBytes=50 * 1024 * 1024,  # 50MB
-            backupCount=10,
-            encoding='utf-8'
-        )
-        perf_handler.setLevel(logging.INFO)
-        perf_handler.setFormatter(formatter)
-        perf_handler.addFilter(RequestIdFilter())
-
-        # Performance logger is separate
-        perf_logger = logging.getLogger('performance')  # pylint: disable=redefined-outer-name
-        perf_logger.setLevel(logging.INFO)
-        perf_logger.addHandler(perf_handler)
-        perf_logger.propagate = False  # Don't propagate to root
-
     @staticmethod
     def get_logger(name: str) -> logging.Logger:
         """
@@ -301,16 +258,6 @@ class LoggingConfig:
             Configured logger instance
         """
         return logging.getLogger(name)
-
-    @staticmethod
-    def get_access_logger() -> logging.Logger:
-        """Get the access logger for webhook requests"""
-        return logging.getLogger('access')
-
-    @staticmethod
-    def get_performance_logger() -> logging.Logger:
-        """Get the performance logger for metrics"""
-        return logging.getLogger('performance')
 
     @staticmethod
     def set_request_id(request_id: str):
@@ -372,20 +319,6 @@ def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
 
-def get_access_logger() -> logging.Logger:
-    """Get the access logger (convenience function)"""
-    if _logging_config is None:
-        setup_logging()
-    return LoggingConfig.get_access_logger()
-
-
-def get_performance_logger() -> logging.Logger:
-    """Get the performance logger (convenience function)"""
-    if _logging_config is None:
-        setup_logging()
-    return LoggingConfig.get_performance_logger()
-
-
 def set_request_id(request_id: str):
     """Set request ID for current context (convenience function)"""
     LoggingConfig.set_request_id(request_id)
@@ -420,8 +353,6 @@ if __name__ == "__main__":
     setup_logging(log_level='DEBUG')
 
     logger = get_logger(__name__)  # pylint: disable=redefined-outer-name
-    access_logger = get_access_logger()  # pylint: disable=redefined-outer-name
-    perf_logger = get_performance_logger()  # pylint: disable=redefined-outer-name
 
     # Test basic logging
     set_request_id('test123')
@@ -434,8 +365,8 @@ if __name__ == "__main__":
     # Test token masking
     logger.info("Using token: glpat-1234567890abcdefghijklmnop", extra={'operation': 'api_call'})
 
-    # Test access logging
-    access_logger.info("Webhook received", extra={
+    # Test webhook logging
+    logger.info("Webhook received", extra={
         'pipeline_id': 12345,
         'project_id': 100,
         'source_ip': '192.168.1.100',
@@ -443,7 +374,7 @@ if __name__ == "__main__":
     })
 
     # Test performance logging
-    perf_logger.info("Request completed", extra={'pipeline_id': 12345, 'duration_ms': 1234})
+    logger.info("Request completed", extra={'pipeline_id': 12345, 'duration_ms': 1234})
 
     # Test exception logging
     try:
@@ -454,6 +385,4 @@ if __name__ == "__main__":
     clear_request_id()
 
     print("\nLogging test complete! Check ./logs/ directory for log files:")
-    print("  - application.log (all logs including errors)")
-    print("  - access.log (access logs)")
-    print("  - performance.log (performance metrics)")
+    print("  - application.log (all logs)")

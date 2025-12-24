@@ -7,13 +7,8 @@ handles pagination, and manages API authentication.
 Data Flow:
     Pipeline Event → extract_job_ids() → fetch_job_log() → GitLab API → Raw Log Content
 
-Can we import these at the top ?
-    import sys  # pylint: disable=import-outside-toplevel,unused-import
-    from config_loader import ConfigLoader  # pylint: disable=import-outside-toplevel,import-error
-src.log_fetcher.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: config_loader, error_handler
 """
 
 import logging

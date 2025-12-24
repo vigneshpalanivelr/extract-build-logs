@@ -7,10 +7,8 @@ This module analyzes GitLab webhook events and pipeline data to identify pipelin
 Data Flow:
     Webhook Event → extract_pipeline_info() → Pipeline Type & Metadata → Log Fetcher
 
-src.pipeline_extractor.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: None
 """
 
 import logging

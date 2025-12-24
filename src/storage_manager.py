@@ -8,10 +8,8 @@ for easy retrieval and analysis.
 Data Flow:
     Log Data + Metadata → save_log() → File System (organized directory structure)
 
-src.storage_manager.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: None
 """
 
 import json

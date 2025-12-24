@@ -8,17 +8,8 @@ a configured API for centralized storage and processing.
 Data Flow:
     Pipeline Info + All Logs → format_payload() → POST to API → Log Response
 
-Questions:
-src.api_poster.py
-1. import try-catch needed ? if not needed can we remove "raise ImportError" block or function
-2. requests.exceptions.RequestException its loo lengthy can we import RequestException separately it might redude the line length
-3. Remove email notifications and its refernces (across all script)
-   - Initialize email sender
-   - email sender script
-src.api_poster.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: log_error_extractor, config_loader, error_handler, token_manager
 """
 
 import json
@@ -29,16 +20,12 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
 
-try:
-    import requests
-except ImportError:
-    requests = None
+import requests
+from requests.exceptions import RequestException
 
 from .log_error_extractor import extract_error_sections
-
 from .config_loader import Config
 from .error_handler import ErrorHandler, RetryExhaustedError
-from .email_sender import EmailSender
 from .token_manager import TokenManager
 
 # Configure module logger
@@ -62,32 +49,13 @@ class ApiPoster:
 
         Args:
             config (Config): Application configuration
-
-        Raises:
-            ImportError: If requests library is not available
         """
-        if requests is None:
-            raise ImportError(
-                "requests library is required for API posting. "
-                "Install it with: pip install requests"
-            )
-
         self.config = config
 
         # Setup dedicated API log file
         log_dir = Path(config.log_output_dir)
         log_dir.mkdir(parents=True, exist_ok=True)
         self.api_log_file = log_dir / "api-requests.log"
-
-        # Initialize email sender if email notifications are enabled
-        self.email_sender = None
-        if config.email_notifications_enabled:
-            try:
-                self.email_sender = EmailSender(config)
-                logger.info("Email notifications enabled for API responses")
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Failed to initialize email sender: %s", e, exc_info=True)
-                logger.warning("Email notifications will be disabled")
 
         # Initialize token manager for JWT authentication
         self.token_manager = None
@@ -252,7 +220,7 @@ class ApiPoster:
             logger.info("Successfully fetched token from BFA server for subject: %s", subject)
             return token
 
-        except requests.exceptions.RequestException as e:
+        except RequestException as e:
             logger.error("Failed to fetch token from BFA server: %s", e, exc_info=True)
             return None
         except (ValueError, KeyError) as e:
@@ -344,7 +312,7 @@ class ApiPoster:
                 response_json = response.json()
             except ValueError as exc:
                 logger.error("API returned non-JSON response: %s", response_body[:500])
-                raise requests.exceptions.RequestException(
+                raise RequestException(
                     f"API returned non-JSON response after {duration_ms}ms"
                 ) from exc
 
@@ -385,7 +353,7 @@ class ApiPoster:
                     'response_body': response_body[:1000]
                 }
             )
-            raise requests.exceptions.RequestException(
+            raise RequestException(
                 f"API returned status '{response_status}' (expected 'ok') after {duration_ms}ms"
             )
 
@@ -421,11 +389,11 @@ class ApiPoster:
             logger.error("Payload that caused %s error:\n%s", status_code, json.dumps(payload, indent=2))
 
             error_msg = str(e)[:1000]
-            raise requests.exceptions.RequestException(
+            raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
             )
 
-        except requests.exceptions.RequestException as e:
+        except RequestException as e:
             # Other request errors (timeout, connection, etc.)
             duration_ms = int((time.time() - start_time) * 1000)
             logger.error(
@@ -447,7 +415,7 @@ class ApiPoster:
             logger.error("Payload that caused error:\n%s", json.dumps(payload, indent=2))
 
             error_msg = str(e)[:1000]
-            raise requests.exceptions.RequestException(
+            raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
             )
 
@@ -594,7 +562,7 @@ class ApiPoster:
                 status_code, response_body, duration_ms = error_handler.retry_with_backoff(
                     self._post_to_api,
                     payload,
-                    exceptions=(requests.exceptions.RequestException,)
+                    exceptions=(RequestException,)
                 )
             else:
                 # No retry, single attempt
@@ -616,26 +584,6 @@ class ApiPoster:
 
             # Log to file
             self._log_api_request(pipeline_id, project_id, status_code, response_body, duration_ms)
-
-            # Send email notifications if enabled
-            if self.email_sender:
-                try:
-                    if status_code == 200:
-                        # Success: Parse response and send email to pipeline user
-                        try:
-                            api_response = json.loads(response_body)
-                            self.email_sender.send_success_email(pipeline_info, api_response)
-                        except json.JSONDecodeError as e:
-                            logger.warning("Failed to parse API response for email notification: %s", e)
-                    else:
-                        # Failure: Send alert to DevOps team
-                        self.email_sender.send_failure_email(
-                            pipeline_info,
-                            status_code,
-                            response_body
-                        )
-                except Exception as e:  # pylint: disable=broad-exception-caught
-                    logger.error("Failed to send email notification: %s", e, exc_info=True)
 
             return True
 
@@ -663,17 +611,6 @@ class ApiPoster:
 
             self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Retry exhausted: {str(e)}")
 
-            # Send failure email to DevOps
-            if self.email_sender:
-                try:
-                    self.email_sender.send_failure_email(
-                        pipeline_info,
-                        status_code=0,
-                        error_message=f"Retry exhausted: {str(e)}"
-                    )
-                except Exception as email_err:  # pylint: disable=broad-exception-caught
-                    logger.error("Failed to send failure email: %s", email_err, exc_info=True)
-
             return False
 
         except Exception as e:  # pylint: disable=broad-exception-caught
@@ -699,17 +636,6 @@ class ApiPoster:
             logger.error("Payload that caused unexpected error:\n%s", json.dumps(payload, indent=2))
 
             self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"{type(e).__name__}: {str(e)}")
-
-            # Send failure email to DevOps
-            if self.email_sender:
-                try:
-                    self.email_sender.send_failure_email(
-                        pipeline_info,
-                        status_code=0,
-                        error_message=f"{type(e).__name__}: {str(e)}"
-                    )
-                except Exception as email_err:  # pylint: disable=broad-exception-caught
-                    logger.error("Failed to send failure email: %s", email_err, exc_info=True)
 
             return False
 
@@ -763,7 +689,7 @@ class ApiPoster:
                     status_code, response_body, duration_ms = error_handler.retry_with_backoff(
                         self._post_to_api,
                         payload,
-                        exceptions=(requests.exceptions.RequestException,)
+                        exceptions=(RequestException,)
                     )
                 except RetryExhaustedError as e:
                     logger.error("Retry exhausted posting Jenkins logs to API: %s", e)

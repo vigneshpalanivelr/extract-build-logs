@@ -17,10 +17,8 @@ Token Claims:
   - exp: Expiration timestamp (default: 1 hour)
   - jti: JWT ID (unique token identifier)
 
-src.token_manager.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener, api_poster
+Invokes: None
 """
 
 import uuid
