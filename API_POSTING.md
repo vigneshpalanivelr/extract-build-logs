@@ -384,7 +384,7 @@ User-Agent: GitLab-Pipeline-Log-Extractor/2.0
 - Parse `results` array to extract error fixes
 - Each result contains actionable fix information
 - `fix` field contains detailed Markdown documentation
-- **Action:** Send email to pipeline user with all error fixes
+- **Action:** Log success and process error fixes
 
 ### Failure Response (HTTP != 200)
 
@@ -415,7 +415,7 @@ User-Agent: GitLab-Pipeline-Log-Extractor/2.0
 **Processing Failure Response:**
 - Status != 200 indicates failure
 - Log error details for debugging
-- **Action:** Send alert email to DevOps team
+- **Action:** Log error for monitoring
 - Include error message and status code
 - May trigger retry logic if enabled
 
@@ -428,19 +428,19 @@ API Response Received
        │      │
        │      ├─→ Parse results array
        │      ├─→ Extract error fixes
-       │      ├─→ Send email to PIPELINE USER
-       │      │   ├─ Subject: "Build Failures Fixed: [repo/branch]"
-       │      │   ├─ Body: All error analysis + fixes
-       │      │   └─ Format: HTML email with code blocks
+       │      ├─→ Process error analysis
+       │      │   ├─ Log successful analysis
+       │      │   ├─ Store error fixes
+       │      │   └─ Update monitoring database
        │      └─→ Log success
        │
        └─→ [Status != 200]
               │
               ├─→ Log error details
-              ├─→ Send alert to DEVOPS TEAM
-              │   ├─ Subject: "BFA API Failure: [pipeline_id]"
-              │   ├─ Body: Error message + status code
-              │   └─ Include: Pipeline details
+              ├─→ Log failure for monitoring
+              │   ├─ Error message + status code
+              │   ├─ Pipeline details
+              │   └─ Update monitoring database
               └─→ Trigger retry (if enabled)
 ```
 
