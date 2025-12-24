@@ -58,13 +58,10 @@ class SensitiveDataFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         """Mask sensitive data in log message"""
-        if hasattr(record, 'msg'):
-            msg = str(record.msg)
-            for pattern, replacement in self.PATTERNS:
-                msg = pattern.sub(replacement, msg)
-            record.msg = msg
+        # Don't filter the msg template - it contains format specifiers like %s
+        # Only filter the args that will be substituted into the template
 
-        # Mask in args as well
+        # Mask in args
         if hasattr(record, 'args') and record.args:
             if isinstance(record.args, dict):
                 record.args = self._mask_dict(record.args)
