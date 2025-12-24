@@ -22,21 +22,11 @@ Invokes: None
 
 import csv
 import logging
-import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from pathlib import Path
 from enum import Enum
 import json
-
-# Try PostgreSQL first, fallback to SQLite
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    HAS_POSTGRES = True
-except ImportError:
-    HAS_POSTGRES = False
-
 import sqlite3
 
 logger = logging.getLogger(__name__)
@@ -57,77 +47,72 @@ class PipelineMonitor:
     """
     Monitor and track all pipeline webhook requests and processing.
 
-    This class maintains a PostgreSQL or SQLite database of all webhook requests
+    This class maintains a SQLite database of all webhook requests
     and provides methods for querying, exporting, and analyzing the data.
 
-    Supports two database backends:
-    - PostgreSQL (production): Set DATABASE_URL environment variable
-    - SQLite (fallback): Uses file-based database
+    Supports context manager protocol for proper resource cleanup:
+        with PipelineMonitor() as monitor:
+            monitor.track_request(...)
 
     Attributes:
-        db_url (str): Database URL (PostgreSQL) or None (SQLite)
-        db_path (Path): Path to SQLite database file (if using SQLite)
-        conn: Database connection (psycopg2 or sqlite3)
-        db_type (str): 'postgresql' or 'sqlite'
+        db_path (Path): Path to SQLite database file
+        conn: Database connection (sqlite3)
     """
 
     def __init__(self, db_path: str = "./logs/monitoring.db"):
         """
-        Initialize the pipeline monitor.
-
-        Uses PostgreSQL if DATABASE_URL is set, otherwise falls back to SQLite.
+        Initialize the pipeline monitor with SQLite database.
 
         Args:
             db_path (str): Path to SQLite database file (default: ./logs/monitoring.db)
-                          Only used if DATABASE_URL is not set
-
-        Environment Variables:
-            DATABASE_URL: PostgreSQL connection string (e.g., postgresql://user:pass@host:5432/dbname)
         """
-        self.db_url = os.getenv('DATABASE_URL')
         self.db_path = Path(db_path)
         self.conn = None
-        self.db_type = None
 
-        if self.db_url and HAS_POSTGRES:
-            self.db_type = 'postgresql'
-            logger.info("Using PostgreSQL database: %s", self.db_url.split('@')[-1])  # Hide credentials
-        else:
-            self.db_type = 'sqlite'
-            self.db_path.parent.mkdir(parents=True, exist_ok=True)
-            logger.info("Using SQLite database: %s", self.db_path)
+        # Ensure directory exists
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        logger.info("Using SQLite database: %s", self.db_path)
 
         self._init_database()
 
     def _init_database(self):
         """
-        Initialize database with required tables.
-
-        Supports both PostgreSQL and SQLite with appropriate syntax for each.
+        Initialize SQLite database with required tables.
 
         Tables:
             - requests: All webhook requests
         """
-        if self.db_type == 'postgresql':
-            self._init_postgresql()
-        else:
-            self._init_sqlite()
+        self._init_sqlite()
+        logger.debug("SQLite database initialized successfully")
 
-        logger.debug("Database initialized successfully (%s)", self.db_type)
+    def _init_sqlite(self):
+        """
+        Initialize SQLite database with required tables.
 
-    def _init_postgresql(self):
-        """Initialize PostgreSQL database with required tables."""
-        self.conn = psycopg2.connect(self.db_url)
+        Uses WAL mode and optimized PRAGMA settings to prevent database corruption
+        when container stops abruptly.
+        """
+        try:
+            # Connect with extended timeout and isolation level for better reliability
+            self.conn = sqlite3.connect(
+                str(self.db_path),
+                check_same_thread=False,
+                timeout=30.0,
+                isolation_level=None  # Autocommit mode to prevent corruption on crash
+            )
+            self.conn.row_factory = sqlite3.Row
 
-        # Enable WAL mode for better concurrency (if supported)
-        self.conn.autocommit = False
+            # Configure SQLite for durability and concurrency
+            self.conn.execute('PRAGMA journal_mode=WAL')  # Write-Ahead Logging for better concurrency
+            self.conn.execute('PRAGMA synchronous=NORMAL')  # Balance between safety and speed
+            self.conn.execute('PRAGMA wal_autocheckpoint=1000')  # Checkpoint every 1000 pages
+            self.conn.execute('PRAGMA busy_timeout=30000')  # 30 second busy timeout
 
-        with self.conn.cursor() as cursor:
-            # Create requests table (PostgreSQL syntax)
-            cursor.execute("""
+            # Create requests table (SQLite syntax)
+            self.conn.execute("""
                 CREATE TABLE IF NOT EXISTS requests (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
                     project_id INTEGER,
                     pipeline_id INTEGER,
                     pipeline_type TEXT,
@@ -142,107 +127,62 @@ class PipelineMonitor:
                     success_count INTEGER,
                     error_count INTEGER,
                     error_message TEXT,
-                    metadata JSONB
+                    metadata TEXT
                 )
             """)
 
             # Create indexes for faster queries
-            cursor.execute("""
+            self.conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_pipeline_id
                 ON requests(pipeline_id)
             """)
 
-            cursor.execute("""
+            self.conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_timestamp
                 ON requests(timestamp)
             """)
 
-            cursor.execute("""
+            self.conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_status
                 ON requests(status)
             """)
 
-            cursor.execute("""
+            self.conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_event_type
                 ON requests(event_type)
             """)
 
-        self.conn.commit()
+            logger.debug("SQLite database initialized with WAL mode and durability settings")
 
-    def _init_sqlite(self):
-        """Initialize SQLite database with required tables."""
-        self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False, timeout=30.0)
-        self.conn.row_factory = sqlite3.Row
-
-        # Enable WAL mode for better concurrency
-        self.conn.execute('PRAGMA journal_mode=WAL')
-
-        # Create requests table (SQLite syntax)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT NOT NULL,
-                project_id INTEGER,
-                pipeline_id INTEGER,
-                pipeline_type TEXT,
-                status TEXT NOT NULL,
-                ref TEXT,
-                sha TEXT,
-                source TEXT,
-                event_type TEXT,
-                client_ip TEXT,
-                processing_time REAL,
-                job_count INTEGER,
-                success_count INTEGER,
-                error_count INTEGER,
-                error_message TEXT,
-                metadata TEXT
-            )
-        """)
-
-        # Create indexes for faster queries
-        self.conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_pipeline_id
-            ON requests(pipeline_id)
-        """)
-
-        self.conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_timestamp
-            ON requests(timestamp)
-        """)
-
-        self.conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_status
-            ON requests(status)
-        """)
-
-        self.conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_event_type
-            ON requests(event_type)
-        """)
-
-        self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("Failed to initialize SQLite database: %s", e, exc_info=True)
+            raise
 
     def _execute(self, query: str, params: tuple = None):
         """
-        Execute a query with appropriate placeholder syntax for the database type.
+        Execute a SQLite query with proper error handling.
 
         Args:
-            query (str): SQL query with ? placeholders (SQLite style)
+            query (str): SQL query with ? placeholders
             params (tuple): Query parameters
 
         Returns:
             cursor: Database cursor with results
         """
-        if self.db_type == 'postgresql':
-            # Convert ? to %s for PostgreSQL
-            pg_query = query.replace('?', '%s')
-            cursor = self.conn.cursor(cursor_factory=RealDictCursor)
-            cursor.execute(pg_query, params)
-            return cursor
+        try:
+            return self.conn.execute(query, params or ())
+        except sqlite3.Error as e:
+            logger.error("SQLite query failed: %s - Query: %s", e, query, exc_info=True)
+            raise
 
-        # SQLite uses ? placeholders
-        return self.conn.execute(query, params)
+    def __enter__(self):
+        """Context manager entry."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit - ensure connection is closed."""
+        self.close()
+        return False  # Don't suppress exceptions
 
     def track_request(
         self,
@@ -307,14 +247,8 @@ class PipelineMonitor:
             job_count, error_message, metadata
         ))
 
-        self.conn.commit()
-
-        # Get inserted ID (different for PostgreSQL vs SQLite)
-        if self.db_type == 'postgresql':
-            cursor.execute("SELECT lastval()")
-            request_id = cursor.fetchone()[0]  # pylint: disable=redefined-outer-name
-        else:
-            request_id = cursor.lastrowid  # pylint: disable=redefined-outer-name
+        # Get inserted ID from SQLite
+        request_id = cursor.lastrowid  # pylint: disable=redefined-outer-name
 
         logger.info(
             "Tracked request #%s: pipeline=%s, status=%s",
@@ -353,7 +287,6 @@ class PipelineMonitor:
             error_count, error_message, request_id
         ))
 
-        self.conn.commit()
         logger.debug("Updated request #%s to status: %s", request_id, status.value)
 
     def get_summary(self, hours: int = 24) -> Dict[str, Any]:
@@ -562,7 +495,6 @@ class PipelineMonitor:
             WHERE timestamp < ?
         """, (cutoff,))
 
-        self.conn.commit()
         deleted = result.rowcount
 
         logger.info("Cleaned up %s records older than %s days", deleted, days)
