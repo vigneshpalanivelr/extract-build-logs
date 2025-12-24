@@ -165,6 +165,9 @@ class ApiPoster:
         user_info = pipeline_info.get('user', {})
         if isinstance(user_info, dict):
             triggered_by = user_info.get('username') or user_info.get('name')
+            # Add @internal.com suffix to username
+            if triggered_by:
+                triggered_by = f"{triggered_by}@internal.com"
         else:
             triggered_by = None
 
@@ -204,13 +207,20 @@ class ApiPoster:
                     "error_lines": error_lines
                 })
 
+        # Construct pipeline URL
+        # Format: https://gitlab.example.com/project-path/-/pipelines/123
+        project_path = pipeline_info.get('project_path', 'unknown')
+        pipeline_id = pipeline_info['pipeline_id']
+        gitlab_url = self.config.gitlab_url.rstrip('/')  # Remove trailing slash if present
+        pipeline_url = f"{gitlab_url}/{project_path}/-/pipelines/{pipeline_id}"
+
         # Build complete payload
         payload = {
             "repo": repo,
             "branch": branch,
             "commit": commit,
             "job_name": job_names,
-            "pipeline_id": str(pipeline_info['pipeline_id']),
+            "pipeline_id": pipeline_url,
             "triggered_by": triggered_by,
             "failed_steps": failed_steps
         }
