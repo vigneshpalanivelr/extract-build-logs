@@ -14,10 +14,10 @@ Server Architecture:
     - Optional webhook secret validation
     - Background task processing
 
-src.token_manager.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: None (application entry point)
+Invokes: config_loader, pipeline_extractor, log_fetcher, storage_manager, error_handler,
+         monitoring, api_poster, jenkins_extractor, jenkins_log_fetcher, token_manager,
+         logging_config
 """
 # pylint: disable=too-many-lines
 
@@ -46,8 +46,6 @@ from .token_manager import TokenManager
 from .logging_config import (
     setup_logging,
     get_logger,
-    get_access_logger,
-    get_performance_logger,
     set_request_id,
     clear_request_id,
     mask_token
@@ -55,8 +53,6 @@ from .logging_config import (
 
 # Logging will be configured in init_app()
 logger = get_logger(__name__)
-access_logger = get_access_logger()
-perf_logger = get_performance_logger()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -84,10 +80,10 @@ async def log_requests(request: Request, call_next):
     duration_ms = int((time.time() - start_time) * 1000)
 
     # Get access logger (defined in logging_config.py)
-    access_logger = logging.getLogger('access')  # pylint: disable=redefined-outer-name
+    logger = logging.getLogger('access')  # pylint: disable=redefined-outer-name
 
     # Log in our custom format with context
-    access_logger.info(
+    logger.info(
         "HTTP request",
         extra={
             'request_id': request_id,
@@ -515,7 +511,7 @@ async def webhook_gitlab_handler(
     logger.info("Webhook received", extra={'event_type': x_gitlab_event or 'unknown', 'source_ip': client_host})
 
     # Access log
-    access_logger.info("Webhook request", extra={
+    logger.info("Webhook request", extra={
         'source_ip': client_host,
         'event_type': x_gitlab_event or 'unknown',
         'path': str(request.url.path)
@@ -530,7 +526,7 @@ async def webhook_gitlab_handler(
         if not validate_webhook_secret(body, x_gitlab_token):
             logger.warning("Webhook authentication failed",
                            extra={'source_ip': client_host, 'reason': 'invalid_token'})
-            access_logger.warning("Authentication failed",
+            logger.warning("Authentication failed",
                                   extra={'source_ip': client_host, 'event_type': x_gitlab_event or 'unknown'})
             raise HTTPException(status_code=401, detail={"status": "error", "message": "Authentication failed"})
 
@@ -543,7 +539,7 @@ async def webhook_gitlab_handler(
             monitor.track_request(status=RequestStatus.IGNORED, event_type=x_gitlab_event, client_ip=client_host)
 
             duration_ms = int((time.time() - start_time) * 1000)
-            access_logger.info("Request ignored", extra={
+            logger.info("Request ignored", extra={
                 'event_type': x_gitlab_event,
                 'source_ip': client_host,
                 'duration_ms': duration_ms
@@ -614,7 +610,7 @@ async def webhook_gitlab_handler(
                 )
 
                 duration_ms = int((time.time() - start_time) * 1000)
-                access_logger.info("Pipeline skipped", extra={
+                logger.info("Pipeline skipped", extra={
                     'pipeline_id': pipeline_info['pipeline_id'],
                     'project_id': pipeline_info['project_id'],
                     'status': pipeline_info['status'],
@@ -649,7 +645,7 @@ async def webhook_gitlab_handler(
             # Log response time
             duration_ms = int((time.time() - start_time) * 1000)
 
-            access_logger.info("Pipeline queued", extra={
+            logger.info("Pipeline queued", extra={
                 'pipeline_id': pipeline_info['pipeline_id'],
                 'project_id': pipeline_info['project_id'],
                 'event_type': x_gitlab_event,
@@ -657,7 +653,7 @@ async def webhook_gitlab_handler(
                 'duration_ms': duration_ms
             })
 
-            perf_logger.info("Webhook processed", extra={
+            logger.info("Webhook processed", extra={
                 'pipeline_id': pipeline_info['pipeline_id'],
                 'duration_ms': duration_ms,
                 'operation': 'webhook_handler'
@@ -694,7 +690,7 @@ async def webhook_gitlab_handler(
             'duration_ms': duration_ms
         }, exc_info=True)
 
-        access_logger.error("Webhook processing failed", extra={
+        logger.error("Webhook processing failed", extra={
             'source_ip': client_host,
             'event_type': x_gitlab_event or 'unknown',
             'duration_ms': duration_ms,
@@ -1278,7 +1274,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
         logger.debug("Pipeline summary: %s", summary)
 
         # Performance metrics
-        perf_logger.info("Pipeline processing metrics", extra={
+        logger.info("Pipeline processing metrics", extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
             'project_name': project_name,
@@ -1322,7 +1318,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             error_message=str(e)
         )
 
-        perf_logger.info("Pipeline processing failed", extra={
+        logger.info("Pipeline processing failed", extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
             'duration_ms': total_duration_ms,
@@ -1349,7 +1345,7 @@ def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, re
             error_message=str(e)
         )
 
-        perf_logger.info("Pipeline processing failed", extra={
+        logger.info("Pipeline processing failed", extra={
             'pipeline_id': pipeline_id,
             'project_id': project_id,
             'duration_ms': total_duration_ms,

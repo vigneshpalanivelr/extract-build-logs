@@ -4,10 +4,8 @@ Log Error Extractor
 Extracts error sections from build logs with configurable context.
 Provides surrounding lines before and after errors for better LLM analysis.
 
-src.log_error_extractor.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: api_poster
+Invokes: None
 """
 
 import re

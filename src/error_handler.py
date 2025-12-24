@@ -7,10 +7,8 @@ It implements exponential backoff and configurable retry strategies to handle tr
 Data Flow:
     Function Call → retry_with_backoff() → [Attempt → Error → Wait → Retry] → Success/Failure
 
-src.error_handler.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener, log_fetcher, jenkins_log_fetcher, api_poster
+Invokes: None
 """
 
 import time

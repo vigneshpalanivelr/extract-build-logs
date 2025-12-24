@@ -6,7 +6,7 @@ processing status, and statistics. It maintains a database of all requests and p
 export capabilities for analysis.
 
 Data Flow:
-    Webhook Request → track_request() → PostgreSQL/SQLite DB → Export/Query → Reports
+    Webhook Request → track_request() → SQLite DB → Export/Query → Reports
 
 Features:
     - Track all incoming webhook requests
@@ -15,14 +15,9 @@ Features:
     - Export to CSV for analysis
     - Query historical data
     - Real-time statistics
-    - Supports both PostgreSQL and SQLite
 
-We don't need postgres DB implementation, can you remove that across all the scripts
-sqlite DB implemetation is enough, sometimes when i step the container sqlite is crashing, can you fix it
-src.monitoring.py
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: None
 """
 
 import csv

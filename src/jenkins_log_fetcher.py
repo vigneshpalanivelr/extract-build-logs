@@ -7,9 +7,8 @@ It retrieves console logs, stage information (Blue Ocean API), and build metadat
 Data Flow:
     Jenkins Build → REST API → fetch_console_log() / fetch_stages() → Log Data
 
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: config_loader, error_handler
 """
 
 import logging

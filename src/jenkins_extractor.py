@@ -8,9 +8,8 @@ Data Flow:
     Webhook Payload → extract_webhook_data() → Job Info
     Console Log + Blue Ocean Data → parse_console_log() → Structured Stages
 
-# Mention the script that are invoking this script
-- script1
-- script2
+Invoked by: webhook_listener
+Invokes: None
 """
 
 import re
