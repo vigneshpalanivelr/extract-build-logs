@@ -69,12 +69,6 @@ class TestApiPoster(unittest.TestCase):
             # BFA JWT authentication
             bfa_host=None,
             bfa_secret_key="test-secret-key",
-            # Email notifications
-            email_notifications_enabled=False,
-            smtp_host="localhost",
-            smtp_port=25,
-            smtp_from_email=None,
-            devops_email=None,
             # Error context extraction
             error_context_lines_before=50,
             error_context_lines_after=10
