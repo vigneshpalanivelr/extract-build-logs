@@ -706,7 +706,7 @@ tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
 # View logs inside container using docker exec
 docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/application.log
 docker exec bfa-gitlab-pipeline-extractor grep ERROR /app/logs/application.log
-docker exec bfa-gitlab-pipeline-extractor cat /app/logs/performance.log
+docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/api-requests.log
 ```
 
 #### Method 4: Watch Mode (Auto-refresh)
@@ -716,7 +716,7 @@ docker exec bfa-gitlab-pipeline-extractor cat /app/logs/performance.log
 watch -n 2 'tail -20 ./logs/application.log'
 
 # Monitor multiple logs
-watch -n 5 'echo "=== APPLICATION ===" && tail -10 ./logs/application.log && echo && echo "=== PERFORMANCE ===" && tail -10 ./logs/performance.log'
+watch -n 5 'echo "=== APPLICATION ===" && tail -10 ./logs/application.log && echo && echo "=== API REQUESTS ===" && tail -10 ./logs/api-requests.log'
 ```
 
 ---
@@ -799,8 +799,8 @@ grep "2025-10-29 17:5[0-9]" logs/application.log
 # Failed requests with error details
 grep "| ERROR |" logs/application.log | grep "pipeline_id"
 
-# Performance issues (> 10 seconds)
-awk -F'|' '$6 ~ /duration_ms/ && $6 ~ /[0-9]{5,}/ {print}' logs/performance.log
+# Performance issues (> 10 seconds) - check duration_ms in logs
+grep "duration_ms" logs/application.log | awk -F'|' '$6 ~ /[0-9]{5,}/ {print}'
 
 # Extract all pipeline IDs
 grep -oP 'pipeline_id=\K[0-9]+' logs/application.log | sort -u
@@ -860,7 +860,7 @@ grep "a1b2c3d4" logs/application.log
 **2. Cross-File Correlation**
 ```bash
 # Find request in all log files
-grep "a1b2c3d4" logs/application.log logs/access.log logs/performance.log
+grep "a1b2c3d4" logs/application.log logs/api-requests.log
 ```
 
 **3. Debugging Async Operations**
@@ -874,19 +874,18 @@ grep "a1b2c3d4" logs/application.log | grep "background\|async\|task"
 ```bash
 $ grep "a1b2c3d4" logs/*.log
 
-logs/access.log:
-2025-10-29 17:52:05.837 | INFO | access | a1b2c3d4 | Webhook request | source_ip=192.168.1.100
-
 logs/application.log:
 2025-10-29 17:52:05.836 | INFO | webhook_listener | a1b2c3d4 | Webhook received | pipeline_id=12345
+2025-10-29 17:52:05.837 | INFO | webhook_listener | a1b2c3d4 | Webhook request | source_ip=192.168.1.100
 2025-10-29 17:52:05.845 | INFO | webhook_listener | a1b2c3d4 | Pipeline event queued | pipeline_id=12345
 2025-10-29 17:52:06.000 | INFO | webhook_listener | a1b2c3d4 | Starting pipeline log extraction
 2025-10-29 17:52:06.287 | INFO | log_fetcher | a1b2c3d4 | Pipeline logs fetched | job_count=5
+2025-10-29 17:52:06.500 | INFO | webhook_listener | a1b2c3d4 | Webhook processed | duration_ms=664
 2025-10-29 17:52:15.234 | INFO | storage_manager | a1b2c3d4 | All logs saved successfully
+2025-10-29 17:52:15.234 | INFO | webhook_listener | a1b2c3d4 | Pipeline processing metrics | total_duration_ms=9234
 
-logs/performance.log:
-2025-10-29 17:52:06.500 | INFO | performance | a1b2c3d4 | Webhook processed | duration_ms=664
-2025-10-29 17:52:15.234 | INFO | performance | a1b2c3d4 | Pipeline processing metrics | total_duration_ms=9234
+logs/api-requests.log:
+[2025-10-29 17:52:06] PIPELINE_ID=12345 STATUS=success DURATION=234ms
 ```
 
 ---
@@ -904,8 +903,7 @@ ls -lh ./logs/*.log
 
 # Check with backups
 ls -lh ./logs/application.log*
-ls -lh ./logs/access.log*
-ls -lh ./logs/performance.log*
+ls -lh ./logs/api-requests.log*
 
 # Detailed breakdown
 du -h ./logs/* | sort -h
@@ -915,14 +913,13 @@ du -h ./logs/* | sort -h
 
 **Maximum storage (if all files reach max size):**
 - application.log: 1.1 GB (100MB × 11)
-- access.log: 1.05 GB (50MB × 21)
-- performance.log: 550 MB (50MB × 11)
-- **Total: ~2.7 GB**
+- api-requests.log: 550 MB (50MB × 11)
+- **Total: ~1.7 GB**
 
 **Typical usage patterns:**
-- Low traffic (< 100 webhooks/day): ~100-200 MB/day
-- Medium traffic (100-1000 webhooks/day): ~500 MB - 1 GB/day
-- High traffic (> 1000 webhooks/day): ~2-5 GB/day
+- Low traffic (< 100 webhooks/day): ~50-100 MB/day
+- Medium traffic (100-1000 webhooks/day): ~200-500 MB/day
+- High traffic (> 1000 webhooks/day): ~1-2 GB/day
 
 #### Cleanup Strategies
 
@@ -930,8 +927,7 @@ du -h ./logs/* | sort -h
 ```bash
 # Delete all backups older than .3 (keeps newest 3)
 rm logs/application.log.{4..10}
-rm logs/access.log.{4..20}
-rm logs/performance.log.{4..10}
+rm logs/api-requests.log.{4..10}
 
 # Delete all backups (keeps only current)
 rm logs/*.log.[0-9]*
@@ -1049,16 +1045,14 @@ app_handler = logging.handlers.RotatingFileHandler(
 
 #### Disable Specific Logs
 
-**Disable performance logging:**
-```python
-# In src/logging_config.py, comment out performance logger setup
-# perf_logger.addHandler(perf_handler)
-```
+**Note:** The system uses consolidated logging with all logs written to application.log. Individual log filtering is controlled via the LOG_LEVEL environment variable.
 
-**Disable access logging:**
-```python
-# In src/logging_config.py, comment out access logger setup
-# access_logger.addHandler(access_handler)
+To reduce log verbosity:
+```bash
+# In .env file
+LOG_LEVEL=INFO    # Less verbose (hides DEBUG messages)
+LOG_LEVEL=WARNING # Only warnings and errors
+LOG_LEVEL=ERROR   # Only errors
 ```
 
 ---
@@ -1868,17 +1862,15 @@ A: Run `./manage_container.py test` to send a test GitLab webhook payload
 
 **Q: Where are logs stored?**
 A: In `logs/` directory:
-- `application.log` - All application logs (DEBUG level)
-- `access.log` - HTTP requests
-- `performance.log` - Performance metrics
+- `application.log` - All application logs (consolidated, DEBUG level)
+- `api-requests.log` - API posting requests/responses
 
 **Q: Where is monitoring data stored?**
-A: In database (PostgreSQL or SQLite fallback):
-- PostgreSQL: As configured in `DB_*` environment variables
-- SQLite: `logs/monitoring.db` (fallback if PostgreSQL unavailable)
+A: In SQLite database:
+- `logs/monitoring.db` - SQLite database with request tracking
 
 **Q: Can I query the database while the server is running?**
-A: Yes, both PostgreSQL and SQLite support concurrent reads.
+A: Yes, SQLite with WAL mode enabled supports concurrent reads.
 
 **Q: How long is data kept?**
 A:
