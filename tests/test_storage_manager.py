@@ -162,6 +162,220 @@ class TestStorageManager(unittest.TestCase):
         metadata = self.manager.get_pipeline_metadata(123, 789)
         self.assertEqual(len(metadata['jobs']), 3)
 
+    def test_save_log_with_empty_content(self):
+        """Test saving a log with empty content."""
+        log_path = self.manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="empty_job",
+            log_content="",
+            job_details={"status": "success"}
+        )
+
+        self.assertTrue(log_path.exists())
+        with open(log_path, 'r') as f:
+            content = f.read()
+        self.assertEqual(content, "")
+
+    def test_save_log_with_special_characters(self):
+        """Test saving a log with special characters in job name."""
+        log_path = self.manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="build:production/test",
+            log_content="Test content",
+            job_details={"status": "success"}
+        )
+
+        self.assertTrue(log_path.exists())
+        # Verify filename is sanitized
+        self.assertIn("build_production_test", str(log_path))
+
+    def test_save_log_with_unicode_content(self):
+        """Test saving a log with Unicode characters."""
+        unicode_content = "Test log with Unicode: 你好 🚀 Ñoño"
+        log_path = self.manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="unicode_test",
+            log_content=unicode_content,
+            job_details={"status": "success"}
+        )
+
+        self.assertTrue(log_path.exists())
+        with open(log_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        self.assertEqual(content, unicode_content)
+
+    def test_get_pipeline_directory_with_project_name(self):
+        """Test pipeline directory creation with project name."""
+        pipeline_dir = self.manager.get_pipeline_directory(
+            project_id=123,
+            pipeline_id=789,
+            project_name="my-awesome-project"
+        )
+
+        self.assertTrue(pipeline_dir.exists())
+        self.assertIn("my-awesome-project", str(pipeline_dir))
+
+    def test_sanitize_filename_edge_cases(self):
+        """Test filename sanitization with edge cases."""
+        test_cases = [
+            ("", "unnamed"),
+            ("   ", "unnamed"),
+            ("valid-name", "valid-name"),
+            ("UPPERCASE", "UPPERCASE"),
+            ("under_score", "under_score"),
+            ("dots.dots.dots", "dots.dots.dots"),
+            ("multiple   spaces", "multiple_spaces"),
+            ("slash/backslash\\", "slash_backslash_")
+        ]
+
+        for input_name, expected in test_cases:
+            result = self.manager._sanitize_filename(input_name)
+            self.assertEqual(result, expected, f"Failed for input: {input_name}")
+
+    def test_save_pipeline_metadata_updates_existing(self):
+        """Test that saving metadata updates existing metadata."""
+        # Save initial metadata
+        self.manager.save_pipeline_metadata(
+            project_id=123,
+            pipeline_id=789,
+            pipeline_data={"status": "running", "ref": "main"}
+        )
+
+        # Update metadata
+        self.manager.save_pipeline_metadata(
+            project_id=123,
+            pipeline_id=789,
+            pipeline_data={"status": "success", "ref": "main", "duration": 100}
+        )
+
+        # Verify updated metadata
+        metadata = self.manager.get_pipeline_metadata(123, 789)
+        self.assertEqual(metadata['status'], "success")
+        self.assertEqual(metadata['duration'], 100)
+
+    def test_list_stored_pipelines_empty(self):
+        """Test listing pipelines when none exist."""
+        pipelines = self.manager.list_stored_pipelines()
+        self.assertEqual(len(pipelines), 0)
+
+    def test_list_stored_pipelines_specific_project_not_found(self):
+        """Test listing pipelines for non-existent project."""
+        self.manager.save_pipeline_metadata(123, 789, {"status": "success"})
+
+        pipelines = self.manager.list_stored_pipelines(project_id=999)
+        self.assertEqual(len(pipelines), 0)
+
+    def test_get_storage_stats_empty(self):
+        """Test getting storage stats when no data exists."""
+        stats = self.manager.get_storage_stats()
+
+        self.assertEqual(stats['total_projects'], 0)
+        self.assertEqual(stats['total_pipelines'], 0)
+        self.assertEqual(stats['total_jobs'], 0)
+        self.assertEqual(stats['total_size_bytes'], 0)
+
+    def test_save_log_creates_nested_directories(self):
+        """Test that save_log creates all necessary directories."""
+        # Use fresh manager with non-existent base directory
+        new_base = Path(self.test_dir) / "nested" / "deep" / "logs"
+        manager = StorageManager(str(new_base))
+
+        log_path = manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="test",
+            log_content="content",
+            job_details={"status": "success"}
+        )
+
+        self.assertTrue(log_path.exists())
+        self.assertTrue(log_path.parent.exists())
+
+    def test_update_job_metadata(self):
+        """Test updating job metadata after saving log."""
+        # Save initial log
+        self.manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="build",
+            log_content="Initial content",
+            job_details={"status": "running", "stage": "build"}
+        )
+
+        # Save again with updated details (simulating job completion)
+        self.manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="build",
+            log_content="Updated content",
+            job_details={"status": "success", "stage": "build", "duration": 120}
+        )
+
+        # Verify metadata is updated
+        metadata = self.manager.get_pipeline_metadata(123, 789)
+        job_meta = metadata['jobs'][0]
+        self.assertEqual(job_meta['status'], "success")
+        self.assertEqual(job_meta['duration'], 120)
+
+    def test_storage_stats_multiple_projects(self):
+        """Test storage stats with multiple projects and pipelines."""
+        # Create data for multiple projects
+        for project_id in [100, 200, 300]:
+            for pipeline_id in [1, 2]:
+                self.manager.save_log(
+                    project_id=project_id,
+                    pipeline_id=pipeline_id,
+                    job_id=1,
+                    job_name="test",
+                    log_content="x" * 100,
+                    job_details={"status": "success"}
+                )
+
+        stats = self.manager.get_storage_stats()
+
+        self.assertEqual(stats['total_projects'], 3)
+        self.assertEqual(stats['total_pipelines'], 6)
+        self.assertEqual(stats['total_jobs'], 6)
+        self.assertGreater(stats['total_size_bytes'], 0)
+
+    def test_list_stored_pipelines_contains_correct_data(self):
+        """Test that listed pipelines contain correct project and pipeline IDs."""
+        self.manager.save_pipeline_metadata(123, 789, {"status": "success"})
+        self.manager.save_pipeline_metadata(456, 999, {"status": "failed"})
+
+        pipelines = self.manager.list_stored_pipelines()
+
+        self.assertEqual(len(pipelines), 2)
+        # Verify pipelines have correct structure
+        for pipeline in pipelines:
+            self.assertIn('project_id', pipeline)
+            self.assertIn('pipeline_id', pipeline)
+
+    def test_save_log_with_large_content(self):
+        """Test saving a log with large content."""
+        large_content = "A" * 1000000  # 1MB of data
+        log_path = self.manager.save_log(
+            project_id=123,
+            pipeline_id=789,
+            job_id=456,
+            job_name="large_job",
+            log_content=large_content,
+            job_details={"status": "success"}
+        )
+
+        self.assertTrue(log_path.exists())
+        # Verify file size
+        self.assertGreater(log_path.stat().st_size, 900000)
+
 
 if __name__ == '__main__':
     unittest.main()

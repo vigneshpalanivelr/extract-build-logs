@@ -183,6 +183,130 @@ class TestCircuitBreaker(unittest.TestCase):
 
         self.assertIn("Circuit breaker is OPEN", str(context.exception))
 
+    def test_circuit_failure_count_reset(self):
+        """Test that failure count resets on successful call."""
+        breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=1.0)
+
+        def fails_once():
+            raise ValueError("Failed")
+
+        def succeeds():
+            return "success"
+
+        # Fail once
+        try:
+            breaker.call(fails_once)
+        except ValueError:
+            pass
+
+        self.assertEqual(breaker.failure_count, 1)
+
+        # Succeed - should reset failure count
+        breaker.call(succeeds)
+        self.assertEqual(breaker.failure_count, 0)
+
+    def test_circuit_half_open_fails_reopens(self):
+        """Test that circuit reopens if HALF_OPEN call fails."""
+        breaker = CircuitBreaker(failure_threshold=1, recovery_timeout=0.1)
+
+        def always_fails():
+            raise ValueError("Failed")
+
+        # Open the circuit
+        try:
+            breaker.call(always_fails)
+        except ValueError:
+            pass
+
+        # Wait for recovery timeout
+        time.sleep(0.2)
+
+        # Next call should be HALF_OPEN but fail
+        try:
+            breaker.call(always_fails)
+        except ValueError:
+            pass
+
+        # Should be OPEN again
+        self.assertEqual(breaker.state, "OPEN")
+
+
+class TestErrorHandlerEdgeCases(unittest.TestCase):
+    """Test edge cases for ErrorHandler."""
+
+    def test_zero_retries(self):
+        """Test handler with zero retries."""
+        handler = ErrorHandler(max_retries=0, base_delay=0.1)
+
+        def fails():
+            raise ValueError("Failed")
+
+        with self.assertRaises(RetryExhaustedError):
+            handler.retry_with_backoff(fails, exceptions=(ValueError,))
+
+    def test_with_args_and_kwargs(self):
+        """Test retry with function arguments."""
+        handler = ErrorHandler(max_retries=2, base_delay=0.1)
+
+        def func_with_args(a, b, c=None):
+            return f"{a}-{b}-{c}"
+
+        result = handler.retry_with_backoff(
+            func_with_args,
+            "arg1", "arg2", c="kwarg1"
+        )
+
+        self.assertEqual(result, "arg1-arg2-kwarg1")
+
+    def test_decorator_with_args_and_kwargs(self):
+        """Test decorated function with arguments."""
+        @retry_on_failure(max_retries=2, base_delay=0.1)
+        def add_numbers(a, b, multiply=1):
+            return (a + b) * multiply
+
+        result = add_numbers(5, 3, multiply=2)
+        self.assertEqual(result, 16)
+
+    def test_multiple_exception_types(self):
+        """Test retrying multiple exception types."""
+        handler = ErrorHandler(max_retries=3, base_delay=0.1)
+        attempts = {'count': 0}
+
+        def raises_different_errors():
+            attempts['count'] += 1
+            if attempts['count'] == 1:
+                raise ValueError("Value error")
+            elif attempts['count'] == 2:
+                raise TypeError("Type error")
+            return "success"
+
+        result = handler.retry_with_backoff(
+            raises_different_errors,
+            exceptions=(ValueError, TypeError)
+        )
+
+        self.assertEqual(result, "success")
+        self.assertEqual(attempts['count'], 3)
+
+    def test_nested_retries(self):
+        """Test nested retry handlers."""
+        outer_handler = ErrorHandler(max_retries=2, base_delay=0.1)
+        inner_handler = ErrorHandler(max_retries=1, base_delay=0.05)
+
+        attempts = {'count': 0}
+
+        def inner_func():
+            attempts['count'] += 1
+            if attempts['count'] < 2:
+                raise ValueError("Not yet")
+            return "success"
+
+        def outer_func():
+            return inner_handler.retry_with_backoff(inner_func, exceptions=(ValueError,))
+
+        result = outer_handler.retry_with_backoff(outer_func)
+        self.assertEqual(result, "success")
+
 
 if __name__ == '__main__':
     unittest.main()
