@@ -14,9 +14,9 @@ Comprehensive test coverage for monitoring functionality including:
 import unittest
 import tempfile
 import os
+import shutil
 import csv
 from pathlib import Path
-from datetime import datetime, timedelta
 import sys
 import sqlite3
 
@@ -39,10 +39,8 @@ class TestPipelineMonitor(unittest.TestCase):
         """Clean up test fixtures."""
         if self.monitor and self.monitor.conn:
             self.monitor.close()
-        if os.path.exists(self.db_path):
-            os.remove(self.db_path)
         if os.path.exists(self.temp_dir):
-            os.rmdir(self.temp_dir)
+            shutil.rmtree(self.temp_dir)
 
     def test_initialization_creates_database(self):
         """Test that initialization creates the database file."""
@@ -173,9 +171,8 @@ class TestPipelineMonitor(unittest.TestCase):
         summary = self.monitor.get_summary(hours=24)
 
         self.assertEqual(summary["total_requests"], 0)
-        self.assertEqual(summary["completed"], 0)
-        self.assertEqual(summary["failed"], 0)
-        self.assertEqual(summary["processing"], 0)
+        self.assertIn("by_status", summary)
+        self.assertIn("by_type", summary)
 
     def test_get_summary_with_data(self):
         """Test getting summary with various request statuses."""
@@ -188,9 +185,9 @@ class TestPipelineMonitor(unittest.TestCase):
         summary = self.monitor.get_summary(hours=24)
 
         self.assertEqual(summary["total_requests"], 4)
-        self.assertEqual(summary["completed"], 2)
-        self.assertEqual(summary["failed"], 1)
-        self.assertEqual(summary["processing"], 1)
+        self.assertEqual(summary["by_status"]["completed"], 2)
+        self.assertEqual(summary["by_status"]["failed"], 1)
+        self.assertEqual(summary["by_status"]["processing"], 1)
 
     def test_get_recent_requests(self):
         """Test getting recent requests."""

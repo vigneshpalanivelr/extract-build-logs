@@ -225,11 +225,6 @@ class TestApiPoster(unittest.TestCase):
             jenkins_webhook_secret=None,
             bfa_host=None,
             bfa_secret_key=None,  # No auth
-            email_notifications_enabled=False,
-            smtp_host="localhost",
-            smtp_port=25,
-            smtp_from_email=None,
-            devops_email=None,
             error_context_lines_before=50,
             error_context_lines_after=10
         )

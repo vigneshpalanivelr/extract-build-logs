@@ -15,7 +15,6 @@ Comprehensive test coverage for JWT token management including:
 """
 
 import unittest
-import time
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
