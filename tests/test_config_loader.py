@@ -23,7 +23,7 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config_loader import Config, ConfigLoader
+from src.config_loader import ConfigLoader
 
 
 class TestConfigLoader(unittest.TestCase):
@@ -35,7 +35,7 @@ class TestConfigLoader(unittest.TestCase):
         # Clear all relevant environment variables
         for key in list(os.environ.keys()):
             if key.startswith(('GITLAB_', 'WEBHOOK_', 'LOG_', 'API_POST_',
-                             'JENKINS_', 'BFA_', 'RETRY_', 'ERROR_')):
+                               'JENKINS_', 'BFA_', 'RETRY_', 'ERROR_')):
                 del os.environ[key]
 
     def tearDown(self):
