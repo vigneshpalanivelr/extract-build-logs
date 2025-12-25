@@ -391,7 +391,7 @@ class ApiPoster:
             error_msg = str(e)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
-            )
+            ) from e
 
         except RequestException as e:
             # Other request errors (timeout, connection, etc.)
@@ -417,7 +417,7 @@ class ApiPoster:
             error_msg = str(e)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
-            )
+            ) from e
 
     def _log_api_request(
         self,

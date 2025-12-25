@@ -318,22 +318,22 @@ if __name__ == "__main__":
 
     try:
         # Load configuration
-        config = ConfigLoader.load()  # pylint: disable=redefined-outer-name
+        test_config = ConfigLoader.load()
 
         # Create log fetcher
-        fetcher = LogFetcher(config)
+        fetcher = LogFetcher(test_config)
 
         # Example: Fetch logs for a specific job
         if len(sys.argv) >= 3:
-            project_id = int(sys.argv[1])  # pylint: disable=redefined-outer-name
-            job_id = int(sys.argv[2])  # pylint: disable=redefined-outer-name
+            test_project_id = int(sys.argv[1])
+            test_job_id = int(sys.argv[2])
 
-            print(f"Fetching log for job {job_id} in project {project_id}...")
-            log = fetcher.fetch_job_log(project_id, job_id)
+            print(f"Fetching log for job {test_job_id} in project {test_project_id}...")
+            log = fetcher.fetch_job_log(test_project_id, test_job_id)
             print(f"\nLog content ({len(log)} bytes):")
             print(log[:500])  # Print first 500 characters
 
         fetcher.close()
 
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"Error: {e}")
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        print(f"Error: {ex}")
