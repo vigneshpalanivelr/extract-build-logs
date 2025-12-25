@@ -569,23 +569,21 @@ Three specialized log files in `logs/` directory:
 
 | File | Purpose | Size Limit | Backups | Total Storage |
 |------|---------|------------|---------|---------------|
-| **application.log** | All application logs (DEBUG+) | 100 MB | 10 | ~1.1 GB |
-| **access.log** | HTTP requests and webhooks | 50 MB | 20 | ~1.05 GB |
-| **performance.log** | Performance metrics and timing | 50 MB | 10 | ~550 MB |
+| **application.log** | All application logs (consolidated) | 100 MB | 10 | ~1.1 GB |
+| **api-requests.log** | API posting requests/responses | 50 MB | 10 | ~550 MB |
 
 **Example logs:**
 
 ```bash
-# application.log - Full application activity
+# application.log - All logs consolidated into single file
 2025-10-29 17:52:05.836 | INFO  | webhook_listener | a1b2c3d4 | Webhook received | event_type=Pipeline Hook
+2025-10-29 17:52:05.837 | INFO  | webhook_listener | a1b2c3d4 | Webhook request | source_ip=192.168.1.100 path=/webhook/gitlab
 2025-10-29 17:52:05.842 | DEBUG | webhook_listener | a1b2c3d4 | Validating webhook payload | pipeline_id=12345
 2025-10-29 17:52:06.450 | ERROR | storage_manager  | a1b2c3d4 | Failed to save log | job_id=789 error=IOError
+2025-10-29 17:52:06.500 | INFO  | webhook_listener | a1b2c3d4 | Webhook processed | duration_ms=664 job_count=5
 
-# access.log - HTTP requests
-2025-10-29 17:52:05.837 | INFO | access | a1b2c3d4 | Webhook request | source_ip=192.168.1.100 path=/webhook/gitlab
-
-# performance.log - Timing metrics
-2025-10-29 17:52:06.500 | INFO | performance | a1b2c3d4 | Webhook processed | duration_ms=664 job_count=5
+# api-requests.log - API posting logs
+[2024-01-01 10:05:00] PIPELINE_ID=12345 STATUS=success DURATION=234ms
 ```
 
 ### Log Rotation Behavior

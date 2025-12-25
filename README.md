@@ -205,7 +205,7 @@ sequenceDiagram
   - **Project names** in logs instead of just IDs
   - **Request ID tracking** to trace pipeline processing across all log entries
   - **Pipe-delimited format** for easy parsing and analysis
-  - **Multiple log files**: application.log, access.log, performance.log
+  - **Consolidated logging**: Single application.log file for all logs
   - **Configurable log levels** (DEBUG, INFO, WARNING, ERROR, CRITICAL)
   - **Automatic log rotation** with size limits
   - **Sensitive data masking** for tokens and secrets
@@ -248,10 +248,9 @@ extract-build-logs/
 │   │   └── pipeline_{id}/       # Then by pipeline
 │   │       ├── metadata.json    # Pipeline and job metadata
 │   │       └── job_{id}_{name}.log  # Individual job logs
-│   ├── application.log          # Main application logs (aligned columns)
-│   ├── access.log               # Webhook access logs
-│   ├── performance.log          # Performance metrics
-│   └── monitoring.db            # Monitoring database
+│   ├── application.log          # Application logs (all logs consolidated)
+│   ├── api-requests.log        # API posting request/response logs
+│   └── monitoring.db            # SQLite monitoring database
 │
 ├── config/                       # Configuration templates
 │   └── webhook_setup.md         # GitLab webhook setup guide
@@ -1431,11 +1430,8 @@ http://localhost:8000/redoc
 # Watch application logs (aligned columns for easy reading)
 tail -f logs/application.log
 
-# Watch access logs
-tail -f logs/access.log
-
-# Watch performance logs
-tail -f logs/performance.log
+# Watch API request logs
+tail -f logs/api-requests.log
 
 # Watch extracted logs directory
 watch -n 5 'ls -lah logs/'
