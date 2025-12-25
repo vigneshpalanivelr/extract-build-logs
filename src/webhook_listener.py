@@ -527,7 +527,7 @@ async def webhook_gitlab_handler(
             logger.warning("Webhook authentication failed",
                            extra={'source_ip': client_host, 'reason': 'invalid_token'})
             logger.warning("Authentication failed",
-                                  extra={'source_ip': client_host, 'event_type': x_gitlab_event or 'unknown'})
+                           extra={'source_ip': client_host, 'event_type': x_gitlab_event or 'unknown'})
             raise HTTPException(status_code=401, detail={"status": "error", "message": "Authentication failed"})
 
         logger.debug("Webhook authentication successful")

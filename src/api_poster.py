@@ -159,8 +159,9 @@ class ApiPoster:
 
                 failed_steps.append({"step_name": step_name, "error_lines": error_lines})
 
-        # Use pipeline URL provided by GitLab webhook
-        pipeline_url = pipeline_info.get('pipeline_url')
+        # Extract pipeline_id (convert to string if present)
+        pipeline_id = pipeline_info.get('pipeline_id')
+        pipeline_id_str = str(pipeline_id) if pipeline_id is not None else None
 
         # Build complete payload
         payload = {
@@ -168,7 +169,7 @@ class ApiPoster:
             "branch": branch,
             "commit": commit,
             "job_name": job_names,
-            "pipeline_id": pipeline_url,
+            "pipeline_id": pipeline_id_str,
             "triggered_by": triggered_by,
             "failed_steps": failed_steps
         }
