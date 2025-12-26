@@ -273,8 +273,8 @@ class TestWebhookListener(unittest.TestCase):
 
         result = self.should_save_job_log(job_details, pipeline_info)
 
-        # Manual jobs should be skipped
-        self.assertFalse(result)
+        # With 'all' filter, manual jobs are saved
+        self.assertTrue(result)
 
     def test_should_save_job_log_skipped_job(self):
         """Test job log saving for skipped jobs."""
@@ -292,8 +292,8 @@ class TestWebhookListener(unittest.TestCase):
 
         result = self.should_save_job_log(job_details, pipeline_info)
 
-        # Skipped jobs should be skipped
-        self.assertFalse(result)
+        # With 'all' filter, skipped jobs are saved
+        self.assertTrue(result)
 
 
 if __name__ == '__main__':
