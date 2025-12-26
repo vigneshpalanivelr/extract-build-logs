@@ -22,6 +22,7 @@ def create_complete_pipeline_info(overrides=None):
         'finished_at': '2024-01-01T00:05:00Z',
         'duration': 300,
         'user': {'username': 'testuser'},
+        'stages': ['build', 'test', 'deploy'],  # Required field
         'builds': []
     }
     if overrides:
@@ -369,8 +370,8 @@ class TestBackgroundTasks(unittest.TestCase):
 class TestStartupShutdown(unittest.TestCase):
     """Test startup and shutdown event handlers."""
 
-    @patch('src.webhook_listener.monitor')
-    def test_startup_event(self, mock_monitor):
+    @patch('src.webhook_listener.init_app')
+    def test_startup_event(self, mock_init_app):
         """Test startup event handler."""
         import asyncio
         from src.webhook_listener import startup_event
@@ -378,11 +379,12 @@ class TestStartupShutdown(unittest.TestCase):
         # Execute async startup event
         asyncio.run(startup_event())
 
-        # Verify monitor was called
-        mock_monitor.startup.assert_called_once()
+        # Verify init_app was called
+        mock_init_app.assert_called_once()
 
+    @patch('src.webhook_listener.log_fetcher')
     @patch('src.webhook_listener.monitor')
-    def test_shutdown_event(self, mock_monitor):
+    def test_shutdown_event(self, mock_monitor, mock_log_fetcher):
         """Test shutdown event handler."""
         import asyncio
         from src.webhook_listener import shutdown_event
@@ -390,8 +392,9 @@ class TestStartupShutdown(unittest.TestCase):
         # Execute async shutdown event
         asyncio.run(shutdown_event())
 
-        # Verify monitor cleanup was called
-        mock_monitor.cleanup.assert_called_once()
+        # Verify cleanup was called (monitor.close and log_fetcher.close)
+        mock_monitor.close.assert_called_once()
+        mock_log_fetcher.close.assert_called_once()
 
 
 class TestProcessPipelineEventAdvanced(unittest.TestCase):
