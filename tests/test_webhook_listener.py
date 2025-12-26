@@ -517,5 +517,198 @@ class TestWebhookEndpoints(unittest.TestCase):
                 os.remove(temp_path)
 
 
+class TestWebhookEdgeCases(unittest.TestCase):
+    """Test edge cases and error paths for webhook_listener."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        from fastapi.testclient import TestClient
+        from src.webhook_listener import app
+        self.client = TestClient(app)
+
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_webhook_gitlab_general_exception(self, mock_config, mock_monitor):
+        """Test GitLab webhook with general exception (covers lines 685-700)."""
+        mock_config.webhook_secret = None
+        mock_monitor.track_request.side_effect = RuntimeError("Unexpected error")
+
+        response = self.client.post(
+            "/webhook/gitlab",
+            json={"object_kind": "pipeline"},
+            headers={"X-Gitlab-Event": "Pipeline Hook"}
+        )
+
+        self.assertEqual(response.status_code, 500)
+
+    @patch('src.webhook_listener.token_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_api_token_endpoint_value_error(self, mock_config, mock_monitor, mock_token_mgr):
+        """Test /api/token endpoint with ValueError (covers lines 454-455)."""
+        mock_config.webhook_secret = None
+        mock_token_mgr.generate_token.side_effect = ValueError("Invalid subject format")
+
+        response = self.client.post(
+            "/api/token",
+            json={"subject": "invalid_format", "expires_in": 60}
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+
+
+class TestProcessJenkinsEdgeCases(unittest.TestCase):
+    """Test edge cases for Jenkins processing."""
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_api_post_fails(self, mock_config, mock_monitor,
+                                                   mock_storage, mock_log_fetcher, mock_api_poster,
+                                                   mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build processing when API post fails (covers lines 941-946)."""
+        from src.webhook_listener import process_jenkins_build
+
+        mock_config.api_post_enabled = True
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        mock_log_fetcher.fetch_console_log.return_value = "Console log"
+        mock_log_fetcher.extract_stages.return_value = [
+            {'name': 'Build', 'status': 'SUCCESS'}
+        ]
+
+        # API post returns False (failure)
+        mock_api_poster.post_jenkins_logs.return_value = False
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 42,
+            'status': 'SUCCESS',
+            'url': 'https://jenkins.example.com/job/test-job/42/'
+        }
+
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should complete despite API failure
+        mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_api_post_exception(self, mock_config, mock_monitor,
+                                                       mock_log_fetcher, mock_api_poster,
+                                                       mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build when API post raises exception (covers line 946)."""
+        from src.webhook_listener import process_jenkins_build
+
+        mock_config.api_post_enabled = True
+        mock_time.time.return_value = 1000.0
+
+        mock_log_fetcher.fetch_console_log.return_value = "Console log"
+        mock_log_fetcher.extract_stages.return_value = [
+            {'name': 'Build', 'status': 'SUCCESS'}
+        ]
+
+        # API post raises exception
+        mock_api_poster.post_jenkins_logs.side_effect = RuntimeError("API error")
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 42,
+            'status': 'SUCCESS',
+            'url': 'https://jenkins.example.com/job/test-job/42/'
+        }
+
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should complete despite exception
+        mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_general_exception(self, mock_config, mock_monitor,
+                                                      mock_log_fetcher, mock_set_req,
+                                                      mock_clear_req, mock_time):
+        """Test Jenkins build processing with general exception (covers lines 965-973)."""
+        from src.webhook_listener import process_jenkins_build
+        from src.monitoring import RequestStatus
+
+        mock_config.api_post_enabled = False
+        mock_time.time.return_value = 1000.0
+
+        # Log fetcher raises exception
+        mock_log_fetcher.fetch_console_log.side_effect = RuntimeError("Fetch failed")
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 42,
+            'status': 'SUCCESS',
+            'url': 'https://jenkins.example.com/job/test-job/42/'
+        }
+
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should mark as failed
+        calls = mock_monitor.update_request.call_args_list
+        final_call = calls[-1]
+        self.assertEqual(final_call[1]['status'], RequestStatus.FAILED)
+
+
+class TestProcessPipelineEdgeCases(unittest.TestCase):
+    """Test edge cases for pipeline processing."""
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_api_post_unexpected_exception(self, mock_config, mock_monitor,
+                                                             mock_should_save, mock_log_fetcher,
+                                                             mock_api_poster, mock_set_req,
+                                                             mock_clear_req, mock_time):
+        """Test pipeline processing with unexpected API exception (covers lines 1166-1168)."""
+        from src.webhook_listener import process_pipeline_event
+        from tests.test_webhook_background_tasks import create_complete_pipeline_info
+
+        mock_config.api_post_enabled = True
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save.return_value = True
+
+        mock_log_fetcher.fetch_pipeline_jobs.return_value = [
+            {'id': 1, 'name': 'build', 'status': 'success'}
+        ]
+        mock_log_fetcher.fetch_job_log.return_value = 'Build log'
+
+        # API poster raises unexpected exception
+        mock_api_poster.post_pipeline_logs.side_effect = RuntimeError("Unexpected error")
+
+        pipeline_info = create_complete_pipeline_info()
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Should complete and save to files as fallback
+        mock_monitor.update_request.assert_called()
+
+
 if __name__ == "__main__":
     unittest.main()

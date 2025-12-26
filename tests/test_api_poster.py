@@ -913,6 +913,359 @@ class TestApiPoster(unittest.TestCase):
 
         self.assertFalse(result)
 
+    def test_format_payload_user_not_dict(self):
+        """Test format_payload when user_info is not a dict (covers line 127)."""
+        pipeline_info_bad_user = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'ref': 'main',
+            'status': 'success',
+            'created_at': '2023-01-01T12:00:00Z',
+            'user': 'not_a_dict',  # User is a string instead of dict
+            'source': 'push'
+        }
+
+        poster = ApiPoster(self.config)
+        payload = poster.format_payload(pipeline_info_bad_user, {})
+
+        # Should fallback to source
+        self.assertEqual(payload['triggered_by'], 'push')
+
+    def test_format_payload_with_failed_jobs_and_error_extraction(self):
+        """Test format_payload with failed jobs that have error lines (covers lines 140-160)."""
+        all_logs_with_errors = {
+            1: {
+                'details': {
+                    'id': 1,
+                    'name': 'build',
+                    'status': 'failed',
+                    'stage': 'build'
+                },
+                'log': 'Some output\nERROR: Build failed\nStack trace here\nMore errors'
+            },
+            2: {
+                'details': {
+                    'id': 2,
+                    'name': 'test',
+                    'status': 'success',
+                    'stage': 'test'
+                },
+                'log': 'Tests passed'
+            }
+        }
+
+        poster = ApiPoster(self.config)
+        payload = poster.format_payload(self.pipeline_info, all_logs_with_errors)
+
+        # Should have one failed step
+        self.assertEqual(len(payload['failed_steps']), 1)
+        self.assertEqual(payload['failed_steps'][0]['step_name'], 'build')
+        self.assertTrue(len(payload['failed_steps'][0]['error_lines']) > 0)
+
+    @patch('requests.post')
+    def test_fetch_token_value_error(self, mock_post):
+        """Test _fetch_token_from_bfa_server with ValueError (covers line 228)."""
+        # Return response without 'token' field
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'no_token': 'value'}
+        mock_post.return_value = mock_response
+
+        # Stop the default TokenManager patcher
+        self.token_manager_patcher.stop()
+
+        # Create config with BFA host (no secret key)
+        config_with_bfa = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_enabled=True,
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key=None,
+            error_context_lines_before=50,
+            error_context_lines_after=10
+        )
+
+        poster = ApiPoster(config_with_bfa)
+        token = poster._fetch_token_from_bfa_server("test_subject")
+
+        # Should return None on ValueError
+        self.assertIsNone(token)
+
+        # Restart the patcher for other tests
+        self.token_manager_patcher.start()
+
+    @patch('requests.post')
+    def test_post_to_api_jwt_generation_fails_with_bfa_fallback(self, mock_post):
+        """Test JWT generation failure with BFA server fallback (covers lines 266-273)."""
+        # Setup mock to succeed for BFA token fetch
+        mock_response_bfa = MagicMock()
+        mock_response_bfa.status_code = 200
+        mock_response_bfa.json.return_value = {'token': 'bfa_token_123'}
+
+        # Setup mock to succeed for actual API post
+        mock_response_api = MagicMock()
+        mock_response_api.status_code = 200
+        mock_response_api.json.return_value = {'status': 'ok'}
+
+        # First call is BFA token fetch, second is actual API post
+        mock_post.side_effect = [mock_response_bfa, mock_response_api]
+
+        # Create config with both TokenManager and BFA
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_enabled=True,
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key="secret123",
+            error_context_lines_before=50,
+            error_context_lines_after=10
+        )
+
+        # Patch TokenManager to both exist and fail
+        with patch('src.api_poster.TokenManager') as mock_tm_class:
+            mock_tm = MagicMock()
+            mock_tm.generate_token.side_effect = RuntimeError("JWT generation failed")
+            mock_tm_class.return_value = mock_tm
+
+            poster = ApiPoster(config)
+            payload = {'repo': 'test', 'pipeline_id': '123'}
+
+            # This should use BFA fallback when JWT fails
+            status, response, duration = poster._post_to_api(payload)
+
+            self.assertEqual(status, 200)
+
+    @patch('requests.post')
+    def test_post_to_api_jwt_fails_with_secret_key_fallback(self, mock_post):
+        """Test JWT generation failure with secret key fallback (covers lines 274-276)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'status': 'ok'}
+        mock_post.return_value = mock_response
+
+        # Config with secret key but no BFA
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_enabled=True,
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="raw_secret_key",
+            error_context_lines_before=50,
+            error_context_lines_after=10
+        )
+
+        with patch('src.api_poster.TokenManager') as mock_tm_class:
+            mock_tm = MagicMock()
+            mock_tm.generate_token.side_effect = RuntimeError("JWT generation failed")
+            mock_tm_class.return_value = mock_tm
+
+            poster = ApiPoster(config)
+            payload = {'repo': 'test', 'pipeline_id': '123'}
+
+            status, response, duration = poster._post_to_api(payload)
+
+            # Should use raw secret key as fallback
+            self.assertEqual(status, 200)
+            # Verify Authorization header was set
+            self.assertEqual(mock_post.call_args[1]['headers']['Authorization'], 'Bearer raw_secret_key')
+
+    @patch('requests.post')
+    def test_post_to_api_bfa_fetch_fails_returns_none(self, mock_post):
+        """Test BFA token fetch failure (covers lines 285-287)."""
+        # BFA server request fails, returns None
+        mock_post.side_effect = requests.exceptions.ConnectionError("BFA server unreachable")
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_enabled=True,
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key=None,
+            error_context_lines_before=50,
+            error_context_lines_after=10
+        )
+
+        # Stop the TokenManager patcher for this test
+        self.token_manager_patcher.stop()
+
+        poster = ApiPoster(config)
+
+        # Test the _fetch_token_from_bfa_server method directly
+        # When BFA server is unreachable, it should handle the exception and return None
+        token = poster._fetch_token_from_bfa_server("test_subject")
+        self.assertIsNone(token)
+
+        # Restart the patcher
+        self.token_manager_patcher.start()
+
+    @patch('requests.post')
+    def test_post_to_api_http_error_logging(self, mock_post):
+        """Test HTTP error with detailed logging (covers lines 363-393)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+        error = requests.exceptions.HTTPError("500 Server Error")
+        error.response = mock_response
+        mock_post.side_effect = error
+
+        poster = ApiPoster(self.config)
+        payload = {'repo': 'test', 'pipeline_id': '123'}
+
+        with self.assertRaises(Exception):  # Should raise RequestException
+            poster._post_to_api(payload)
+
+    def test_log_api_request_file_write_error(self):
+        """Test API log file write error (covers lines 466-467)."""
+        poster = ApiPoster(self.config)
+
+        # Mock open to raise IOError only for the API log file
+        original_open = open
+        def mock_open_func(file, *args, **kwargs):
+            if str(file).endswith('api_requests.log'):
+                raise IOError("Disk full")
+            return original_open(file, *args, **kwargs)
+
+        with patch('builtins.open', side_effect=mock_open_func):
+            # Should not raise exception even if file write fails
+            poster._log_api_request(
+                pipeline_id=123,
+                project_id=456,
+                status_code=200,
+                response_body='{"status": "ok"}',
+                duration_ms=100
+            )
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_non_200_status(self, mock_post):
+        """Test Jenkins logs post with non-200 status (covers lines 741-750)."""
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_post.return_value = mock_response
+
+        jenkins_config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_url="https://api.example.com/jenkins",
+            api_post_enabled=True,
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_url="https://jenkins.example.com",
+            jenkins_enabled=True,
+            jenkins_user="testuser",
+            jenkins_api_token="testtoken",
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-secret-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10
+        )
+
+        poster = ApiPoster(jenkins_config)
+        jenkins_payload = {
+            'job_name': 'test-job',
+            'build_number': 42,
+            'status': 'SUCCESS',
+            'stages': []
+        }
+
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        # Should return False for non-success status
+        self.assertFalse(result)
+
 
 if __name__ == "__main__":
     unittest.main()
