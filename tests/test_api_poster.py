@@ -886,9 +886,20 @@ class TestApiPoster(unittest.TestCase):
         poster = ApiPoster(self.config)
 
         # Create malformed pipeline_info that will cause formatting error
-        bad_pipeline_info = None  # This will cause format_payload to fail
+        # Must have pipeline_id/project_id but will fail in format_payload
+        bad_pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test'
+            # Missing other required fields
+        }
 
-        result = poster.post_pipeline_logs(bad_pipeline_info, self.all_logs)
+        # Create malformed all_logs that will cause iteration error during format_payload
+        bad_all_logs = {
+            123: None  # This will cause error when accessing job_data.get("details")
+        }
+
+        result = poster.post_pipeline_logs(bad_pipeline_info, bad_all_logs)
 
         self.assertFalse(result)
 
