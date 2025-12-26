@@ -296,5 +296,220 @@ class TestWebhookListener(unittest.TestCase):
         self.assertTrue(result)
 
 
-class TestProcessJenkinsBuild(unittest.TestCase):
-    """Test cases for process_jenkins_build background task."""
+class TestWebhookEndpoints(unittest.TestCase):
+    """Test cases for FastAPI webhook endpoints."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        # Import FastAPI TestClient and app
+        from fastapi.testclient import TestClient
+        from src.webhook_listener import app
+
+        self.client = TestClient(app)
+
+    def test_health_endpoint(self):
+        """Test /health endpoint."""
+        response = self.client.get("/health")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "healthy")
+        self.assertEqual(data["service"], "gitlab-log-extractor")
+        self.assertEqual(data["version"], "1.0.0")
+
+    @patch('src.webhook_listener.token_manager')
+    def test_api_token_endpoint_success(self, mock_token_manager):
+        """Test /api/token endpoint with successful token generation."""
+        # Mock token manager
+        mock_tm = Mock()
+        mock_tm.generate_token.return_value = "test-jwt-token-123"
+        mock_token_manager = mock_tm
+
+        # Need to set the global token_manager
+        from src import webhook_listener
+        webhook_listener.token_manager = mock_tm
+
+        response = self.client.post("/api/token", json={
+            "subject": "gitlab_repo_123",
+            "expires_in": 60
+        })
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["token"], "test-jwt-token-123")
+        self.assertEqual(data["subject"], "gitlab_repo_123")
+        self.assertEqual(data["expires_in"], 60)
+
+    def test_api_token_endpoint_no_token_manager(self):
+        """Test /api/token endpoint when token_manager is not configured."""
+        from src import webhook_listener
+        webhook_listener.token_manager = None
+
+        response = self.client.post("/api/token", json={
+            "subject": "gitlab_repo_123"
+        })
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("disabled", response.json()["detail"])
+
+    def test_api_token_endpoint_missing_subject(self):
+        """Test /api/token endpoint with missing subject."""
+        response = self.client.post("/api/token", json={
+            "expires_in": 60
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("subject", response.json()["detail"])
+
+    def test_api_token_endpoint_invalid_expires_in(self):
+        """Test /api/token endpoint with invalid expires_in."""
+        from src import webhook_listener
+        mock_tm = Mock()
+        webhook_listener.token_manager = mock_tm
+
+        response = self.client.post("/api/token", json={
+            "subject": "gitlab_repo_123",
+            "expires_in": 9999  # Too large
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("expires_in", response.json()["detail"])
+
+    @patch('src.webhook_listener.config')
+    def test_webhook_gitlab_invalid_event_type(self, mock_config):
+        """Test /webhook/gitlab with non-pipeline event."""
+        mock_config.webhook_secret = None
+
+        response = self.client.post(
+            "/webhook/gitlab",
+            json={"test": "data"},
+            headers={"X-Gitlab-Event": "Push Hook"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["status"], "ignored")
+
+    @patch('src.webhook_listener.config')
+    def test_webhook_gitlab_auth_failure(self, mock_config):
+        """Test /webhook/gitlab with authentication failure."""
+        mock_config.webhook_secret = "secret-123"
+
+        response = self.client.post(
+            "/webhook/gitlab",
+            json={"test": "data"},
+            headers={
+                "X-Gitlab-Event": "Pipeline Hook",
+                "X-Gitlab-Token": "wrong-token"
+            }
+        )
+
+        self.assertEqual(response.status_code, 401)
+
+    @patch('src.webhook_listener.config')
+    def test_webhook_jenkins_disabled(self, mock_config):
+        """Test /webhook/jenkins when Jenkins integration is disabled."""
+        mock_config.jenkins_enabled = False
+
+        response = self.client.post(
+            "/webhook/jenkins",
+            json={"job_name": "test", "build_number": 1}
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("not enabled", response.json()["detail"]["message"])
+
+    @patch('src.webhook_listener.storage_manager')
+    def test_stats_endpoint(self, mock_storage):
+        """Test /stats endpoint."""
+        mock_storage.get_storage_stats.return_value = {
+            "total_projects": 5,
+            "total_pipelines": 20,
+            "total_jobs": 100,
+            "total_size_mb": 50.5
+        }
+
+        response = self.client.get("/stats")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total_projects"], 5)
+        self.assertEqual(data["total_pipelines"], 20)
+
+    @patch('src.webhook_listener.monitor')
+    def test_monitor_summary_endpoint(self, mock_monitor):
+        """Test /monitor/summary endpoint."""
+        mock_monitor.get_summary.return_value = {
+            "time_period_hours": 24,
+            "total_requests": 150,
+            "success_rate": 95.5
+        }
+
+        response = self.client.get("/monitor/summary?hours=24")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["total_requests"], 150)
+
+    @patch('src.webhook_listener.monitor')
+    def test_monitor_recent_endpoint(self, mock_monitor):
+        """Test /monitor/recent endpoint."""
+        mock_monitor.get_recent_requests.return_value = [
+            {"id": 1, "pipeline_id": 123},
+            {"id": 2, "pipeline_id": 456}
+        ]
+
+        response = self.client.get("/monitor/recent?limit=50")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(len(data["requests"]), 2)
+        self.assertEqual(data["count"], 2)
+
+    @patch('src.webhook_listener.monitor')
+    def test_monitor_pipeline_endpoint(self, mock_monitor):
+        """Test /monitor/pipeline/{pipeline_id} endpoint."""
+        mock_monitor.get_pipeline_requests.return_value = [
+            {"id": 1, "status": "completed"}
+        ]
+
+        response = self.client.get("/monitor/pipeline/12345")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["pipeline_id"], 12345)
+        self.assertEqual(len(data["requests"]), 1)
+
+    @patch('src.webhook_listener.monitor')
+    def test_monitor_export_csv_endpoint(self, mock_monitor):
+        """Test /monitor/export/csv endpoint."""
+        import tempfile
+        import os
+
+        # Create a temporary CSV file
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv') as f:
+            f.write("id,pipeline_id,status\n")
+            f.write("1,123,completed\n")
+            temp_path = f.name
+
+        # Mock export_to_csv to use our temp file
+        def mock_export(path, hours=None):
+            with open(temp_path, 'r') as src:
+                with open(path, 'w') as dst:
+                    dst.write(src.read())
+
+        mock_monitor.export_to_csv.side_effect = mock_export
+
+        try:
+            response = self.client.get("/monitor/export/csv?hours=24")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["content-type"], "text/csv; charset=utf-8")
+        finally:
+            # Clean up
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+
+if __name__ == "__main__":
+    unittest.main()
