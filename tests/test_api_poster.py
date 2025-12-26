@@ -522,6 +522,386 @@ class TestApiPoster(unittest.TestCase):
         self.assertIn("build:production", payload["job_name"])
         self.assertIn("test:unit", payload["job_name"])
 
+    @patch('requests.post')
+    def test_fetch_token_from_bfa_server_success(self, mock_post):
+        """Test successful token fetching from BFA server."""
+        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_secret_key = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"token": "jwt-token-123", "expires_in": 60}
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        token = poster._fetch_token_from_bfa_server("gitlab_repo_123")
+
+        self.assertEqual(token, "jwt-token-123")
+        mock_post.assert_called_once()
+        # Verify token is cached
+        self.assertEqual(poster.bfa_token_cache, "jwt-token-123")
+        self.assertIsNotNone(poster.bfa_token_expiry)
+
+    @patch('requests.post')
+    def test_fetch_token_from_bfa_server_uses_cache(self, mock_post):
+        """Test that cached token is reused if still valid."""
+        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_secret_key = None
+
+        poster = ApiPoster(self.config)
+        # Set up cached token
+        import time
+        poster.bfa_token_cache = "cached-token"
+        poster.bfa_token_expiry = time.time() + 3000  # Valid for 50 minutes
+
+        token = poster._fetch_token_from_bfa_server("gitlab_repo_123")
+
+        self.assertEqual(token, "cached-token")
+        # Should not make HTTP request
+        mock_post.assert_not_called()
+
+    @patch('requests.post')
+    def test_fetch_token_from_bfa_server_request_failure(self, mock_post):
+        """Test token fetching when HTTP request fails."""
+        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_secret_key = None
+
+        mock_post.side_effect = requests.exceptions.ConnectionError("Network error")
+
+        poster = ApiPoster(self.config)
+        token = poster._fetch_token_from_bfa_server("gitlab_repo_123")
+
+        self.assertIsNone(token)
+
+    @patch('requests.post')
+    def test_fetch_token_from_bfa_server_missing_token_field(self, mock_post):
+        """Test token fetching when response is missing token field."""
+        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_secret_key = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"expires_in": 60}  # Missing 'token'
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        token = poster._fetch_token_from_bfa_server("gitlab_repo_123")
+
+        self.assertIsNone(token)
+
+    def test_fetch_token_without_bfa_host_configured(self):
+        """Test token fetching fails when BFA_HOST is not configured."""
+        self.config.bfa_host = None
+        self.config.bfa_secret_key = None
+
+        poster = ApiPoster(self.config)
+        token = poster._fetch_token_from_bfa_server("gitlab_repo_123")
+
+        self.assertIsNone(token)
+
+    @patch('requests.post')
+    def test_post_to_api_with_jwt_generation(self, mock_post):
+        """Test _post_to_api uses locally generated JWT token."""
+        self.config.bfa_secret_key = "test-secret-key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "ok", "results": []}'
+        mock_response.json.return_value = {"status": "ok", "results": []}
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        payload = {"repo": "test", "pipeline_id": "123"}
+
+        status, body, duration = poster._post_to_api(payload)
+
+        self.assertEqual(status, 200)
+        # Verify Authorization header with JWT Bearer token was used
+        call_kwargs = mock_post.call_args[1]
+        self.assertIn("Authorization", call_kwargs["headers"])
+        self.assertTrue(call_kwargs["headers"]["Authorization"].startswith("Bearer "))
+
+    @patch('requests.post')
+    @patch.object(ApiPoster, '_fetch_token_from_bfa_server')
+    def test_post_to_api_with_bfa_server_token(self, mock_fetch_token, mock_post):
+        """Test _post_to_api fetches token from BFA server when no secret key."""
+        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_secret_key = None
+
+        mock_fetch_token.return_value = "fetched-token-456"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "ok", "results": []}'
+        mock_response.json.return_value = {"status": "ok", "results": []}
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        payload = {"repo": "test", "pipeline_id": "123"}
+
+        status, body, duration = poster._post_to_api(payload)
+
+        self.assertEqual(status, 200)
+        mock_fetch_token.assert_called_once()
+        call_kwargs = mock_post.call_args[1]
+        self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer fetched-token-456")
+
+    @patch('requests.post')
+    def test_post_to_api_with_raw_secret_key_fallback(self, mock_post):
+        """Test _post_to_api uses raw secret key when JWT generation fails."""
+        self.config.bfa_secret_key = "raw-secret"
+        self.config.bfa_host = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "ok", "results": []}'
+        mock_response.json.return_value = {"status": "ok", "results": []}
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        # Force token manager to None to simulate initialization failure
+        poster.token_manager = None
+
+        payload = {"repo": "test", "pipeline_id": "123"}
+        status, body, duration = poster._post_to_api(payload)
+
+        self.assertEqual(status, 200)
+        call_kwargs = mock_post.call_args[1]
+        self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer raw-secret")
+
+    @patch('requests.post')
+    def test_post_to_api_without_authentication(self, mock_post):
+        """Test _post_to_api proceeds without auth when nothing is configured."""
+        self.config.bfa_secret_key = None
+        self.config.bfa_host = None
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "ok", "results": []}'
+        mock_response.json.return_value = {"status": "ok", "results": []}
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        payload = {"repo": "test", "pipeline_id": "123"}
+
+        status, body, duration = poster._post_to_api(payload)
+
+        self.assertEqual(status, 200)
+        call_kwargs = mock_post.call_args[1]
+        # Authorization header should not be present
+        self.assertNotIn("Authorization", call_kwargs["headers"])
+
+    @patch('requests.post')
+    def test_post_to_api_non_json_response(self, mock_post):
+        """Test _post_to_api handles non-JSON response."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "Not JSON"
+        mock_response.json.side_effect = ValueError("Invalid JSON")
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        payload = {"repo": "test", "pipeline_id": "123"}
+
+        with self.assertRaises(requests.exceptions.RequestException) as context:
+            poster._post_to_api(payload)
+
+        self.assertIn("non-JSON response", str(context.exception))
+
+    @patch('requests.post')
+    def test_post_to_api_response_status_not_ok(self, mock_post):
+        """Test _post_to_api handles response with status != 'ok'."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "error", "message": "Something failed"}'
+        mock_response.json.return_value = {"status": "error", "message": "Something failed"}
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        payload = {"repo": "test", "pipeline_id": "123"}
+
+        with self.assertRaises(requests.exceptions.RequestException) as context:
+            poster._post_to_api(payload)
+
+        self.assertIn("status 'error'", str(context.exception))
+
+    @patch('requests.post')
+    def test_post_to_api_with_results_logging(self, mock_post):
+        """Test _post_to_api logs results when present."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "ok", "results": [{"step_name": "build", "error_hash": "abc123"}]}'
+        mock_response.json.return_value = {
+            "status": "ok",
+            "results": [{"step_name": "build", "error_hash": "abc123", "source": "gitlab"}]
+        }
+        mock_post.return_value = mock_response
+
+        poster = ApiPoster(self.config)
+        payload = {"repo": "test", "pipeline_id": "123"}
+
+        status, body, duration = poster._post_to_api(payload)
+
+        self.assertEqual(status, 200)
+        # Verify results were present
+        self.assertIn("results", mock_response.json.return_value)
+        self.assertEqual(len(mock_response.json.return_value["results"]), 1)
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_success(self, mock_post):
+        """Test successful Jenkins logs posting."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = '{"status": "ok"}'
+        mock_response.json.return_value = {"status": "ok"}
+        mock_post.return_value = mock_response
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "build-job",
+            "build_number": 42,
+            "build_url": "http://jenkins/job/42",
+            "status": "SUCCESS",
+            "duration_ms": 60000,
+            "timestamp": "2024-01-01T00:00:00Z",
+            "stages": []
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertTrue(result)
+        mock_post.assert_called_once()
+
+    def test_post_jenkins_logs_when_api_disabled(self):
+        """Test Jenkins logs posting when API is disabled."""
+        self.config.api_post_enabled = False
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "test-job",
+            "build_number": 1
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertFalse(result)
+
+    def test_post_jenkins_logs_without_url_configured(self):
+        """Test Jenkins logs posting when API URL is not configured."""
+        self.config.api_post_url = None
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "test-job",
+            "build_number": 1
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertFalse(result)
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_with_retry_exhausted(self, mock_post):
+        """Test Jenkins logs posting when retry is exhausted."""
+        from src.error_handler import RetryExhaustedError
+
+        mock_post.side_effect = requests.exceptions.ConnectionError("Network error")
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "failing-job",
+            "build_number": 99,
+            "status": "FAILURE"
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertFalse(result)
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_unexpected_exception(self, mock_post):
+        """Test Jenkins logs posting handles unexpected exceptions."""
+        mock_post.side_effect = RuntimeError("Unexpected error")
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "error-job",
+            "build_number": 77
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertFalse(result)
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_non_success_status_code(self, mock_post):
+        """Test Jenkins logs posting when API returns non-success status."""
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = '{"status": "error"}'
+        mock_response.json.return_value = {"status": "error"}
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("400 Bad Request")
+        mock_post.return_value = mock_response
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "bad-request-job",
+            "build_number": 55
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertFalse(result)
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_without_retry(self, mock_post):
+        """Test Jenkins logs posting with retry disabled."""
+        self.config.api_post_retry_enabled = False
+
+        mock_response = MagicMock()
+        mock_response.status_code = 201
+        mock_response.text = '{"status": "ok"}'
+        mock_response.json.return_value = {"status": "ok"}
+        mock_post.return_value = mock_response
+
+        jenkins_payload = {
+            "source": "jenkins",
+            "job_name": "no-retry-job",
+            "build_number": 33
+        }
+
+        poster = ApiPoster(self.config)
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertTrue(result)
+
+    def test_post_pipeline_logs_payload_formatting_failure(self):
+        """Test pipeline logs posting when payload formatting fails."""
+        poster = ApiPoster(self.config)
+
+        # Create malformed pipeline_info that will cause formatting error
+        bad_pipeline_info = None  # This will cause format_payload to fail
+
+        result = poster.post_pipeline_logs(bad_pipeline_info, self.all_logs)
+
+        self.assertFalse(result)
+
+    @patch('requests.post')
+    def test_post_pipeline_logs_unexpected_exception_during_post(self, mock_post):
+        """Test pipeline logs posting handles unexpected exception during POST."""
+        mock_post.side_effect = RuntimeError("Unexpected runtime error")
+
+        poster = ApiPoster(self.config)
+        result = poster.post_pipeline_logs(self.pipeline_info, self.all_logs)
+
+        self.assertFalse(result)
+
 
 if __name__ == "__main__":
     unittest.main()

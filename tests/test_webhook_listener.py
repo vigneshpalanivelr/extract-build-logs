@@ -296,5 +296,5 @@ class TestWebhookListener(unittest.TestCase):
         self.assertTrue(result)
 
 
-if __name__ == '__main__':
-    unittest.main()
+class TestProcessJenkinsBuild(unittest.TestCase):
+    """Test cases for process_jenkins_build background task."""
