@@ -147,7 +147,7 @@ class TestApiPoster(unittest.TestCase):
         self.assertEqual(payload["repo"], "test-project")
         self.assertEqual(payload["branch"], "main")
         self.assertEqual(payload["commit"], "abc123d")  # First 7 chars of sha
-        self.assertEqual(payload["triggered_by"], "Test User@internal.com")  # Username gets domain appended
+        self.assertEqual(payload["triggered_by"], "Test User@sandvine.com")  # Username gets domain appended
         # job_name is a comma-separated string
         self.assertIsInstance(payload["job_name"], str)
         self.assertEqual(len(payload["failed_steps"]), 0)  # No failed jobs

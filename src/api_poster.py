@@ -122,7 +122,7 @@ class ApiPoster:
         if isinstance(user_info, dict):
             triggered_by = user_info.get('username') or user_info.get('name')
             if triggered_by:
-                triggered_by = f"{triggered_by}@internal.com"
+                triggered_by = f"{triggered_by}@sandvine.com"
         else:
             triggered_by = None
 
