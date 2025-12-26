@@ -395,5 +395,333 @@ class TestStartupShutdown(unittest.TestCase):
         mock_monitor.cleanup.assert_called_once()
 
 
+class TestProcessPipelineEventAdvanced(unittest.TestCase):
+    """Advanced test cases for process_pipeline_event."""
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_job_log')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_api_failure_fallback_to_files(self, mock_config, mock_monitor,
+                                                                   mock_should_save_pipeline, mock_should_save_job,
+                                                                   mock_log_fetcher, mock_storage, mock_api_poster,
+                                                                   mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event falls back to files when API posting fails."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = True
+        mock_config.api_post_enabled = True
+        mock_config.api_post_save_to_file = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = True
+        mock_should_save_job.return_value = True
+
+        mock_log_fetcher.fetch_pipeline_jobs.return_value = [
+            {'id': 1, 'name': 'build', 'status': 'success'}
+        ]
+        mock_log_fetcher.fetch_job_log.return_value = 'Build log'
+
+        # API posting fails
+        mock_api_poster.post_pipeline_logs.return_value = False
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'success'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Verify fallback to file storage occurred
+        mock_storage.save_log.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_job_log')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_dual_mode(self, mock_config, mock_monitor, mock_should_save_pipeline,
+                                               mock_should_save_job, mock_log_fetcher, mock_storage,
+                                               mock_api_poster, mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event in dual mode (API + file storage)."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = True
+        mock_config.api_post_enabled = True
+        mock_config.api_post_save_to_file = True  # Dual mode
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = True
+        mock_should_save_job.return_value = True
+
+        mock_log_fetcher.fetch_pipeline_jobs.return_value = [
+            {'id': 1, 'name': 'build', 'status': 'success'}
+        ]
+        mock_log_fetcher.fetch_job_log.return_value = 'Build log'
+
+        mock_api_poster.post_pipeline_logs.return_value = True
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'success'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Verify both API posting AND file storage occurred
+        mock_api_poster.post_pipeline_logs.assert_called()
+        mock_storage.save_log.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_job_log')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_with_job_filtering(self, mock_config, mock_monitor,
+                                                        mock_should_save_pipeline, mock_should_save_job,
+                                                        mock_log_fetcher, mock_storage,
+                                                        mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event with job status filtering."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = True
+        mock_config.api_post_enabled = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = True
+
+        # Filter: only save failed jobs
+        def job_filter(job, _pipeline_info):
+            return job['status'] == 'failed'
+        mock_should_save_job.side_effect = job_filter
+
+        mock_log_fetcher.fetch_pipeline_jobs.return_value = [
+            {'id': 1, 'name': 'build', 'status': 'success'},
+            {'id': 2, 'name': 'test', 'status': 'failed'},
+            {'id': 3, 'name': 'deploy', 'status': 'success'}
+        ]
+        mock_log_fetcher.fetch_job_log.return_value = 'Test log'
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'failed'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Verify only 1 job log was fetched (the failed one)
+        self.assertEqual(mock_log_fetcher.fetch_job_log.call_count, 1)
+        mock_log_fetcher.fetch_job_log.assert_called_with(456, 2)
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_filtered_out(self, mock_config, mock_monitor,
+                                                  mock_should_save_pipeline, mock_storage,
+                                                  mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event when pipeline is filtered out."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = True
+        mock_time.time.return_value = 1000.0
+
+        # Pipeline is filtered out
+        mock_should_save_pipeline.return_value = False
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'running'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Metadata should still be saved
+        mock_storage.save_pipeline_metadata.assert_called_once()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_filtered_no_metadata(self, mock_config, mock_monitor,
+                                                         mock_should_save_pipeline, mock_storage,
+                                                         mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event doesn't save metadata when disabled and filtered."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = False
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'running'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Metadata should NOT be saved
+        mock_storage.save_pipeline_metadata.assert_not_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_job_log')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_job_log_fetch_error(self, mock_config, mock_monitor,
+                                                         mock_should_save_pipeline, mock_should_save_job,
+                                                         mock_log_fetcher, mock_storage,
+                                                         mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event when individual job log fetch fails."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = True
+        mock_config.api_post_enabled = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = True
+        mock_should_save_job.return_value = True
+
+        mock_log_fetcher.fetch_pipeline_jobs.return_value = [
+            {'id': 1, 'name': 'build', 'status': 'success'},
+            {'id': 2, 'name': 'test', 'status': 'failed'}
+        ]
+
+        # First succeeds, second fails
+        mock_log_fetcher.fetch_job_log.side_effect = [
+            'Build log',
+            Exception('Network error')
+        ]
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'failed'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Verify both saves were attempted (error message for failed one)
+        self.assertEqual(mock_storage.save_log.call_count, 2)
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_job_log')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_storage_error(self, mock_config, mock_monitor,
+                                                   mock_should_save_pipeline, mock_should_save_job,
+                                                   mock_log_fetcher, mock_storage,
+                                                   mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event when file storage fails."""
+        from src.webhook_listener import process_pipeline_event
+
+        mock_config.log_save_metadata_always = True
+        mock_config.api_post_enabled = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = True
+        mock_should_save_job.return_value = True
+
+        mock_log_fetcher.fetch_pipeline_jobs.return_value = [
+            {'id': 1, 'name': 'build', 'status': 'success'}
+        ]
+        mock_log_fetcher.fetch_job_log.return_value = 'Build log'
+
+        # Storage fails
+        mock_storage.save_log.side_effect = Exception('Disk full')
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'success'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Verify error was handled
+        calls = mock_monitor.update_request.call_args_list
+        # Check that error_count was incremented
+        self.assertTrue(any('error_count' in str(call) for call in calls))
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_event_unexpected_exception(self, mock_config, mock_monitor,
+                                                         mock_should_save_pipeline, mock_log_fetcher,
+                                                         mock_set_req, mock_clear_req, mock_time):
+        """Test process_pipeline_event handles unexpected exceptions."""
+        from src.webhook_listener import process_pipeline_event
+        from src.monitoring import RequestStatus
+
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save_pipeline.return_value = True
+
+        # Unexpected error
+        mock_log_fetcher.fetch_pipeline_jobs.side_effect = RuntimeError("Unexpected error")
+
+        pipeline_info = {
+            'pipeline_id': 123,
+            'project_id': 456,
+            'project_name': 'test/repo',
+            'status': 'success'
+        }
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Verify request was marked as failed
+        calls = mock_monitor.update_request.call_args_list
+        final_call = calls[-1]
+        self.assertEqual(final_call[1]['status'], RequestStatus.FAILED)
+
+
 if __name__ == "__main__":
     unittest.main()
