@@ -377,6 +377,54 @@ class TestStorageManager(unittest.TestCase):
         # Verify file size
         self.assertGreater(log_path.stat().st_size, 900000)
 
+    @patch('builtins.open', side_effect=IOError("Permission denied"))
+    def test_save_log_io_error(self, mock_open):
+        """Test save_log handles IOError correctly."""
+        with self.assertRaises(IOError):
+            self.manager.save_log(
+                project_id=123,
+                pipeline_id=789,
+                job_id=456,
+                job_name="test",
+                log_content="test log",
+                job_details={"status": "success"}
+            )
+
+    @patch('builtins.open', side_effect=IOError("Disk full"))
+    def test_save_pipeline_metadata_io_error(self, mock_open):
+        """Test save_pipeline_metadata handles IOError correctly."""
+        with self.assertRaises(IOError):
+            self.manager.save_pipeline_metadata(
+                project_id=123,
+                pipeline_id=789,
+                pipeline_data={"status": "success"}
+            )
+
+    def test_get_pipeline_metadata_file_not_exists(self):
+        """Test get_pipeline_metadata when file doesn't exist."""
+        result = self.manager.get_pipeline_metadata(999, 999)
+        self.assertIsNone(result)
+
+    def test_get_pipeline_metadata_json_decode_error(self):
+        """Test get_pipeline_metadata handles invalid JSON."""
+        # Create metadata file with invalid JSON
+        pipeline_dir = self.manager.get_pipeline_directory(123, 789)
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        metadata_path = pipeline_dir / "metadata.json"
+
+        # Write invalid JSON
+        with open(metadata_path, 'w') as f:
+            f.write("{invalid json content")
+
+        result = self.manager.get_pipeline_metadata(123, 789)
+        self.assertIsNone(result)
+
+    @patch('pathlib.Path.mkdir', side_effect=OSError("Permission denied"))
+    def test_get_pipeline_directory_os_error(self, mock_mkdir):
+        """Test directory creation handles OSError."""
+        with self.assertRaises(OSError):
+            self.manager.get_pipeline_directory(123, 789)
+
 
 if __name__ == '__main__':
     unittest.main()
