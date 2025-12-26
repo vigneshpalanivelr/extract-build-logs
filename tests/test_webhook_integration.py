@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch, Mock, MagicMock
 import json
 
+
 class TestWebhookGitlabIntegration(unittest.TestCase):
     """Integration tests for GitLab webhook endpoint."""
 
@@ -15,23 +16,26 @@ class TestWebhookGitlabIntegration(unittest.TestCase):
         from src.webhook_listener import app
         self.client = TestClient(app)
 
-    @patch('src.webhook_listener.pipeline_extractor')
     @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.pipeline_extractor')
     @patch('src.webhook_listener.config')
-    def test_webhook_gitlab_pipeline_not_ready(self, mock_config, mock_monitor, mock_extractor):
+    def test_webhook_gitlab_pipeline_not_ready(self, mock_config, mock_extractor, mock_monitor):
         """Test GitLab webhook when pipeline is not ready for processing."""
         mock_config.webhook_secret = None
 
-        # Mock pipeline extractor
+        # Complete pipeline_info with all required fields
         mock_extractor.extract_pipeline_info.return_value = {
             'pipeline_id': 123,
             'project_id': 456,
             'project_name': 'test/repo',
-            'status': 'running'
+            'status': 'running',
+            'pipeline_type': 'main',
+            'builds': []
         }
         mock_extractor.should_process_pipeline.return_value = False
 
         # Mock monitor
+        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
@@ -45,25 +49,26 @@ class TestWebhookGitlabIntegration(unittest.TestCase):
         self.assertEqual(data["status"], "skipped")
         self.assertEqual(data["pipeline_id"], 123)
 
-    @patch('src.webhook_listener.pipeline_extractor')
     @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.pipeline_extractor')
     @patch('src.webhook_listener.config')
-    @patch('src.webhook_listener.BackgroundTasks')
-    def test_webhook_gitlab_pipeline_queued(self, mock_bg, mock_config, mock_monitor, mock_extractor):
+    def test_webhook_gitlab_pipeline_queued(self, mock_config, mock_extractor, mock_monitor):
         """Test GitLab webhook queues pipeline for processing."""
         mock_config.webhook_secret = None
 
-        # Mock pipeline extractor
+        # Complete pipeline_info with all required fields
         mock_extractor.extract_pipeline_info.return_value = {
             'pipeline_id': 123,
             'project_id': 456,
             'project_name': 'test/repo',
             'status': 'success',
+            'pipeline_type': 'main',
             'builds': []
         }
         mock_extractor.should_process_pipeline.return_value = True
 
         # Mock monitor
+        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
@@ -118,11 +123,11 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
         from src.webhook_listener import app
         self.client = TestClient(app)
 
-    @patch('src.webhook_listener.jenkins_extractor')
-    @patch('src.webhook_listener.jenkins_log_fetcher')
     @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.config')
-    def test_webhook_jenkins_success(self, mock_config, mock_monitor, mock_fetcher, mock_extractor):
+    def test_webhook_jenkins_success(self, mock_config, mock_extractor, mock_fetcher, mock_monitor):
         """Test Jenkins webhook successful processing."""
         mock_config.jenkins_enabled = True
         mock_config.jenkins_webhook_secret = None
@@ -135,6 +140,7 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
         }
 
         # Mock monitor
+        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
@@ -152,8 +158,10 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
         self.assertEqual(data["job_name"], "test-job")
         self.assertEqual(data["build_number"], 42)
 
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.config')
-    def test_webhook_jenkins_auth_required(self, mock_config):
+    def test_webhook_jenkins_auth_required(self, mock_config, mock_extractor, mock_fetcher):
         """Test Jenkins webhook with authentication required but not provided."""
         mock_config.jenkins_enabled = True
         mock_config.jenkins_webhook_secret = "secret-123"
@@ -165,8 +173,10 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.config')
-    def test_webhook_jenkins_auth_invalid(self, mock_config):
+    def test_webhook_jenkins_auth_invalid(self, mock_config, mock_extractor, mock_fetcher):
         """Test Jenkins webhook with invalid authentication."""
         mock_config.jenkins_enabled = True
         mock_config.jenkins_webhook_secret = "secret-123"
@@ -179,10 +189,10 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
 
         self.assertEqual(response.status_code, 401)
 
-    @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.config')
-    def test_webhook_jenkins_extraction_error(self, mock_config, mock_fetcher, mock_extractor):
+    def test_webhook_jenkins_extraction_error(self, mock_config, mock_extractor, mock_fetcher):
         """Test Jenkins webhook when extraction fails."""
         mock_config.jenkins_enabled = True
         mock_config.jenkins_webhook_secret = None
@@ -195,8 +205,10 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
 
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.config')
-    def test_webhook_jenkins_invalid_json(self, mock_config):
+    def test_webhook_jenkins_invalid_json(self, mock_config, mock_extractor, mock_fetcher):
         """Test Jenkins webhook with invalid JSON."""
         mock_config.jenkins_enabled = True
         mock_config.jenkins_webhook_secret = None
