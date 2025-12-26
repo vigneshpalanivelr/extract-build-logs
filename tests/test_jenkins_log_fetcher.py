@@ -112,8 +112,9 @@ class TestJenkinsLogFetcher(unittest.TestCase):
     def test_fetch_build_info_retry_exhausted(self, mock_make_request):
         """Test build info fetch when retries are exhausted."""
         # Mock the error_handler.retry_with_backoff to raise RetryExhaustedError
+        test_exception = Exception("Max retries exceeded")
         with patch.object(self.fetcher.error_handler, 'retry_with_backoff',
-                          side_effect=RetryExhaustedError("Max retries exceeded")):
+                          side_effect=RetryExhaustedError(3, test_exception)):
             with self.assertRaises(RetryExhaustedError):
                 self.fetcher.fetch_build_info("test-job", 123)
 
@@ -131,8 +132,9 @@ class TestJenkinsLogFetcher(unittest.TestCase):
     @patch('src.jenkins_log_fetcher.JenkinsLogFetcher._make_request')
     def test_fetch_console_log_retry_exhausted(self, mock_make_request):
         """Test console log fetch when retries are exhausted."""
+        test_exception = Exception("Max retries exceeded")
         with patch.object(self.fetcher.error_handler, 'retry_with_backoff',
-                          side_effect=RetryExhaustedError("Max retries exceeded")):
+                          side_effect=RetryExhaustedError(3, test_exception)):
             with self.assertRaises(RetryExhaustedError):
                 self.fetcher.fetch_console_log("test-job", 123)
 

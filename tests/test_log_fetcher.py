@@ -107,20 +107,26 @@ class TestLogFetcher(unittest.TestCase):
     @patch('requests.Session.get')
     def test_fetch_job_log_server_error(self, mock_get):
         """Test job log fetch with server error (500)."""
+        from src.error_handler import RetryExhaustedError
+
         mock_response = Mock()
         mock_response.status_code = 500
         mock_response.raise_for_status.side_effect = requests.HTTPError("500 Server Error")
         mock_get.return_value = mock_response
 
-        with self.assertRaises(requests.HTTPError):
+        # The decorator retries and then raises RetryExhaustedError
+        with self.assertRaises(RetryExhaustedError):
             self.fetcher.fetch_job_log(123, 456)
 
     @patch('requests.Session.get')
     def test_fetch_job_log_request_exception(self, mock_get):
         """Test job log fetch with connection error."""
+        from src.error_handler import RetryExhaustedError
+
         mock_get.side_effect = requests.ConnectionError("Connection failed")
 
-        with self.assertRaises(requests.RequestException):
+        # The decorator retries and then raises RetryExhaustedError
+        with self.assertRaises(RetryExhaustedError):
             self.fetcher.fetch_job_log(123, 456)
 
     @patch('requests.Session.get')
@@ -150,9 +156,12 @@ class TestLogFetcher(unittest.TestCase):
     @patch('requests.Session.get')
     def test_fetch_job_details_request_exception(self, mock_get):
         """Test job details fetch with connection error."""
+        from src.error_handler import RetryExhaustedError
+
         mock_get.side_effect = requests.ConnectionError("Connection failed")
 
-        with self.assertRaises(requests.RequestException):
+        # The decorator retries and then raises RetryExhaustedError
+        with self.assertRaises(RetryExhaustedError):
             self.fetcher.fetch_job_details(123, 456)
 
     @patch('requests.Session.get')
@@ -176,36 +185,38 @@ class TestLogFetcher(unittest.TestCase):
     @patch('requests.Session.get')
     def test_fetch_pipeline_jobs_with_pagination(self, mock_get):
         """Test pipeline jobs fetch with pagination."""
-        # First page
+        # First page - return full page (100 jobs) to trigger pagination
+        first_page_jobs = [{"id": i, "name": f"job-{i}", "status": "success"} for i in range(100)]
         mock_response1 = Mock()
         mock_response1.status_code = 200
-        mock_response1.json.return_value = [
-            {"id": 456, "name": "build", "status": "success"}
-        ]
-        mock_response1.links = {'next': {'url': 'https://gitlab.example.com/api/v4/projects/123/pipelines/789/jobs?page=2'}}
+        mock_response1.json.return_value = first_page_jobs
 
-        # Second page
+        # Second page - return fewer jobs to end pagination
         mock_response2 = Mock()
         mock_response2.status_code = 200
         mock_response2.json.return_value = [
+            {"id": 456, "name": "build", "status": "success"},
             {"id": 457, "name": "test", "status": "success"}
         ]
-        mock_response2.links = {}
 
         mock_get.side_effect = [mock_response1, mock_response2]
 
         result = self.fetcher.fetch_pipeline_jobs(123, 789)
 
-        self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["name"], "build")
-        self.assertEqual(result[1]["name"], "test")
+        # Should have 100 + 2 = 102 jobs total
+        self.assertEqual(len(result), 102)
+        self.assertEqual(result[100]["name"], "build")
+        self.assertEqual(result[101]["name"], "test")
 
     @patch('requests.Session.get')
     def test_fetch_pipeline_jobs_request_exception(self, mock_get):
         """Test pipeline jobs fetch with connection error."""
+        from src.error_handler import RetryExhaustedError
+
         mock_get.side_effect = requests.ConnectionError("Connection failed")
 
-        with self.assertRaises(requests.RequestException):
+        # The decorator retries and then raises RetryExhaustedError
+        with self.assertRaises(RetryExhaustedError):
             self.fetcher.fetch_pipeline_jobs(123, 789)
 
 

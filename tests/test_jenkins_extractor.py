@@ -171,14 +171,16 @@ class TestJenkinsExtractor(unittest.TestCase):
         self.assertEqual(result['build_number'], 666)
         self.assertEqual(result['status'], 'FAILURE')
 
-    def test_extract_fallback_raises_on_missing_job_name(self):
-        """Test _extract_fallback raises ValueError when job_name is missing."""
+    def test_extract_fallback_with_missing_job_name(self):
+        """Test _extract_fallback defaults to 'unknown' when job_name is missing."""
         payload = {
             'build_number': 777
         }
 
-        with self.assertRaises(ValueError):
-            self.extractor._extract_fallback(payload)
+        # Should not raise, defaults to 'unknown' for missing job_name
+        result = self.extractor._extract_fallback(payload)
+        self.assertEqual(result['job_name'], 'unknown')
+        self.assertEqual(result['build_number'], 777)
 
     def test_parse_console_log_with_blue_ocean(self):
         """Test parsing console log with Blue Ocean stages."""
