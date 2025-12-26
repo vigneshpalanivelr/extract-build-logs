@@ -219,6 +219,127 @@ class TestLogFetcher(unittest.TestCase):
         with self.assertRaises(RetryExhaustedError):
             self.fetcher.fetch_pipeline_jobs(123, 789)
 
+    @patch('requests.Session.get')
+    def test_fetch_pipeline_jobs_empty_response(self, mock_get):
+        """Test pipeline jobs fetch when API returns empty list."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = []  # Empty list
+        mock_get.return_value = mock_response
+
+        result = self.fetcher.fetch_pipeline_jobs(123, 789)
+
+        # Should return empty list and break immediately (line 203)
+        self.assertEqual(len(result), 0)
+        self.assertEqual(result, [])
+
+    @patch('requests.Session.get')
+    def test_fetch_all_logs_for_pipeline(self, mock_get):
+        """Test fetching all logs for a pipeline."""
+        # Mock fetch_pipeline_jobs response (first call)
+        mock_jobs_response = Mock()
+        mock_jobs_response.status_code = 200
+        mock_jobs_response.json.return_value = [
+            {"id": 1, "name": "build", "status": "success"},
+            {"id": 2, "name": "test", "status": "success"}
+        ]
+
+        # Mock fetch_job_log responses (subsequent calls)
+        mock_log1_response = Mock()
+        mock_log1_response.status_code = 200
+        mock_log1_response.text = "Build log content"
+
+        mock_log2_response = Mock()
+        mock_log2_response.status_code = 200
+        mock_log2_response.text = "Test log content"
+
+        mock_get.side_effect = [mock_jobs_response, mock_log1_response, mock_log2_response]
+
+        result = self.fetcher.fetch_all_logs_for_pipeline(123, 789)
+
+        # Should have 2 jobs with logs
+        self.assertEqual(len(result), 2)
+        self.assertIn(1, result)
+        self.assertIn(2, result)
+        self.assertEqual(result[1]['details']['name'], "build")
+        self.assertEqual(result[1]['log'], "Build log content")
+        self.assertEqual(result[2]['details']['name'], "test")
+        self.assertEqual(result[2]['log'], "Test log content")
+
+    @patch('requests.Session.get')
+    def test_fetch_all_logs_for_pipeline_with_job_error(self, mock_get):
+        """Test fetch_all_logs_for_pipeline when one job log fetch fails."""
+        # Mock fetch_pipeline_jobs
+        mock_jobs_response = Mock()
+        mock_jobs_response.status_code = 200
+        mock_jobs_response.json.return_value = [
+            {"id": 1, "name": "build", "status": "success"},
+            {"id": 2, "name": "test", "status": "failed"}
+        ]
+
+        # Mock log responses - second one fails
+        mock_log1_response = Mock()
+        mock_log1_response.status_code = 200
+        mock_log1_response.text = "Build log content"
+
+        mock_get.side_effect = [
+            mock_jobs_response,
+            mock_log1_response,
+            requests.ConnectionError("Network error")
+        ]
+
+        result = self.fetcher.fetch_all_logs_for_pipeline(123, 789)
+
+        # Should have 2 jobs, second with error message (line 262)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[1]['log'], "Build log content")
+        self.assertIn("[Error fetching log:", result[2]['log'])
+
+    @patch('requests.Session.get')
+    def test_fetch_pipeline_details(self, mock_get):
+        """Test fetching pipeline details."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "id": 789,
+            "status": "success",
+            "ref": "main",
+            "sha": "abc123",
+            "user": {"username": "testuser"}
+        }
+        mock_get.return_value = mock_response
+
+        result = self.fetcher.fetch_pipeline_details(123, 789)
+
+        # Verify pipeline details
+        self.assertEqual(result['id'], 789)
+        self.assertEqual(result['status'], "success")
+        self.assertEqual(result['ref'], "main")
+        mock_get.assert_called_once()
+
+    @patch('requests.Session.get')
+    def test_fetch_pipeline_details_request_error(self, mock_get):
+        """Test fetch_pipeline_details with HTTP error."""
+        from src.error_handler import RetryExhaustedError
+
+        mock_get.side_effect = requests.HTTPError("404 Not Found")
+
+        # The decorator retries and then raises RetryExhaustedError
+        with self.assertRaises(RetryExhaustedError):
+            self.fetcher.fetch_pipeline_details(123, 789)
+
+    def test_close(self):
+        """Test closing the fetcher session."""
+        # Create a real session to test closing
+        import requests
+        self.fetcher.session = requests.Session()
+
+        # Close should not raise an error
+        self.fetcher.close()
+
+        # Session should be closed (we can't directly check but method should execute)
+        # This covers lines 308-309
+
 
 class TestGitLabAPIError(unittest.TestCase):
     """Test cases for GitLabAPIError exception."""
