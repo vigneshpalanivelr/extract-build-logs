@@ -571,8 +571,8 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_jenkins_build_api_post_fails(self, mock_config, mock_monitor,
-                                                   mock_storage, mock_log_fetcher, mock_api_poster,
-                                                   mock_set_req, mock_clear_req, mock_time):
+                                                  mock_storage, mock_log_fetcher, mock_api_poster,
+                                                  mock_set_req, mock_clear_req, mock_time):
         """Test Jenkins build processing when API post fails (covers lines 941-946)."""
         from src.webhook_listener import process_jenkins_build
 
@@ -608,8 +608,8 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_jenkins_build_api_post_exception(self, mock_config, mock_monitor,
-                                                       mock_log_fetcher, mock_api_poster,
-                                                       mock_set_req, mock_clear_req, mock_time):
+                                                      mock_log_fetcher, mock_api_poster,
+                                                      mock_set_req, mock_clear_req, mock_time):
         """Test Jenkins build when API post raises exception (covers line 946)."""
         from src.webhook_listener import process_jenkins_build
 
@@ -643,8 +643,8 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_jenkins_build_general_exception(self, mock_config, mock_monitor,
-                                                      mock_log_fetcher, mock_set_req,
-                                                      mock_clear_req, mock_time):
+                                                     mock_log_fetcher, mock_set_req,
+                                                     mock_clear_req, mock_time):
         """Test Jenkins build processing with general exception (covers lines 965-973)."""
         from src.monitoring import RequestStatus
         from src.webhook_listener import process_jenkins_build
@@ -682,9 +682,9 @@ class TestProcessPipelineEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_api_post_unexpected_exception(self, mock_config, mock_monitor,
-                                                             mock_should_save, mock_log_fetcher,
-                                                             mock_api_poster, mock_set_req,
-                                                             mock_clear_req, mock_time):
+                                                            mock_should_save, mock_log_fetcher,
+                                                            mock_api_poster, mock_set_req,
+                                                            mock_clear_req, mock_time):
         """Test pipeline processing with unexpected API exception (covers lines 1166-1168)."""
         from src.webhook_listener import process_pipeline_event
         from tests.test_webhook_background_tasks import create_complete_pipeline_info
@@ -720,9 +720,9 @@ class TestProcessPipelineEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_with_skipped_jobs(self, mock_config, mock_monitor,
-                                                 mock_extractor, mock_should_save,
-                                                 mock_log_fetcher, mock_api_poster,
-                                                 mock_set_req, mock_clear_req, mock_time):
+                                                mock_extractor, mock_should_save,
+                                                mock_log_fetcher, mock_api_poster,
+                                                mock_set_req, mock_clear_req, mock_time):
         """Test pipeline processing with skipped jobs (covers lines 1265-1270)."""
         from src.webhook_listener import process_pipeline_event
         from tests.test_webhook_background_tasks import create_complete_pipeline_info
@@ -756,8 +756,8 @@ class TestProcessPipelineEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_retry_exhausted(self, mock_config, mock_monitor,
-                                               mock_should_save, mock_log_fetcher,
-                                               mock_set_req, mock_clear_req, mock_time):
+                                              mock_should_save, mock_log_fetcher,
+                                              mock_set_req, mock_clear_req, mock_time):
         """Test pipeline processing with RetryExhaustedError (covers lines 1302-1321)."""
         from src.webhook_listener import process_pipeline_event
         from src.error_handler import RetryExhaustedError
@@ -793,7 +793,7 @@ class TestJenkinsWebhookEdgeCases(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_jenkins_webhook_empty_payload(self, mock_config, mock_monitor,
-                                            mock_jenkins_extractor, mock_jenkins_log_fetcher):
+                                           mock_jenkins_extractor, mock_jenkins_log_fetcher):
         """Test Jenkins webhook with empty payload (covers line 779)."""
         from fastapi.testclient import TestClient
         from src.webhook_listener import app
