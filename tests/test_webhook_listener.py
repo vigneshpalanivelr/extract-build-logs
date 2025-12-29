@@ -526,15 +526,22 @@ class TestWebhookEdgeCases(unittest.TestCase):
     def test_webhook_gitlab_general_exception(self, mock_config, mock_monitor):
         """Test GitLab webhook with general exception (covers lines 685-700)."""
         mock_config.webhook_secret = None
-        mock_monitor.track_request.side_effect = RuntimeError("Unexpected error")
 
+        # Make monitor.track_request raise a non-HTTPException error
+        # This happens at line 539 when tracking ignored requests
+        mock_monitor.track_request.side_effect = RuntimeError("Database connection lost")
+
+        # Send a non-pipeline event to trigger the ignored request tracking
         response = self.client.post(
             "/webhook/gitlab",
-            json={"object_kind": "pipeline"},
-            headers={"X-Gitlab-Event": "Pipeline Hook"}
+            json={"object_kind": "push"},
+            headers={"X-Gitlab-Event": "Push Hook"}  # Non-pipeline event
         )
 
+        # Should get 500 with "Processing failed" message
         self.assertEqual(response.status_code, 500)
+        response_data = response.json()
+        self.assertIn("Processing failed", response_data["detail"]["message"])
 
     @patch('src.webhook_listener.token_manager')
     @patch('src.webhook_listener.monitor')
@@ -702,6 +709,115 @@ class TestProcessPipelineEdgeCases(unittest.TestCase):
 
         # Should complete and save to files as fallback
         mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.pipeline_extractor')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_with_skipped_jobs(self, mock_config, mock_monitor,
+                                                 mock_extractor, mock_should_save,
+                                                 mock_log_fetcher, mock_api_poster,
+                                                 mock_set_req, mock_clear_req, mock_time):
+        """Test pipeline processing with skipped jobs (covers lines 1265-1270)."""
+        from src.webhook_listener import process_pipeline_event
+        from tests.test_webhook_background_tasks import create_complete_pipeline_info
+
+        mock_config.api_post_enabled = False
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save.return_value = False  # Skip jobs due to filtering
+
+        # Create pipeline info with multiple jobs
+        pipeline_info = create_complete_pipeline_info()
+        pipeline_info['jobs'] = [
+            {'id': 1, 'name': 'build', 'status': 'success', 'stage': 'build'},
+            {'id': 2, 'name': 'test', 'status': 'failed', 'stage': 'test'},
+            {'id': 3, 'name': 'deploy', 'status': 'skipped', 'stage': 'deploy'}
+        ]
+
+        mock_extractor.get_pipeline_summary.return_value = "Pipeline summary"
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Should log skipped jobs
+        mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.log_fetcher')
+    @patch('src.webhook_listener.should_save_pipeline_logs')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_pipeline_retry_exhausted(self, mock_config, mock_monitor,
+                                               mock_should_save, mock_log_fetcher,
+                                               mock_set_req, mock_clear_req, mock_time):
+        """Test pipeline processing with RetryExhaustedError (covers lines 1302-1321)."""
+        from src.webhook_listener import process_pipeline_event
+        from src.error_handler import RetryExhaustedError
+        from src.monitoring import RequestStatus
+        from tests.test_webhook_background_tasks import create_complete_pipeline_info
+
+        mock_config.api_post_enabled = False
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        mock_should_save.return_value = True
+
+        # Make log fetcher raise RetryExhaustedError
+        last_exc = RuntimeError("Connection failed")
+        mock_log_fetcher.fetch_pipeline_jobs.side_effect = RetryExhaustedError(attempts=3, last_exception=last_exc)
+
+        pipeline_info = create_complete_pipeline_info()
+
+        process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
+
+        # Should update monitoring with FAILED status
+        calls = mock_monitor.update_request.call_args_list
+        final_call = calls[-1]
+        self.assertEqual(final_call[1]['status'], RequestStatus.FAILED)
+        self.assertIn("attempts", final_call[1]['error_message'].lower())
+
+
+class TestJenkinsWebhookEdgeCases(unittest.TestCase):
+    """Test edge cases for Jenkins webhook endpoint."""
+
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_extractor')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_jenkins_webhook_empty_payload(self, mock_config, mock_monitor,
+                                            mock_jenkins_extractor, mock_jenkins_log_fetcher):
+        """Test Jenkins webhook with empty payload (covers line 779)."""
+        from fastapi.testclient import TestClient
+        from src.webhook_listener import app
+        from unittest.mock import MagicMock
+
+        client = TestClient(app)
+        mock_config.webhook_secret = None
+        mock_config.jenkins_enabled = True
+        mock_config.jenkins_webhook_secret = None  # Disable authentication
+
+        # Mock Jenkins components to be available
+        mock_jenkins_extractor.return_value = MagicMock()
+        mock_jenkins_log_fetcher.return_value = MagicMock()
+
+        # Send empty JSON object
+        response = client.post(
+            "/webhook/jenkins",
+            json={},
+            headers={"Content-Type": "application/json"}
+        )
+
+        # Should return 400 for empty payload
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("error", response.json()["detail"]["status"])
 
 
 if __name__ == "__main__":
