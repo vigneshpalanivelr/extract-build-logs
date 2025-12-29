@@ -68,8 +68,6 @@
 
 ### 6. Operations & Monitoring
 - [6.1 Testing](#61-testing)
-  - [Unit Tests](#run-unit-tests)
-  - [Manual Testing](#manual-testing)
 - [6.2 Application Logging](#62-application-logging)
   - [Logging Features](#application-logging-features)
   - [Log Files & Formats](#log-files-and-formats)
@@ -972,28 +970,6 @@ grep "STATUS=failed" logs/api-requests.log
 # 6. Operations & Monitoring
 
 ## 6.1 Testing
-
-### Run Unit Tests
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# Run with coverage
-pytest tests/ --cov=src --cov-report=term-missing
-
-# Generate HTML coverage report
-pytest tests/ --cov=src --cov-report=html
-# Open htmlcov/index.html in browser
-
-# Run specific test file
-pytest tests/test_pipeline_extractor.py -v
-
-# Run tests matching pattern
-pytest tests/ -k "test_config" -v
-```
-
-### Manual Testing
 
 **Create Test Webhook Payload:**
 ```bash
