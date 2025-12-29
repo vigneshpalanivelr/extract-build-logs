@@ -174,7 +174,7 @@ class TestWebhookJenkinsComprehensive(unittest.TestCase):
     @patch('src.webhook_listener.jenkins_extractor')
     @patch('src.webhook_listener.config')
     def test_webhook_jenkins_metadata_fetch_error(self, mock_config, mock_extractor,
-                                   mock_fetcher, mock_monitor, mock_storage):
+                                                  mock_fetcher, mock_monitor, mock_storage):
         """Test Jenkins webhook when metadata fetch fails."""
         mock_config.jenkins_enabled = True
         mock_config.jenkins_webhook_secret = None
@@ -255,8 +255,8 @@ class TestBackgroundTasks(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_success(self, mock_config, mock_monitor, mock_should_save_pipeline,
-                           mock_should_save_job, mock_log_fetcher, mock_storage,
-                           mock_api_poster, mock_set_req, mock_clear_req, mock_time):
+                                            mock_should_save_job, mock_log_fetcher, mock_storage,
+                                            mock_api_poster, mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event background task success path."""
         from src.webhook_listener import process_pipeline_event
 
@@ -335,8 +335,8 @@ class TestBackgroundTasks(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_retry_exhausted(self, mock_config, mock_monitor,
-                                     mock_should_save_pipeline, mock_log_fetcher,
-                                     mock_set_req, mock_clear_req, mock_time):
+                                                    mock_should_save_pipeline, mock_log_fetcher,
+                                                    mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event when retry is exhausted."""
         from src.webhook_listener import process_pipeline_event
         from src.monitoring import RequestStatus
@@ -405,9 +405,9 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_api_failure_fallback_to_files(self, mock_config, mock_monitor,
-                                                   mock_should_save_pipeline, mock_should_save_job,
-                                                   mock_log_fetcher, mock_storage, mock_api_poster,
-                                                   mock_set_req, mock_clear_req, mock_time):
+                                                                  mock_should_save_pipeline, mock_should_save_job,
+                                                                  mock_log_fetcher, mock_storage, mock_api_poster,
+                                                                  mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event falls back to files when API posting fails."""
         from src.webhook_listener import process_pipeline_event
 
@@ -445,8 +445,8 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_dual_mode(self, mock_config, mock_monitor, mock_should_save_pipeline,
-                               mock_should_save_job, mock_log_fetcher, mock_storage,
-                               mock_api_poster, mock_set_req, mock_clear_req, mock_time):
+                                              mock_should_save_job, mock_log_fetcher, mock_storage,
+                                              mock_api_poster, mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event in dual mode (API + file storage)."""
         from src.webhook_listener import process_pipeline_event
 
@@ -483,9 +483,9 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_with_job_filtering(self, mock_config, mock_monitor,
-                                        mock_should_save_pipeline, mock_should_save_job,
-                                        mock_log_fetcher, mock_storage,
-                                        mock_set_req, mock_clear_req, mock_time):
+                                                       mock_should_save_pipeline, mock_should_save_job,
+                                                       mock_log_fetcher, mock_storage,
+                                                       mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event with job status filtering."""
         from src.webhook_listener import process_pipeline_event
 
@@ -523,8 +523,8 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_filtered_out(self, mock_config, mock_monitor,
-                                  mock_should_save_pipeline, mock_storage,
-                                  mock_set_req, mock_clear_req, mock_time):
+                                                 mock_should_save_pipeline, mock_storage,
+                                                 mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event when pipeline is filtered out."""
         from src.webhook_listener import process_pipeline_event
 
@@ -576,9 +576,9 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_job_log_fetch_error(self, mock_config, mock_monitor,
-                                         mock_should_save_pipeline, mock_should_save_job,
-                                         mock_log_fetcher, mock_storage,
-                                         mock_set_req, mock_clear_req, mock_time):
+                                                        mock_should_save_pipeline, mock_should_save_job,
+                                                        mock_log_fetcher, mock_storage,
+                                                        mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event when individual job log fetch fails."""
         from src.webhook_listener import process_pipeline_event
 
@@ -618,9 +618,9 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
     @patch('src.webhook_listener.monitor')
     @patch('src.webhook_listener.config')
     def test_process_pipeline_event_storage_error(self, mock_config, mock_monitor,
-                                   mock_should_save_pipeline, mock_should_save_job,
-                                   mock_log_fetcher, mock_storage, mock_pipeline_extractor,
-                                   mock_set_req, mock_clear_req, mock_time):
+                                                  mock_should_save_pipeline, mock_should_save_job,
+                                                  mock_log_fetcher, mock_storage, mock_pipeline_extractor,
+                                                  mock_set_req, mock_clear_req, mock_time):
         """Test process_pipeline_event when file storage fails."""
         from src.webhook_listener import process_pipeline_event
 
