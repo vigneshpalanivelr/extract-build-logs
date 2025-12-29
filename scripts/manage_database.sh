@@ -1,17 +1,13 @@
 #!/bin/bash
-# Database Management Script
+# Database Management Script (SQLite Only)
 #
 # Usage:
 #   ./scripts/manage_database.sh backup [daily|weekly|monthly]
 #   ./scripts/manage_database.sh restore <backup-file>
 #   ./scripts/manage_database.sh check
 #   ./scripts/manage_database.sh list
-#   ./scripts/manage_database.sh start-postgres
-#   ./scripts/manage_database.sh stop-postgres
-#   ./scripts/manage_database.sh status-postgres
 #
-# This script manages database backup, restore, health checks,
-# and PostgreSQL container lifecycle for both PostgreSQL and SQLite databases.
+# This script manages SQLite database backup, restore, and health checks
 
 set -e
 
@@ -21,631 +17,239 @@ RETENTION_DAILY=7
 RETENTION_WEEKLY=4
 RETENTION_MONTHLY=6
 
-# PostgreSQL Container Configuration
-POSTGRES_CONTAINER="pipeline-logs-postgres"
-POSTGRES_IMAGE="postgres:15-alpine"
-POSTGRES_NETWORK="pipeline-logs-network"
-POSTGRES_VOLUME="postgres_data"
-POSTGRES_DB="pipeline_logs"
-POSTGRES_USER="logextractor"
+# SQLite Database Configuration
+SQLITE_DB="logs/monitoring.db"
 
-# Get PostgreSQL password from .env or use default
-get_postgres_password() {
-    if [ -f .env ] && grep -q "^POSTGRES_PASSWORD=" .env; then
-        grep "^POSTGRES_PASSWORD=" .env | cut -d'=' -f2-
-    else
-        echo "change_this_password"
-    fi
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Print colored output
+print_success() {
+    echo -e "${GREEN}$1${NC}"
 }
 
-# Detect database type
-detect_db_type() {
-    DB_TYPE="sqlite"  # default
-    if [ -f .env ] && grep -q "^DATABASE_URL=" .env; then
-        if [ -n "$(grep "^DATABASE_URL=" .env | grep -v "^DATABASE_URL=$")" ]; then
-            DB_TYPE="postgresql"
-        fi
-    fi
+print_error() {
+    echo -e "${RED}$1${NC}"
 }
 
-# ============================================================================
-# POSTGRESQL CONTAINER MANAGEMENT
-# ============================================================================
-
-start_postgres() {
-    echo "==================================="
-    echo "Starting PostgreSQL Container"
-    echo "==================================="
-
-    # Check if container already exists and is running
-    if docker ps -a --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-        if docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-            echo "✓ PostgreSQL container is already running"
-            return 0
-        else
-            echo "Starting existing PostgreSQL container..."
-            docker start "$POSTGRES_CONTAINER"
-            echo "✓ PostgreSQL container started"
-            return 0
-        fi
-    fi
-
-    # Create docker network if it doesn't exist
-    if ! docker network ls --format '{{.Name}}' | grep -q "^${POSTGRES_NETWORK}$"; then
-        echo "Creating docker network: $POSTGRES_NETWORK"
-        docker network create "$POSTGRES_NETWORK"
-        echo "✓ Network created"
-    fi
-
-    # Get password
-    POSTGRES_PASSWORD=$(get_postgres_password)
-
-    echo "Creating and starting PostgreSQL container..."
-    docker run -d \
-        --name "$POSTGRES_CONTAINER" \
-        --network "$POSTGRES_NETWORK" \
-        -e POSTGRES_DB="$POSTGRES_DB" \
-        -e POSTGRES_USER="$POSTGRES_USER" \
-        -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-        -v "${POSTGRES_VOLUME}:/var/lib/postgresql/data" \
-        -p 5432:5432 \
-        --restart unless-stopped \
-        --health-cmd "pg_isready -U $POSTGRES_USER" \
-        --health-interval 10s \
-        --health-timeout 5s \
-        --health-retries 5 \
-        "$POSTGRES_IMAGE"
-
-    echo ""
-    echo "Waiting for PostgreSQL to be ready..."
-    sleep 5
-
-    # Wait for health check
-    for i in {1..30}; do
-        if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
-            echo "✓ PostgreSQL is ready!"
-            echo ""
-            echo "Connection details:"
-            echo "  Host: localhost"
-            echo "  Port: 5432"
-            echo "  Database: $POSTGRES_DB"
-            echo "  User: $POSTGRES_USER"
-            echo "  Password: (from .env or default)"
-            echo ""
-            echo "==================================="
-            return 0
-        fi
-        echo -n "."
-        sleep 1
-    done
-
-    echo ""
-    echo "⚠ PostgreSQL started but health check timed out"
-    echo "Check logs with: docker logs $POSTGRES_CONTAINER"
+print_warning() {
+    echo -e "${YELLOW}$1${NC}"
 }
 
-stop_postgres() {
-    echo "==================================="
-    echo "Stopping PostgreSQL Container"
-    echo "==================================="
-
-    if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-        echo "PostgreSQL container is not running"
-        return 0
-    fi
-
-    echo "Stopping PostgreSQL container..."
-    docker stop "$POSTGRES_CONTAINER"
-    echo "✓ PostgreSQL container stopped"
-    echo ""
-    echo "Note: Container still exists. Use 'docker rm $POSTGRES_CONTAINER' to remove it completely."
-    echo "Note: Data is preserved in volume: $POSTGRES_VOLUME"
-    echo "==================================="
-}
-
-status_postgres() {
-    echo "==================================="
-    echo "PostgreSQL Container Status"
-    echo "==================================="
-    echo ""
-
-    # Check if container exists
-    if ! docker ps -a --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-        echo "Status: NOT CREATED"
-        echo ""
-        echo "To create and start: ./scripts/manage_database.sh start-postgres"
-        echo "==================================="
+# Check if SQLite database exists
+check_db_exists() {
+    if [ ! -f "$SQLITE_DB" ]; then
+        print_error "Database not found: $SQLITE_DB"
         return 1
     fi
-
-    # Check if running
-    if docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-        echo "Status: RUNNING ✓"
-    else
-        echo "Status: STOPPED ✗"
-        echo ""
-        echo "To start: ./scripts/manage_database.sh start-postgres"
-        echo "==================================="
-        return 1
-    fi
-
-    # Get container details
-    echo ""
-    echo "Container Details:"
-    echo "------------------"
-    docker inspect "$POSTGRES_CONTAINER" --format \
-        'Image: {{.Config.Image}}
-Created: {{.Created}}
-Started: {{.State.StartedAt}}
-Health: {{.State.Health.Status}}'
-
-    echo ""
-    echo "Network:"
-    echo "--------"
-    docker inspect "$POSTGRES_CONTAINER" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}'
-
-    echo ""
-    echo "Ports:"
-    echo "------"
-    docker port "$POSTGRES_CONTAINER" 2>/dev/null || echo "No ports exposed"
-
-    echo ""
-    echo "Volume:"
-    echo "-------"
-    echo "$POSTGRES_VOLUME"
-
-    # Try to connect and get stats
-    echo ""
-    echo "Database Stats:"
-    echo "---------------"
-    if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
-        DB_SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT pg_size_pretty(pg_database_size('$POSTGRES_DB'));" 2>/dev/null | tr -d '[:space:]')
-        CONNECTIONS=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT count(*) FROM pg_stat_activity WHERE datname='$POSTGRES_DB';" 2>/dev/null | tr -d '[:space:]')
-
-        echo "Database size: $DB_SIZE"
-        echo "Active connections: $CONNECTIONS"
-    else
-        echo "⚠ Cannot connect to database"
-    fi
-
-    echo ""
-    echo "==================================="
+    return 0
 }
 
 # ============================================================================
-# BACKUP FUNCTION
+# BACKUP OPERATIONS
 # ============================================================================
 
-backup_database() {
-    BACKUP_TYPE="${1:-daily}"
-    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    BACKUP_DIR="$BACKUP_ROOT/$BACKUP_TYPE"
-
-    # Create backup directory
-    mkdir -p "$BACKUP_DIR"
-
-    detect_db_type
-
+backup_sqlite() {
+    local backup_type="${1:-manual}"
+    local backup_dir="$BACKUP_ROOT/$backup_type"
+    
+    mkdir -p "$backup_dir"
+    
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local backup_file="$backup_dir/sqlite_${timestamp}.db"
+    
     echo "==================================="
-    echo "Pipeline Logs Backup"
-    echo "Type: $BACKUP_TYPE"
-    echo "Database: $DB_TYPE"
-    echo "Date: $(date)"
+    echo "SQLite Backup ($backup_type)"
     echo "==================================="
-
-    # Perform backup based on database type
-    if [ "$DB_TYPE" = "postgresql" ]; then
-        BACKUP_FILE="$BACKUP_DIR/postgres_${BACKUP_TYPE}_${TIMESTAMP}.sql.gz"
-
-        echo "Backing up PostgreSQL database..."
-
-        # Check if PostgreSQL container is running
-        if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-            echo "Error: PostgreSQL container is not running"
-            echo "Start it with: ./scripts/manage_database.sh start-postgres"
-            exit 1
-        fi
-
-        # Backup using docker exec
-        docker exec "$POSTGRES_CONTAINER" pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB" | \
-            gzip > "$BACKUP_FILE"
-
-        # Get database size
-        DB_SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT pg_size_pretty(pg_database_size('$POSTGRES_DB'));" | tr -d '[:space:]')
-
-    else
-        # SQLite backup
-        BACKUP_FILE="$BACKUP_DIR/sqlite_${BACKUP_TYPE}_${TIMESTAMP}.db.gz"
-
-        echo "Backing up SQLite database..."
-
-        if [ ! -f logs/pipeline-logs/monitoring.db ]; then
-            echo "Error: SQLite database not found at logs/pipeline-logs/monitoring.db"
-            exit 1
-        fi
-
-        # Create uncompressed backup first
-        sqlite3 logs/pipeline-logs/monitoring.db ".backup ${BACKUP_FILE%.gz}"
-
-        # Compress it
-        gzip "${BACKUP_FILE%.gz}"
-
-        # Get database size
-        DB_SIZE=$(du -h logs/pipeline-logs/monitoring.db | cut -f1)
-    fi
-
-    # Check backup was created
-    if [ ! -f "$BACKUP_FILE" ]; then
-        echo "Error: Backup file was not created!"
+    
+    if ! check_db_exists; then
         exit 1
     fi
+    
+    # Online backup using SQLite's .backup command
+    sqlite3 "$SQLITE_DB" ".backup '$backup_file'"
+    
+    if [ -f "$backup_file" ]; then
+        local size=$(du -h "$backup_file" | cut -f1)
+        print_success "Backup completed: $backup_file ($size)"
+        
+        # Apply retention policy
+        apply_retention "$backup_type" "$backup_dir"
+    else
+        print_error "Backup failed"
+        exit 1
+    fi
+}
 
-    BACKUP_SIZE=$(du -h "$BACKUP_FILE" | cut -f1)
-
-    echo ""
-    echo "✓ Backup created: $BACKUP_FILE"
-    echo "✓ Database size: $DB_SIZE"
-    echo "✓ Backup size: $BACKUP_SIZE"
-    echo ""
-
-    # Apply retention policy
-    case $BACKUP_TYPE in
+apply_retention() {
+    local backup_type="$1"
+    local backup_dir="$2"
+    local retention_days
+    
+    case "$backup_type" in
         daily)
-            RETENTION=$RETENTION_DAILY
+            retention_days=$RETENTION_DAILY
             ;;
         weekly)
-            RETENTION=$RETENTION_WEEKLY
+            retention_days=$((RETENTION_WEEKLY * 7))
             ;;
         monthly)
-            RETENTION=$RETENTION_MONTHLY
+            retention_days=$((RETENTION_MONTHLY * 30))
             ;;
         *)
-            echo "Warning: Unknown backup type '$BACKUP_TYPE', keeping all backups"
-            RETENTION=999999
+            return 0
             ;;
     esac
-
-    echo "Applying retention policy: keep last $RETENTION backups"
-
-    # Count current backups
-    BACKUP_COUNT=$(ls -1 "$BACKUP_DIR"/*.gz 2>/dev/null | wc -l)
-    echo "Current backups in $BACKUP_DIR: $BACKUP_COUNT"
-
-    # Delete old backups if over retention limit
-    if [ $BACKUP_COUNT -gt $RETENTION ]; then
-        DELETED=0
-        ls -t "$BACKUP_DIR"/*.gz | tail -n +$((RETENTION + 1)) | while read old_backup; do
-            echo "  Deleting old backup: $(basename $old_backup)"
-            rm "$old_backup"
-            DELETED=$((DELETED + 1))
-        done
-        echo "✓ Cleaned up old backups"
-    else
-        echo "✓ No cleanup needed (under retention limit)"
+    
+    echo "Applying retention policy: keep last $retention_days days"
+    
+    # Find and delete old backups
+    local deleted=0
+    while IFS= read -r -d '' file; do
+        rm -f "$file"
+        ((deleted++))
+    done < <(find "$backup_dir" -name "*.db" -type f -mtime +$retention_days -print0)
+    
+    if [ $deleted -gt 0 ]; then
+        echo "Deleted $deleted old backup(s)"
     fi
-
-    # Calculate total backup size
-    TOTAL_SIZE=$(du -sh "$BACKUP_ROOT" | cut -f1)
-    echo "✓ Total backup directory size: $TOTAL_SIZE"
-
-    # Log to syslog if available
-    if command -v logger &> /dev/null; then
-        logger -t pipeline-logs-backup "Backup completed: $BACKUP_FILE ($BACKUP_SIZE)"
-    fi
-
-    echo "==================================="
-    echo "Backup completed successfully!"
-    echo "==================================="
 }
 
 # ============================================================================
-# RESTORE FUNCTION
+# RESTORE OPERATIONS
 # ============================================================================
 
-restore_database() {
-    if [ $# -eq 0 ]; then
-        echo "Usage: $0 restore <backup-file>"
-        echo ""
-        echo "Available backups:"
-        echo ""
-        find backups -name "*.gz" -type f 2>/dev/null | sort -r | head -10
+restore_sqlite() {
+    local backup_file="$1"
+    
+    if [ -z "$backup_file" ]; then
+        print_error "Usage: $0 restore <backup-file>"
         exit 1
     fi
-
-    BACKUP_FILE="$1"
-
-    if [ ! -f "$BACKUP_FILE" ]; then
-        echo "Error: Backup file not found: $BACKUP_FILE"
+    
+    if [ ! -f "$backup_file" ]; then
+        print_error "Backup file not found: $backup_file"
         exit 1
     fi
-
-    # Detect backup type from filename
-    if [[ "$BACKUP_FILE" == *"postgres"* ]]; then
-        DB_TYPE="postgresql"
-    elif [[ "$BACKUP_FILE" == *"sqlite"* ]]; then
-        DB_TYPE="sqlite"
-    else
-        echo "Error: Cannot determine database type from filename"
-        echo "Filename should contain 'postgres' or 'sqlite'"
-        exit 1
+    
+    echo "==================================="
+    echo "SQLite Restore"
+    echo "==================================="
+    echo "Backup file: $backup_file"
+    echo "Target: $SQLITE_DB"
+    echo ""
+    
+    # Create backup of current database
+    if [ -f "$SQLITE_DB" ]; then
+        local current_backup="${SQLITE_DB}.before_restore_$(date +%Y%m%d_%H%M%S)"
+        cp "$SQLITE_DB" "$current_backup"
+        print_success "Current database backed up to: $current_backup"
     fi
-
-    echo "==================================="
-    echo "Pipeline Logs Database Restore"
-    echo "Backup file: $BACKUP_FILE"
-    echo "Database type: $DB_TYPE"
-    echo "Date: $(date)"
-    echo "==================================="
+    
+    # Restore from backup
+    cp "$backup_file" "$SQLITE_DB"
+    
+    # Remove WAL files
+    rm -f "${SQLITE_DB}-wal" "${SQLITE_DB}-shm"
+    
+    print_success "Database restored successfully"
+    
+    # Verify integrity
     echo ""
-
-    # Confirm before proceeding
-    read -p "⚠  This will REPLACE the current database. Continue? (yes/no): " CONFIRM
-
-    if [ "$CONFIRM" != "yes" ]; then
-        echo "Restore cancelled."
-        exit 0
-    fi
-
-    echo ""
-
-    if [ "$DB_TYPE" = "postgresql" ]; then
-        echo "Restoring PostgreSQL database..."
-        echo ""
-
-        # Check if PostgreSQL container is running
-        if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-            echo "Error: PostgreSQL container is not running"
-            echo "Start it with: ./scripts/manage_database.sh start-postgres"
-            exit 1
-        fi
-
-        # Stop the application
-        echo "1. Stopping application container..."
-        if [ -f manage_container.py ]; then
-            python3 manage_container.py stop || ./manage_container.py stop
-        else
-            echo "   (manage_container.py not found, skipping)"
-        fi
-
-        # Drop and recreate database
-        echo "2. Dropping existing database..."
-        docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -c "DROP DATABASE IF EXISTS $POSTGRES_DB;"
-
-        echo "3. Creating fresh database..."
-        docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -c "CREATE DATABASE $POSTGRES_DB;"
-
-        # Restore from backup
-        echo "4. Restoring from backup..."
-        if [[ "$BACKUP_FILE" == *.gz ]]; then
-            gunzip -c "$BACKUP_FILE" | docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" "$POSTGRES_DB"
-        else
-            docker exec -i "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" "$POSTGRES_DB" < "$BACKUP_FILE"
-        fi
-
-        # Verify restore
-        echo "5. Verifying restore..."
-        ROW_COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM requests;" | tr -d '[:space:]')
-        echo "   Restored $ROW_COUNT requests"
-
-        # Start the application
-        echo "6. Starting application container..."
-        if [ -f manage_container.py ]; then
-            python3 manage_container.py start || ./manage_container.py start
-        else
-            echo "   (manage_container.py not found, skipping)"
-        fi
-
-    else
-        # SQLite restore
-        echo "Restoring SQLite database..."
-        echo ""
-
-        # Stop the application
-        echo "1. Stopping service..."
-        if [ -f manage_container.py ]; then
-            python3 manage_container.py stop || ./manage_container.py stop
-        fi
-
-        # Backup current database (just in case)
-        if [ -f logs/pipeline-logs/monitoring.db ]; then
-            echo "2. Backing up current database..."
-            cp logs/pipeline-logs/monitoring.db "logs/pipeline-logs/monitoring.db.before_restore_$(date +%Y%m%d_%H%M%S)"
-        fi
-
-        # Remove current database files
-        echo "3. Removing current database files..."
-        rm -f logs/pipeline-logs/monitoring.db*
-
-        # Restore from backup
-        echo "4. Restoring from backup..."
-        if [[ "$BACKUP_FILE" == *.gz ]]; then
-            gunzip -c "$BACKUP_FILE" > logs/pipeline-logs/monitoring.db
-        else
-            cp "$BACKUP_FILE" logs/pipeline-logs/monitoring.db
-        fi
-
-        # Verify restore
-        echo "5. Verifying restore..."
-        if sqlite3 logs/pipeline-logs/monitoring.db "PRAGMA integrity_check;" | grep -q "ok"; then
-            echo "   ✓ Database integrity: OK"
-        else
-            echo "   ✗ Database integrity check failed!"
-            exit 1
-        fi
-
-        ROW_COUNT=$(sqlite3 logs/pipeline-logs/monitoring.db "SELECT COUNT(*) FROM requests;")
-        echo "   Restored $ROW_COUNT requests"
-
-        # Start the application
-        echo "6. Starting service..."
-        if [ -f manage_container.py ]; then
-            python3 manage_container.py start || ./manage_container.py start
-        fi
-    fi
-
-    echo ""
-    echo "==================================="
-    echo "✓ Restore completed successfully!"
-    echo "==================================="
-    echo ""
-    echo "Next steps:"
-    echo "1. Check application logs: docker logs -f bfa-gitlab-pipeline-extractor"
-    echo "2. Verify health: curl http://localhost:8000/health"
-    echo "3. Check data: Query the database to verify data is correct"
-    echo "4. Check database: ./scripts/manage_database.sh check"
+    check_integrity
 }
 
 # ============================================================================
-# HEALTH CHECK FUNCTION
+# HEALTH CHECK OPERATIONS
 # ============================================================================
 
-check_database() {
-    detect_db_type
+check_integrity() {
+    echo "Running integrity check..."
+    
+    if ! check_db_exists; then
+        return 1
+    fi
+    
+    local result=$(sqlite3 "$SQLITE_DB" "PRAGMA integrity_check;")
+    
+    if [ "$result" = "ok" ]; then
+        print_success "Integrity check: PASSED"
+        return 0
+    else
+        print_error "Integrity check: FAILED"
+        echo "$result"
+        return 1
+    fi
+}
 
+health_check() {
     echo "==================================="
     echo "Database Health Check"
-    echo "Type: $DB_TYPE"
+    echo "Type: sqlite"
     echo "Date: $(date)"
     echo "==================================="
     echo ""
-
-    EXIT_CODE=0
-
-    if [ "$DB_TYPE" = "postgresql" ]; then
-        echo "PostgreSQL Health Check"
-        echo "-----------------------"
-
-        # Check if container is running
-        if ! docker ps --format '{{.Names}}' | grep -q "^${POSTGRES_CONTAINER}$"; then
-            echo "✗ PostgreSQL container is not running"
-            echo ""
-            echo "Start it with: ./scripts/manage_database.sh start-postgres"
-            EXIT_CODE=1
-            return $EXIT_CODE
-        fi
-
-        # Connection test
-        echo -n "Database connection: "
-        if docker exec "$POSTGRES_CONTAINER" pg_isready -U "$POSTGRES_USER" > /dev/null 2>&1; then
-            echo "✓ OK"
-        else
-            echo "✗ FAILED"
-            EXIT_CODE=1
-        fi
-
-        # Table exists
-        echo -n "Requests table: "
-        if docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT COUNT(*) FROM requests;" > /dev/null 2>&1; then
-            ROW_COUNT=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-                "SELECT COUNT(*) FROM requests;" | tr -d '[:space:]')
-            echo "✓ OK ($ROW_COUNT rows)"
-        else
-            echo "✗ FAILED"
-            EXIT_CODE=1
-        fi
-
-        # Recent activity
-        echo -n "Recent activity (last hour): "
-        RECENT=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT COUNT(*) FROM requests WHERE timestamp > NOW() - INTERVAL '1 hour';" | tr -d '[:space:]')
-        echo "✓ $RECENT requests"
-
-        # Database size
-        echo -n "Database size: "
-        DB_SIZE=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT pg_size_pretty(pg_database_size('$POSTGRES_DB'));" | tr -d '[:space:]')
-        echo "✓ $DB_SIZE"
-
-        # Active connections
-        echo -n "Active connections: "
-        CONNECTIONS=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT count(*) FROM pg_stat_activity WHERE datname='$POSTGRES_DB';" | tr -d '[:space:]')
-        echo "✓ $CONNECTIONS"
-
-        # Autovacuum status
-        echo -n "Last autovacuum: "
-        LAST_VACUUM=$(docker exec "$POSTGRES_CONTAINER" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c \
-            "SELECT COALESCE(last_autovacuum::text, 'never') FROM pg_stat_user_tables WHERE tablename='requests';" | tr -d '[:space:]')
-        echo "✓ $LAST_VACUUM"
-
-    else
-        echo "SQLite Health Check"
-        echo "-------------------"
-
-        # File exists
-        echo -n "Database file: "
-        if [ -f logs/pipeline-logs/monitoring.db ]; then
-            echo "✓ EXISTS"
-        else
-            echo "✗ NOT FOUND"
-            EXIT_CODE=1
-            exit $EXIT_CODE
-        fi
-
-        # Integrity check
-        echo -n "Database integrity: "
-        if sqlite3 logs/pipeline-logs/monitoring.db "PRAGMA integrity_check;" 2>/dev/null | grep -q "ok"; then
-            echo "✓ OK"
-        else
-            echo "✗ FAILED"
-            EXIT_CODE=1
-        fi
-
-        # Row count
-        echo -n "Total requests: "
-        ROW_COUNT=$(sqlite3 logs/pipeline-logs/monitoring.db "SELECT COUNT(*) FROM requests;" 2>/dev/null || echo "ERROR")
-        if [ "$ROW_COUNT" != "ERROR" ]; then
-            echo "✓ $ROW_COUNT"
-        else
-            echo "✗ FAILED"
-            EXIT_CODE=1
-        fi
-
-        # Recent activity
-        echo -n "Recent activity (last hour): "
-        RECENT=$(sqlite3 logs/pipeline-logs/monitoring.db \
-            "SELECT COUNT(*) FROM requests WHERE timestamp > datetime('now', '-1 hour');" 2>/dev/null || echo "0")
-        echo "✓ $RECENT requests"
-
-        # Database size
-        echo -n "Database size: "
-        DB_SIZE=$(du -h logs/pipeline-logs/monitoring.db | cut -f1)
-        echo "✓ $DB_SIZE"
-
-        # WAL mode
-        echo -n "Journal mode: "
-        WAL_MODE=$(sqlite3 logs/pipeline-logs/monitoring.db "PRAGMA journal_mode;" 2>/dev/null)
-        if [ "$WAL_MODE" = "wal" ]; then
-            echo "✓ WAL"
-        else
-            echo "⚠ $WAL_MODE (should be WAL)"
-        fi
-
-        # WAL file size (if exists)
-        if [ -f logs/pipeline-logs/monitoring.db-wal ]; then
-            WAL_SIZE=$(du -h logs/pipeline-logs/monitoring.db-wal | cut -f1)
-            echo "WAL file size: ✓ $WAL_SIZE"
-        fi
+    
+    echo "SQLite Health Check"
+    echo "-------------------"
+    
+    # Check if database exists
+    if ! check_db_exists; then
+        print_error "Database not found"
+        exit 1
     fi
-
+    
+    print_success "Database file: OK"
+    
+    # Check database connection
+    if sqlite3 "$SQLITE_DB" "SELECT 1;" > /dev/null 2>&1; then
+        print_success "Database connection: OK"
+    else
+        print_error "Database connection: FAILED"
+        exit 1
+    fi
+    
+    # Check tables exist
+    if sqlite3 "$SQLITE_DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='requests';" | grep -q "requests"; then
+        local row_count=$(sqlite3 "$SQLITE_DB" "SELECT COUNT(*) FROM requests;")
+        print_success "Requests table: OK ($row_count rows)"
+    else
+        print_error "Requests table: NOT FOUND"
+        exit 1
+    fi
+    
+    # Check recent activity
+    local recent=$(sqlite3 "$SQLITE_DB" "SELECT COUNT(*) FROM requests WHERE timestamp > datetime('now', '-1 hour');")
+    print_success "Recent activity (last hour): $recent requests"
+    
+    # Check database size
+    if [ -f "$SQLITE_DB" ]; then
+        local size=$(du -h "$SQLITE_DB" | cut -f1)
+        print_success "Database size: $size"
+    fi
+    
+    # Check integrity
+    check_integrity
+    
+    # Check WAL mode
+    local journal_mode=$(sqlite3 "$SQLITE_DB" "PRAGMA journal_mode;")
+    if [ "$journal_mode" = "wal" ]; then
+        print_success "WAL mode: Enabled"
+    else
+        print_warning "WAL mode: Disabled (currently: $journal_mode)"
+    fi
+    
     echo ""
     echo "==================================="
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo "✓ Health Check: PASSED"
-    else
-        echo "✗ Health Check: FAILED"
-    fi
+    print_success "Health Check: PASSED"
     echo "==================================="
-
-    exit $EXIT_CODE
 }
 
 # ============================================================================
-# LIST BACKUPS FUNCTION
+# LIST OPERATIONS
 # ============================================================================
 
 list_backups() {
@@ -653,98 +257,88 @@ list_backups() {
     echo "Available Backups"
     echo "==================================="
     echo ""
-
-    if [ ! -d "$BACKUP_ROOT" ]; then
-        echo "No backups found (directory doesn't exist: $BACKUP_ROOT)"
-        exit 0
-    fi
-
-    for backup_type in daily weekly monthly; do
-        BACKUP_DIR="$BACKUP_ROOT/$backup_type"
-        if [ -d "$BACKUP_DIR" ]; then
-            BACKUP_COUNT=$(ls -1 "$BACKUP_DIR"/*.gz 2>/dev/null | wc -l)
-            if [ $BACKUP_COUNT -gt 0 ]; then
-                echo "[$backup_type backups] ($BACKUP_COUNT files)"
-                echo "----------------------------------------"
-                ls -lht "$BACKUP_DIR"/*.gz | head -5 | awk '{printf "  %s %s %s - %s\n", $6, $7, $8, $9}'
-                if [ $BACKUP_COUNT -gt 5 ]; then
-                    echo "  ... and $((BACKUP_COUNT - 5)) more"
-                fi
+    
+    local found_backups=false
+    
+    for backup_type in daily weekly monthly manual; do
+        local backup_dir="$BACKUP_ROOT/$backup_type"
+        if [ -d "$backup_dir" ]; then
+            local count=$(find "$backup_dir" -name "*.db" -type f 2>/dev/null | wc -l)
+            if [ $count -gt 0 ]; then
+                echo "[$backup_type backups]"
+                find "$backup_dir" -name "*.db" -type f -printf "%TY-%Tm-%Td %TH:%TM  %s bytes  %p\n" | sort -r
                 echo ""
+                found_backups=true
             fi
         fi
     done
-
-    # Show total size
-    if [ -d "$BACKUP_ROOT" ]; then
-        TOTAL_SIZE=$(du -sh "$BACKUP_ROOT" 2>/dev/null | cut -f1)
-        echo "Total backup size: $TOTAL_SIZE"
+    
+    if [ "$found_backups" = false ]; then
+        echo "No backups found in $BACKUP_ROOT"
     fi
 }
 
 # ============================================================================
-# MAIN DISPATCH
+# MAIN
 # ============================================================================
 
 show_usage() {
-    echo "Database Management Script"
-    echo ""
-    echo "Usage:"
-    echo "  $0 backup [daily|weekly|monthly]  - Create database backup"
-    echo "  $0 restore <backup-file>           - Restore database from backup"
-    echo "  $0 check                           - Run health check"
-    echo "  $0 list                            - List available backups"
-    echo "  $0 start-postgres                  - Start PostgreSQL container"
-    echo "  $0 stop-postgres                   - Stop PostgreSQL container"
-    echo "  $0 status-postgres                 - Show PostgreSQL status and stats"
-    echo ""
-    echo "Examples:"
-    echo "  $0 backup daily"
-    echo "  $0 restore backups/daily/postgres_daily_20250107_020000.sql.gz"
-    echo "  $0 check"
-    echo "  $0 list"
-    echo "  $0 start-postgres"
-    echo "  $0 status-postgres"
-    echo ""
+    cat << 'USAGE'
+SQLite Database Management Script
+
+USAGE:
+    ./scripts/manage_database.sh <command> [options]
+
+COMMANDS:
+    backup [daily|weekly|monthly]   Create database backup
+    restore <backup-file>           Restore database from backup
+    check                           Run health check
+    list                            List available backups
+
+EXAMPLES:
+    # Create daily backup
+    ./scripts/manage_database.sh backup daily
+    
+    # Create manual backup
+    ./scripts/manage_database.sh backup
+    
+    # Restore from backup
+    ./scripts/manage_database.sh restore backups/daily/sqlite_20250129_120000.db
+    
+    # Run health check
+    ./scripts/manage_database.sh check
+    
+    # List all backups
+    ./scripts/manage_database.sh list
+
+BACKUP RETENTION:
+    Daily:   7 days
+    Weekly:  4 weeks
+    Monthly: 6 months
+USAGE
 }
 
-# Main command dispatch
-COMMAND="${1:-}"
-
-case "$COMMAND" in
+# Main command handler
+case "${1:-help}" in
     backup)
-        shift
-        backup_database "$@"
+        backup_sqlite "${2:-manual}"
         ;;
     restore)
-        shift
-        restore_database "$@"
+        restore_sqlite "$2"
         ;;
     check)
-        check_database
+        health_check
         ;;
     list)
         list_backups
         ;;
-    start-postgres)
-        start_postgres
-        ;;
-    stop-postgres)
-        stop_postgres
-        ;;
-    status-postgres)
-        status_postgres
-        ;;
-    -h|--help|help)
+    help|--help|-h)
         show_usage
-        exit 0
         ;;
     *)
-        echo "Error: Unknown command '$COMMAND'"
+        print_error "Unknown command: $1"
         echo ""
         show_usage
         exit 1
         ;;
 esac
-
-exit 0

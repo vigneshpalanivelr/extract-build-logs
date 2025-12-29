@@ -16,11 +16,11 @@ echo "=========================================="
 
 # Check if .env file exists
 if [ -f ".env" ]; then
-    echo "✓ Loading configuration from .env file"
+    echo "[OK] Loading configuration from .env file"
     # Export variables from .env file
     export $(grep -v '^#' .env | xargs)
 else
-    echo "⚠ No .env file found, using environment variables"
+    echo "[WARNING] No .env file found, using environment variables"
 fi
 
 # Validate required environment variables
@@ -41,7 +41,7 @@ export RETRY_ATTEMPTS="${RETRY_ATTEMPTS:-3}"
 export RETRY_DELAY="${RETRY_DELAY:-2}"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
-echo "✓ Configuration validated"
+echo "[OK] Configuration validated"
 echo "  - GitLab URL: $GITLAB_URL"
 echo "  - Webhook Port: $WEBHOOK_PORT"
 echo "  - Log Directory: $LOG_OUTPUT_DIR"
@@ -49,7 +49,7 @@ echo "  - Log Level: $LOG_LEVEL"
 
 # Create logs directory if it doesn't exist
 mkdir -p "$LOG_OUTPUT_DIR"
-echo "✓ Log directory ready: $LOG_OUTPUT_DIR"
+echo "[OK] Log directory ready: $LOG_OUTPUT_DIR"
 
 # Check if we can write to logs directory
 if [ ! -w "$LOG_OUTPUT_DIR" ]; then
