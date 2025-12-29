@@ -1004,7 +1004,7 @@ def show_status(client: docker.DockerClient) -> bool:
         return False
 
 
-def remove_container(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:
+def remove_container(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:  # noqa: C901
     """
     Remove container and optionally image with user confirmation.
 
