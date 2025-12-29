@@ -21,10 +21,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY src/ ./src/
 COPY scripts/ ./scripts/
-COPY docker-entrypoint.sh ./
+COPY log-extractor-entrypoint.sh ./
 
 # Make entrypoint script executable
-RUN chmod +x docker-entrypoint.sh
+RUN chmod +x log-extractor-entrypoint.sh
 
 # Create logs directory
 RUN mkdir -p /app/logs
@@ -41,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
     CMD curl -f http://localhost:${WEBHOOK_PORT:-8000}/health || exit 1
 
 # Start the FastAPI server with dynamic port from environment
-CMD ["./docker-entrypoint.sh"]
+CMD ["./log-extractor-entrypoint.sh"]
