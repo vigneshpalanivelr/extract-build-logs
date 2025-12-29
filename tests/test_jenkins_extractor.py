@@ -3,8 +3,6 @@ Unit tests for jenkins_extractor module.
 """
 
 import unittest
-from unittest.mock import patch, Mock
-from datetime import datetime
 
 from src.jenkins_extractor import JenkinsExtractor
 

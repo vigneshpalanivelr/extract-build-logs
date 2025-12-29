@@ -4,9 +4,6 @@ Unit tests for webhook_listener module.
 
 import unittest
 from unittest.mock import patch, Mock
-from typing import Dict, Any
-
-from src.config_loader import Config
 
 
 class TestWebhookListener(unittest.TestCase):
@@ -323,7 +320,6 @@ class TestWebhookEndpoints(unittest.TestCase):
         # Mock token manager
         mock_tm = Mock()
         mock_tm.generate_token.return_value = "test-jwt-token-123"
-        mock_token_manager = mock_tm
 
         # Need to set the global token_manager
         from src import webhook_listener
@@ -383,7 +379,6 @@ class TestWebhookEndpoints(unittest.TestCase):
         mock_config.webhook_secret = None
 
         # Mock monitor to avoid None error
-        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
@@ -557,7 +552,6 @@ class TestWebhookEdgeCases(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
 
 
-
 class TestProcessJenkinsEdgeCases(unittest.TestCase):
     """Test edge cases for Jenkins processing."""
 
@@ -645,8 +639,8 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
                                                       mock_log_fetcher, mock_set_req,
                                                       mock_clear_req, mock_time):
         """Test Jenkins build processing with general exception (covers lines 965-973)."""
-        from src.webhook_listener import process_jenkins_build
         from src.monitoring import RequestStatus
+        from src.webhook_listener import process_jenkins_build
 
         mock_config.api_post_enabled = False
         mock_time.time.return_value = 1000.0

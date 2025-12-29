@@ -3,8 +3,7 @@ Integration tests for webhook_listener endpoints and background tasks.
 """
 
 import unittest
-from unittest.mock import patch, Mock, MagicMock
-import json
+from unittest.mock import patch
 
 
 class TestWebhookGitlabIntegration(unittest.TestCase):
@@ -35,7 +34,6 @@ class TestWebhookGitlabIntegration(unittest.TestCase):
         mock_extractor.should_process_pipeline.return_value = False
 
         # Mock monitor
-        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
@@ -68,7 +66,6 @@ class TestWebhookGitlabIntegration(unittest.TestCase):
         mock_extractor.should_process_pipeline.return_value = True
 
         # Mock monitor
-        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
@@ -140,7 +137,6 @@ class TestWebhookJenkinsIntegration(unittest.TestCase):
         }
 
         # Mock monitor
-        from src.monitoring import RequestStatus
         mock_monitor.track_request.return_value = 1
 
         response = self.client.post(
