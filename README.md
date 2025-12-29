@@ -74,7 +74,7 @@ A production-ready webhook server that automatically extracts and stores pipelin
 
 This system provides a complete solution for:
 - **GitLab Integration**: Receiving webhook events for pipeline completion
-- **Jenkins Integration**: Extracting build logs with parallel stage support ([Setup Guide](JENKINS_INTEGRATION.md))
+- **Jenkins Integration**: Extracting build logs with parallel stage support ([Setup Guide](DOCUMENTATION.md#4-jenkins-integration))
 - Automatically extracting logs from all pipeline jobs/stages
 - **API Posting**: Send structured logs to external API endpoints
 - Storing logs with structured metadata for easy retrieval
@@ -181,7 +181,7 @@ sequenceDiagram
 
 - **Multi-Source Support**:
   - **GitLab**: Full webhook integration for pipeline events
-  - **Jenkins**: Build log extraction with parallel stage parsing ([Setup Guide](JENKINS_INTEGRATION.md))
+  - **Jenkins**: Build log extraction with parallel stage parsing ([Setup Guide](DOCUMENTATION.md#4-jenkins-integration))
 - **Modern Async Server**: FastAPI-based async server with automatic API documentation
 - **Interactive API Docs**: Automatic Swagger UI and ReDoc documentation at `/docs` and `/redoc`
 - **Event Processing**: Identifies and processes different pipeline types (main, child, merge request)
@@ -253,7 +253,6 @@ extract-build-logs/
 │   └── monitoring.db            # SQLite monitoring database
 │
 ├── config/                       # Configuration templates
-│   └── webhook_setup.md         # GitLab webhook setup guide
 │
 ├── .env.example                  # Environment variable template
 ├── requirements.txt              # Python dependencies
@@ -822,14 +821,14 @@ curl http://localhost:8000/monitor/summary
 - **Data persists** even when container is removed
 
 **Benefits:**
-- ✓ Isolated environment
-- ✓ Automatic restart on failure
-- ✓ No Python virtual environment needed
-- ✓ Easy updates (rebuild + restart)
-- ✓ Resource limits enforced
-- ✓ Consistent across environments
+- Isolated environment
+- Automatic restart on failure
+- No Python virtual environment needed
+- Easy updates (rebuild + restart)
+- Resource limits enforced
+- Consistent across environments
 
-**For detailed Docker operations, see:** [OPERATIONS.md - Docker Operations](OPERATIONS.md#docker-operations)
+**For detailed Docker operations, see:** [DOCUMENTATION.md - Docker Operations](DOCUMENTATION.md#23-docker-operations)
 
 ---
 
@@ -931,7 +930,7 @@ LOG_EXCLUDE_PROJECTS=999,888
 6. Click **Add webhook**
 7. Test with **Test → Pipeline events**
 
-See [config/webhook_setup.md](config/webhook_setup.md) for detailed instructions.
+See [DOCUMENTATION.md - Webhook Configuration](DOCUMENTATION.md#31-webhook-configuration) for detailed instructions.
 
 ### API Posting (New!)
 
@@ -1022,7 +1021,7 @@ All API requests and responses are logged to `logs/api-requests.log`:
 [2024-01-01 00:02:05] PIPELINE_ID=12345 PROJECT_ID=123 URL=https://api.example.com/logs STATUS=200 DURATION=1250ms RESPONSE={"success": true}
 ```
 
-**See also:** [API_POSTING.md](API_POSTING.md) for complete API posting documentation.
+**See also:** [DOCUMENTATION.md - API Posting](DOCUMENTATION.md#5-api-posting) for complete API posting documentation.
 
 ### Configuration Loading Flow
 
@@ -1100,12 +1099,12 @@ class Config:
 **Method:** `ConfigLoader.validate()` (lines 240-259)
 
 **Checks:**
-- ✓ GitLab URL format (must start with http:// or https://)
-- ✓ GitLab token length (minimum 10 characters)
-- ✓ Port range (1-65535)
-- ✓ Log level validity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-- ✓ API POST URL required when `API_POST_ENABLED=true`
-- ✓ API POST URL format validation
+- GitLab URL format (must start with http:// or https://)
+- GitLab token length (minimum 10 characters)
+- Port range (1-65535)
+- Log level validity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- API POST URL required when `API_POST_ENABLED=true`
+- API POST URL format validation
 
 **Validation Location in Code:**
 ```python
@@ -1289,7 +1288,7 @@ tail -f logs/application.log | grep "config"
 LOG_LEVEL=DEBUG python src/config_loader.py
 
 # Validate .env file format
-python -c "from dotenv import load_dotenv; load_dotenv(); print('✓ .env file is valid')"
+python -c "from dotenv import load_dotenv; load_dotenv(); print('[OK] .env file is valid')"
 
 # Check for missing required variables
 python -c "
@@ -1299,9 +1298,9 @@ load_dotenv()
 required = ['GITLAB_URL', 'GITLAB_TOKEN']
 missing = [v for v in required if not os.getenv(v)]
 if missing:
-    print(f'❌ Missing: {missing}')
+    print(f'[ERROR] Missing: {missing}')
 else:
-    print('✓ All required variables set')
+    print('[OK] All required variables set')
 "
 ```
 
@@ -1311,14 +1310,14 @@ else:
 
 | Token/Setting | Purpose | Used By | Required |
 |---------------|---------|---------|----------|
-| **GITLAB_TOKEN** | Authenticate with GitLab API to fetch logs | `log_fetcher.py` | ✅ Yes |
-| **BFA_SERVER** | API server URL to obtain BFA_SECRET_KEY token | `token_manager.py` | ❌ No (optional) |
-| **BFA_SECRET_KEY** | Sign JWT tokens for API authentication | `token_manager.py` | ❌ No (if not set, /api/token endpoint disabled) |
+| **GITLAB_TOKEN** | Authenticate with GitLab API to fetch logs | `log_fetcher.py` | Yes (Required) |
+| **BFA_SERVER** | API server URL to obtain BFA_SECRET_KEY token | `token_manager.py` | No (Optional) |
+| **BFA_SECRET_KEY** | Sign JWT tokens for API authentication | `token_manager.py` | No (Optional - if not set, /api/token endpoint disabled) |
 
 **Key Changes:**
-- ⚠️ **No fallback**: BFA_SECRET_KEY does NOT fallback to GITLAB_TOKEN anymore
-- ⚠️ **Separate concerns**: GITLAB_TOKEN and BFA_SECRET_KEY are completely separate
-- ⚠️ **Error logging**: If BFA_SECRET_KEY is not set, errors are logged and JWT token generation is disabled
+- **No fallback**: BFA_SECRET_KEY does NOT fallback to GITLAB_TOKEN anymore
+- **Separate concerns**: GITLAB_TOKEN and BFA_SECRET_KEY are completely separate
+- **Error logging**: If BFA_SECRET_KEY is not set, errors are logged and JWT token generation is disabled
 
 **Configuration:**
 ```bash
@@ -1380,12 +1379,12 @@ ERROR | BFA_SERVER is also not set - cannot obtain BFA_SECRET_KEY from server
 ```
 
 **Security Best Practice:**
-- ✅ Use different secrets for different purposes (GITLAB_TOKEN ≠ BFA_SECRET_KEY)
-- ✅ Never use GITLAB_TOKEN for JWT signing
-- ✅ Generate strong random secrets: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
-- ✅ Never commit secrets to version control
-- ✅ Rotate secrets periodically
-- ✅ Use BFA_SERVER to centrally manage BFA_SECRET_KEY distribution
+- Use different secrets for different purposes (GITLAB_TOKEN ≠ BFA_SECRET_KEY)
+- Never use GITLAB_TOKEN for JWT signing
+- Generate strong random secrets: `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+- Never commit secrets to version control
+- Rotate secrets periodically
+- Use BFA_SERVER to centrally manage BFA_SECRET_KEY distribution
 
 ## Usage
 
@@ -1458,7 +1457,7 @@ curl http://localhost:8000/stats
 
 ## Monitoring & Tracking
 
-The system automatically tracks **every webhook request** and processing status. See [OPERATIONS.md](OPERATIONS.md) (Part 2: Monitoring & Tracking) for complete documentation.
+The system automatically tracks **every webhook request** and processing status. See [DOCUMENTATION.md - Monitoring & Tracking](DOCUMENTATION.md#6-operations--monitoring) for complete documentation.
 
 ### Quick Start
 
@@ -1475,13 +1474,13 @@ python scripts/monitor_dashboard.py --export pipeline_data.csv
 
 ### What is Tracked
 
-- ✓ Total requests received
-- ✓ Processing status (queued, processing, completed, failed, skipped)
-- ✓ Success/failure rates
-- ✓ Processing times
-- ✓ Job counts per pipeline
-- ✓ Error messages
-- ✓ Pipeline types
+- Total requests received
+- Processing status (queued, processing, completed, failed, skipped)
+- Success/failure rates
+- Processing times
+- Job counts per pipeline
+- Error messages
+- Pipeline types
 
 ### Monitoring API Endpoints
 
@@ -1505,7 +1504,7 @@ All monitoring data is stored in: `logs/monitoring.db`
 
 You can query it directly with SQL or use the provided CLI dashboard.
 
-**For complete debugging, monitoring documentation, and examples, see [OPERATIONS.md](OPERATIONS.md)**
+**For complete debugging, monitoring documentation, and examples, see [DOCUMENTATION.md - Operations](DOCUMENTATION.md#6-operations--monitoring)**
 
 ## API Documentation
 
@@ -1604,26 +1603,26 @@ pytest tests/test_api_poster.py --cov=src/api_poster.py
 The `test_api_poster.py` module includes comprehensive tests for:
 
 **Success Scenarios:**
-- ✓ Successful API POST with authentication
-- ✓ POST without authentication token
-- ✓ Large payload handling
-- ✓ Slow/late responses (within timeout)
+- Successful API POST with authentication
+- POST without authentication token
+- Large payload handling
+- Slow/late responses (within timeout)
 
 **Error Scenarios:**
-- ✓ 400 Bad Request errors
-- ✓ 500 Internal Server errors
-- ✓ 503 Service Unavailable errors
-- ✓ Connection errors
-- ✓ Timeout errors
+- 400 Bad Request errors
+- 500 Internal Server errors
+- 503 Service Unavailable errors
+- Connection errors
+- Timeout errors
 
 **Retry Logic:**
-- ✓ Retry with exponential backoff
-- ✓ Retry exhaustion handling
+- Retry with exponential backoff
+- Retry exhaustion handling
 
 **Data & Logging:**
-- ✓ Payload formatting and structure
-- ✓ Request/response logging
-- ✓ Long response truncation
+- Payload formatting and structure
+- Request/response logging
+- Long response truncation
 
 ### Manual Testing
 

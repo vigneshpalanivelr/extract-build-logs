@@ -7,7 +7,7 @@
 
 ---
 
-## 📚 Table of Contents
+## Table of Contents
 
 ### 1. Quick Start & Deployment
 - [1.1 Quick Deployment Guide](#11-quick-deployment-guide)
@@ -114,15 +114,15 @@
 
 ## 1.1 Quick Deployment Guide
 
-### 🎯 The Problem You Encountered
+### The Problem You Encountered
 
 When shipping a Docker image from one server to another:
-- ✅ Docker image contains: Application code, dependencies
-- ❌ Docker image does NOT contain: `.env` file, `logs/` directory
+- Docker image contains: Application code, dependencies
+- NOT: Docker image does NOT contain: `.env` file, `logs/` directory
 
 This causes permission errors on the new server.
 
-### ✅ Solution (3 Steps)
+### Solution (3 Steps)
 
 #### 1️⃣ Create .env File
 ```bash
@@ -143,7 +143,7 @@ chown $USER:$USER logs  # Use your username
 ./manage_container.py start
 ```
 
-### 🔍 Why This Happened
+### Why This Happened
 
 #### Root Cause Analysis
 
@@ -168,18 +168,18 @@ Result: Container can't write logs
 
 | Server A (Build)           | Server B (Deploy)          |
 |----------------------------|----------------------------|
-| ✅ .env file exists        | ❌ .env file missing       |
-| ✅ logs/ directory exists  | ❌ logs/ directory missing |
-| ✅ Permissions correct     | ❌ No pre-existing files   |
+| YES: .env file exists        | NO: .env file missing       |
+| YES: logs/ directory exists  | NO: logs/ directory missing |
+| YES: Permissions correct     | NO: No pre-existing files   |
 
 #### Deployment Improvements: Before vs After
 
 | Scenario                    | Before Fix     | After Fix      |
 |-----------------------------|----------------|----------------|
-| Deploy to new server        | ❌ Manual setup | ✅ Auto-setup  |
-| Missing logs directory      | ❌ Fails       | ✅ Auto-creates |
-| Wrong permissions           | ❌ Manual fix  | ✅ Auto-corrects |
-| User namespace remapping    | ❌ Issues      | ✅ Bypassed    |
+| Deploy to new server        | NO: Manual setup | YES: Auto-setup  |
+| Missing logs directory      | NO: Fails       | YES: Auto-creates |
+| Wrong permissions           | NO: Manual fix  | YES: Auto-corrects |
+| User namespace remapping    | NO: Issues      | YES: Bypassed    |
 
 **What changed:**
 - `manage_container.py` now auto-creates logs directory with proper permissions
@@ -669,7 +669,7 @@ WEBHOOK_SECRET=your_generated_token_here
 #### 4. Select Trigger Events
 
 **Enable only Pipeline events:**
-- ✓ **Pipeline events** (REQUIRED)
+- **Pipeline events** (REQUIRED)
 
 Disable all other events unless you plan to handle them.
 
@@ -1288,12 +1288,12 @@ The API posting feature allows you to **send pipeline logs to an external API** 
 - Custom log processing pipelines
 
 **Key Features:**
-- ✓ HTTP POST with JSON payload
-- ✓ Bearer token authentication
-- ✓ Automatic retry with exponential backoff
-- ✓ Fallback to file storage on failure
-- ✓ Dual mode (API + file simultaneously)
-- ✓ 97-99% smaller payloads (error extraction)
+- HTTP POST with JSON payload
+- Bearer token authentication
+- Automatic retry with exponential backoff
+- Fallback to file storage on failure
+- Dual mode (API + file simultaneously)
+- 97-99% smaller payloads (error extraction)
 
 ### API Environment Variables
 
@@ -1411,11 +1411,11 @@ The system **automatically extracts error lines** from job logs by detecting the
 - `build failed`, `compilation error`, `npm ERR!`, `ERESOLVE`
 
 **Automatic Cleaning:**
-- ✓ Removes timestamps (e.g., `2024-01-01 10:00:00`)
-- ✓ Removes ANSI color codes
-- ✓ Trims whitespace
-- ✓ Removes duplicate lines
-- ✓ Limits to 50 error lines per job (configurable)
+- Removes timestamps (e.g., `2024-01-01 10:00:00`)
+- Removes ANSI color codes
+- Trims whitespace
+- Removes duplicate lines
+- Limits to 50 error lines per job (configurable)
 
 ### Example: Full Logs vs Error Extraction
 
@@ -1453,9 +1453,9 @@ The command '/bin/sh -c npm ci' returned a non-zero code: 1
 ### Successful Pipelines
 
 If `LOG_SAVE_PIPELINE_STATUS=failed` (recommended):
-- ✓ **Successful pipelines are ignored** - no API call is made
-- ✓ Only failed pipelines trigger API posting
-- ✓ Reduces API traffic by 80-90% in typical environments
+- **Successful pipelines are ignored** - no API call is made
+- Only failed pipelines trigger API posting
+- Reduces API traffic by 80-90% in typical environments
 
 If `LOG_SAVE_PIPELINE_STATUS=all`:
 - Successful pipelines will have `failed_steps: []` (empty array)
@@ -1482,9 +1482,9 @@ Content-Type: application/json
 ```
 
 **Security:**
-- ✓ Token is masked in logs (`Bearer *****`)
-- ✓ Token never written to log files
-- ✓ Same secret key used for JWT token signing
+- Token is masked in logs (`Bearer *****`)
+- Token never written to log files
+- Same secret key used for JWT token signing
 
 ### API Request and Response Details
 
@@ -2261,13 +2261,13 @@ curl -X POST http://localhost:8000/webhook/gitlab \
 
 ### Application Logging Features
 
-- ✓ **Request ID tracking** - Trace single pipeline across all log entries
-- ✓ **Project names** - Human-readable logs with project names
-- ✓ **Aligned columns** - Pipe-delimited format for easy parsing
-- ✓ **Multiple log files** - Separate application and API logs
-- ✓ **Automatic rotation** - Size-based rotation with configurable backups
-- ✓ **Sensitive data masking** - Tokens automatically redacted
-- ✓ **DEBUG level logging** - Detailed troubleshooting information
+- **Request ID tracking** - Trace single pipeline across all log entries
+- **Project names** - Human-readable logs with project names
+- **Aligned columns** - Pipe-delimited format for easy parsing
+- **Multiple log files** - Separate application and API logs
+- **Automatic rotation** - Size-based rotation with configurable backups
+- **Sensitive data masking** - Tokens automatically redacted
+- **DEBUG level logging** - Detailed troubleshooting information
 
 ### Log Files and Formats
 
