@@ -371,6 +371,7 @@ class TestApiPoster(unittest.TestCase):
     @patch('src.api_poster.requests.post')
     def test_post_with_late_response(self, mock_post):
         """Test API POST with slow/late response (but not timeout)."""
+
         import time
 
         # Simulate slow response (2 seconds delay)
@@ -806,7 +807,6 @@ class TestApiPoster(unittest.TestCase):
     @patch('requests.post')
     def test_post_jenkins_logs_with_retry_exhausted(self, mock_post):
         """Test Jenkins logs posting when retry is exhausted."""
-        from src.error_handler import RetryExhaustedError
 
         mock_post.side_effect = requests.exceptions.ConnectionError("Network error")
 
@@ -1201,6 +1201,7 @@ class TestApiPoster(unittest.TestCase):
 
         # Mock open to raise IOError only for the API log file
         original_open = open
+
         def mock_open_func(file, *args, **kwargs):
             if str(file).endswith('api_requests.log'):
                 raise IOError("Disk full")

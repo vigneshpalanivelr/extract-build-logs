@@ -3,7 +3,7 @@ Unit tests for jenkins_log_fetcher module.
 """
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import requests
 
 from src.jenkins_log_fetcher import JenkinsLogFetcher
