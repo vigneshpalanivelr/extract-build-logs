@@ -45,14 +45,14 @@ class SensitiveDataFilter(logging.Filter):
     - Authorization headers
     """
 
-    # Patterns for sensitive data
+    # Patterns for sensitive data - using callback for consistent [REDACTED***] format
     PATTERNS = [
-        (re.compile(r'(glpat-)[a-zA-Z0-9_-]{20,}'), r'\1****'),  # GitLab personal access token
-        (re.compile(r'(gldt-)[a-zA-Z0-9_-]{20,}'), r'\1****'),   # GitLab deploy token
-        (re.compile(r'(token[=:]\s*)[^\s&]+', re.IGNORECASE), r'\1****'),  # Generic tokens
-        (re.compile(r'(secret[=:]\s*)[^\s&]+', re.IGNORECASE), r'\1****'),  # Secrets
-        (re.compile(r'(Authorization:\s*)[^\s]+', re.IGNORECASE), r'\1****'),  # Auth headers
-        (re.compile(r'(PRIVATE-TOKEN:\s*)[^\s]+', re.IGNORECASE), r'\1****'),  # GitLab token header
+        re.compile(r'(glpat-)([a-zA-Z0-9_-]{20,})'),  # GitLab personal access token
+        re.compile(r'(gldt-)([a-zA-Z0-9_-]{20,})'),   # GitLab deploy token
+        re.compile(r'(token[=:]\s*)([^\s&]+)', re.IGNORECASE),  # Generic tokens
+        re.compile(r'(secret[=:]\s*)([^\s&]+)', re.IGNORECASE),  # Secrets
+        re.compile(r'(Authorization:\s+(?:Bearer\s+)?)([^\s]+)', re.IGNORECASE),  # Auth headers
+        re.compile(r'(PRIVATE-TOKEN:\s*)([^\s]+)', re.IGNORECASE),  # GitLab token header
     ]
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -83,11 +83,18 @@ class SensitiveDataFilter(logging.Filter):
         return masked
 
     def _mask_value(self, value: Any) -> Any:
-        """Mask value if it looks like a token"""
+        """Mask value if it looks like a token using [REDACTED***] format"""
         if isinstance(value, str) and len(value) > 20:
-            for pattern, replacement in self.PATTERNS:
-                if pattern.search(value):
-                    return pattern.sub(replacement, value)
+            for pattern in self.PATTERNS:
+                match = pattern.search(value)
+                if match:
+                    # Extract prefix (group 1) and token value (group 2)
+                    prefix = match.group(1)
+                    token_value = match.group(2)
+                    # Apply masking to the token value
+                    masked_token = self._mask_token(token_value)
+                    # Replace with prefix + masked token
+                    return pattern.sub(rf'{prefix}{masked_token}', value)
         return value
 
     @staticmethod
