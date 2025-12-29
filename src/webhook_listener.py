@@ -141,9 +141,9 @@ def init_app():
         logger.info("GitLab Pipeline Log Extractor - Initializing")
         logger.info("=" * 70)
 
-        logger.info("Configuration loaded successfully", extra={'operation': 'config_load'})
+        logger.info("Configuration .env loaded successfully", extra={'operation': 'config_load'})
         logger.info("GitLab URL: %s", config.gitlab_url)
-        logger.info("Webhook Port: %s", config.webhook_port)
+        logger.info("Webhook receiver Port: %s", config.webhook_port)
         logger.debug("Log Output Directory: %s", config.log_output_dir)
         logger.debug("Log Level: %s", config.log_level)
         logger.debug("Retry Attempts: %s", config.retry_attempts)
@@ -165,19 +165,19 @@ def init_app():
             logger.debug("BFA Secret Key: Not Set")
 
         # Initialize components
-        logger.info("Initializing components...")
+        logger.info("Initializing 7 components...")
 
         pipeline_extractor = PipelineExtractor()
-        logger.debug("Pipeline extractor initialized")
+        logger.debug("1. Pipeline extractor initialized")
 
         log_fetcher = LogFetcher(config)
-        logger.debug("Log fetcher initialized")
+        logger.debug("2. Log fetcher initialized")
 
         storage_manager = StorageManager(config.log_output_dir)
-        logger.debug("Storage manager initialized")
+        logger.debug("3. Storage manager initialized")
 
         monitor = PipelineMonitor(f"{config.log_output_dir}/monitoring.db")
-        logger.debug("Pipeline monitor initialized")
+        logger.debug("4. Pipeline monitor initialized")
 
         # Initialize BFA JWT token manager based on authentication configuration
         # Scenario 1: BFA_SECRET_KEY set → Generate JWT tokens locally
@@ -186,40 +186,38 @@ def init_app():
         if config.bfa_secret_key:
             # Scenario 1: Local JWT generation
             token_manager = TokenManager(secret_key=config.bfa_secret_key)
-            logger.info("BFA_SECRET_KEY configured - /api/token not needed as JWT token already available in .env")
-            logger.debug("TokenManager initialized for local JWT generation")
+            logger.info("5. BFA_SECRET_KEY configured - /api/token not needed as JWT token already available in .env")
+            logger.debug("5. TokenManager initialized for local JWT generation")
         elif config.bfa_host:
             # Scenario 2: Will fetch tokens from BFA server
             token_manager = None
-            logger.info("BFA_SECRET_KEY not set - /api/token endpoint will be used to fetch tokens from BFA server")
+            logger.info("5. BFA_SECRET_KEY not set - /api/token endpoint will be used to fetch tokens from BFA server")
         else:
             # Scenario 3: No authentication method available
             token_manager = None
-            logger.error("Cannot post API to LLM: No BFA_SECRET_KEY or BFA_HOST configured")
+            logger.error("5. Cannot post API to LLM: No BFA_SECRET_KEY or BFA_HOST configured")
 
         # Initialize API poster if enabled
         if config.api_post_enabled:
-            logger.info("API posting is ENABLED")
-            logger.info("API endpoint: %s", config.api_post_url)
-            logger.info("API timeout: %ss", config.api_post_timeout)
-            logger.info("API retry enabled: %s", config.api_post_retry_enabled)
-            logger.debug("Save to file: %s", config.api_post_save_to_file)
+            logger.info("6. API Poster endpoint: %s", config.api_post_url)
+            logger.info("6. API Poster timeout: %ss", config.api_post_timeout)
+            logger.info("6. API Poster retry enabled: %s", config.api_post_retry_enabled)
+            logger.info("6. API Poster response save: %s", config.api_post_save_to_file)
             api_poster = ApiPoster(config)
-            logger.debug("API poster initialized")
         else:
-            logger.info("API posting is DISABLED (file storage only)")
+            logger.info("6. API posting is DISABLED (file storage only)")
             api_poster = None
 
         # Initialize Jenkins components if enabled
         if config.jenkins_enabled:
-            logger.info("Jenkins integration is ENABLED")
-            logger.debug("Jenkins URL: %s", config.jenkins_url)
-            logger.debug("Jenkins User: %s", config.jenkins_user)
+            logger.info("7. Jenkins integration: ENABLED")
+            logger.debug("7. Jenkins URL: %s", config.jenkins_url)
+            logger.debug("7. Jenkins User: %s", config.jenkins_user)
             jenkins_extractor = JenkinsExtractor()
             jenkins_log_fetcher = JenkinsLogFetcher(config)
-            logger.debug("Jenkins components initialized")
+            logger.debug("7. Jenkins components initialized")
         else:
-            logger.info("Jenkins integration is DISABLED")
+            logger.info("7. Jenkins integration: DISABLED")
             jenkins_extractor = None
             jenkins_log_fetcher = None
 

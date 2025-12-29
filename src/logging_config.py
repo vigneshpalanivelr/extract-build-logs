@@ -95,7 +95,7 @@ class SensitiveDataFilter(logging.Filter):
         """Mask token showing only first and last 4 characters"""
         if not token or len(token) < 12:
             return "****"
-        return f"{token[:4]}...{token[-4:]}"
+        return f"{token[:4]}...[REDACTED***]{token[-4:]}"
 
 
 class RequestIdFilter(logging.Filter):
@@ -123,8 +123,8 @@ class PipeDelimitedFormatter(logging.Formatter):
     """
 
     # Column widths for alignment
-    LEVEL_WIDTH = 8
-    LOGGER_WIDTH = 30
+    LEVEL_WIDTH = 6
+    LOGGER_WIDTH = 25
     REQUEST_ID_WIDTH = 8
 
     def format(self, record: logging.LogRecord) -> str:
@@ -342,7 +342,7 @@ def mask_token(token: str) -> str:
         token: Token to mask
 
     Returns:
-        Masked token (e.g., "glpat-abcd...xyz9")
+        Masked token (e.g., "glpat-abcd...[REDACTED***]xyz9")
     """
     return SensitiveDataFilter._mask_token(token)
 
