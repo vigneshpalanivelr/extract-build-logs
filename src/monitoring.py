@@ -71,19 +71,9 @@ class PipelineMonitor:
 
         # Ensure directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        logger.info("Using SQLite database: %s", self.db_path)
 
-        self._init_database()
-
-    def _init_database(self):
-        """
-        Initialize SQLite database with required tables.
-
-        Tables:
-            - requests: All webhook requests
-        """
         self._init_sqlite()
-        logger.debug("SQLite database initialized successfully")
+        logger.debug("4. SQLite database initialized with WAL mode: %s", self.db_path)
 
     def _init_sqlite(self):
         """
@@ -151,8 +141,6 @@ class PipelineMonitor:
                 CREATE INDEX IF NOT EXISTS idx_event_type
                 ON requests(event_type)
             """)
-
-            logger.debug("SQLite database initialized with WAL mode and durability settings")
 
         except sqlite3.Error as e:
             logger.error("Failed to initialize SQLite database: %s", e, exc_info=True)

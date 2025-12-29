@@ -65,17 +65,17 @@ class ApiPoster:
         if config.bfa_secret_key:
             try:
                 self.token_manager = TokenManager(config.bfa_secret_key)
-                logger.info("TokenManager initialized for JWT authentication")
+                logger.debug("6. TokenManager initialized for JWT authentication")
             except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Failed to initialize TokenManager: %s", e, exc_info=True)
-                logger.warning("JWT authentication will be disabled, using raw secret key")
+                logger.error("6. Failed to initialize TokenManager: %s", e, exc_info=True)
+                logger.warning("6. JWT authentication will be disabled, using raw secret key")
         elif config.bfa_host:
-            logger.info("BFA_SECRET_KEY not set, will fetch tokens from BFA server: %s", config.bfa_host)
+            logger.debug("6. BFA_SECRET_KEY not set, will fetch tokens from BFA server: %s", config.bfa_host)
         else:
-            logger.warning("Neither BFA_SECRET_KEY nor BFA_HOST configured - API authentication may fail")
+            logger.warning("6. Neither BFA_SECRET_KEY nor BFA_HOST configured - API authentication may fail")
 
-        logger.info("API Poster initialized with endpoint: %s", config.api_post_url)
-        logger.debug("API log file: %s", self.api_log_file)
+        logger.info("6. API Poster log file: %s", self.api_log_file)
+        logger.debug("6. API Poster initialized")
 
     def format_payload(self, pipeline_info: Dict[str, Any], all_logs: Dict[int, Dict[str, Any]]) -> Dict[str, Any]:
         """
