@@ -89,7 +89,7 @@ def safe_write_text(path: str, content: str):
         f.write(content)
 
 
-def process_directory(root: str, dry_run=False, extensions=None, exclude_dirs=None, exclude_files=None):
+def process_directory(root: str, dry_run=False, extensions=None, exclude_dirs=None, exclude_files=None):  # noqa: C901
     """Recursively process the given directory."""
     for dirpath, dirnames, filenames in os.walk(root, topdown=True):
         # Exclude hidden dirs and user-defined ones
