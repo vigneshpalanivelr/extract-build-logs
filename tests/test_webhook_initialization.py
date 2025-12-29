@@ -3,7 +3,7 @@ Tests for webhook_listener initialization functions to achieve 100% coverage.
 """
 
 import unittest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 import sys
 from pathlib import Path
 import tempfile
