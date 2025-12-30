@@ -343,26 +343,43 @@ extract-build-logs/
 │
 ├── src/                          # Main application code
 │   ├── webhook_listener.py      # FastAPI server and main entry point
-│   ├── pipeline_extractor.py    # Pipeline event parsing
-│   ├── log_fetcher.py            # GitLab/Jenkins API client
+│   ├── pipeline_extractor.py    # GitLab pipeline event parsing
+│   ├── jenkins_extractor.py     # Jenkins build event parsing
+│   ├── log_fetcher.py            # GitLab API client for logs
+│   ├── jenkins_log_fetcher.py   # Jenkins API client for logs
+│   ├── log_error_extractor.py   # Error extraction from logs
 │   ├── storage_manager.py        # File system storage
 │   ├── api_poster.py             # API posting functionality
 │   ├── monitoring.py             # SQLite tracking database
 │   ├── config_loader.py          # Configuration management
-│   ├── error_handler.py          # Retry logic
+│   ├── error_handler.py          # Retry logic and error handling
 │   ├── logging_config.py         # Logging configuration
 │   └── token_manager.py          # JWT token management
 │
-├── tests/                        # Test suite
+├── tests/                        # Comprehensive test suite
+│   ├── test_webhook_listener.py
+│   ├── test_webhook_background_tasks.py
+│   ├── test_webhook_initialization.py
+│   ├── test_webhook_integration.py
 │   ├── test_pipeline_extractor.py
+│   ├── test_jenkins_extractor.py
+│   ├── test_jenkins_log_fetcher.py
+│   ├── test_log_fetcher.py
+│   ├── test_log_error_extractor.py
 │   ├── test_storage_manager.py
-│   ├── test_error_handler.py
 │   ├── test_api_poster.py
-│   └── test_webhook_listener.py
+│   ├── test_monitoring.py
+│   ├── test_config_loader.py
+│   ├── test_error_handler.py
+│   ├── test_logging_config.py
+│   ├── test_token_manager.py
+│   └── test_manage_container.py
 │
-├── scripts/                      # Utility scripts
-│   ├── manage_database.sh        # Database management
-│   └── monitor_dashboard.py      # Monitoring dashboard
+├── scripts/                      # Utility scripts and services
+│   ├── manage_database.sh        # Database management CLI
+│   ├── monitor_dashboard.py      # Monitoring dashboard
+│   ├── gitlab-log-extractor.service  # Systemd service file
+│   └── crontab.example           # Example cron jobs
 │
 ├── logs/                         # Output directory (created automatically)
 │   ├── {project-name}_{id}/      # Organized by project
@@ -740,12 +757,6 @@ ERROR: BFA_HOST required when API_POST_ENABLED is true
 
 ## 3.2 GitLab Webhook Setup
 
-### Prerequisites
-
-- GitLab project with admin/maintainer access
-- Running webhook server (see [Quick Start](#2-quick-start))
-- Webhook secret token (optional but recommended)
-
 ### Setup Steps
 
 **1. Navigate to Webhook Settings**
@@ -757,23 +768,17 @@ ERROR: BFA_HOST required when API_POST_ENABLED is true
 http://your-server:8000/webhook/gitlab
 ```
 
-**3. Configure Secret Token**
-- Generate a secure secret: `openssl rand -hex 32`
-- Add to GitLab webhook configuration
-- Add same secret to `.env`: `WEBHOOK_SECRET=your_secret_here`
-
-**4. Select Trigger Events**
+**3. Select Trigger Events**
 - Enable **Pipeline events** only
 - Disable all other events
 
-**5. Configure Options**
-- ✓ Enable SSL verification (if using HTTPS)
-- ✓ Push events (optional, for testing)
+**4. Configure Options**
+- Disable SSL verification (if not using HTTPS)
 
-**6. Add Webhook**
+**5. Add Webhook**
 - Click "Add webhook"
 
-**7. Test the Webhook**
+**6. Test the Webhook**
 - Click "Test" → "Pipeline events"
 - Check server logs for confirmation
 
@@ -805,7 +810,8 @@ GitLab sends a JSON payload like this:
 }
 ```
 
-### Troubleshooting
+<details>
+<summary><b>Troubleshooting</b></summary>
 
 **Issue: 401 Unauthorized**
 - Check `WEBHOOK_SECRET` matches GitLab webhook configuration
@@ -820,6 +826,8 @@ GitLab sends a JSON payload like this:
 - Check server logs: `tail -f logs/application.log`
 - Verify all required environment variables are set
 - Check GitLab token has correct permissions
+
+</details>
 
 ## 3.3 Jenkins Integration
 
@@ -2019,7 +2027,8 @@ curl -X POST http://localhost:8000/webhook/gitlab \
 }
 ```
 
-## 5.3 Database Maintenance
+<details>
+<summary><h2>5.3 Database Maintenance</h2></summary>
 
 ### SQLite Maintenance
 
@@ -2121,7 +2130,12 @@ find "$BACKUP_DIR" -name "monitoring_*.db.gz" -mtime +30 -delete
 echo "Backup created: $BACKUP_FILE.gz"
 ```
 
-## 5.4 Troubleshooting & Common Issues
+</details>
+
+<details>
+<summary><h2>5.4 Troubleshooting & Common Issues</h2></summary>
+
+
 
 ### Server Won't Start
 
@@ -2371,6 +2385,8 @@ mv logs/monitoring_recovered.db logs/monitoring.db
 ./scripts/manage_database.sh restore monitoring_backup_latest.db
 ```
 
+</details>
+
 ---
 
 # 6. Reference
@@ -2398,146 +2414,6 @@ pip install pytest pytest-cov flake8 pylint
 # With auto-reload
 uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
 ```
-
-### Adding New Features
-
-**1. Create Feature Branch:**
-```bash
-git checkout -b feature/your-feature-name
-```
-
-**2. Write Code:**
-- Add code in `src/`
-- Follow existing code style
-- Add docstrings
-- Handle errors appropriately
-
-**3. Write Tests:**
-- Add tests in `tests/`
-- Aim for >80% coverage
-- Test success and error cases
-
-**4. Run Tests:**
-```bash
-pytest tests/ --cov=src --cov-report=term-missing
-flake8 src/ tests/
-pylint src/
-```
-
-**5. Update Documentation:**
-- Update README.md if needed
-- Update DOCUMENTATION.md with new features
-- Add configuration examples
-
-**6. Create Pull Request:**
-- Push changes to your branch
-- Create PR with clear description
-- Include test results
-
-### Code Style
-
-- Follow PEP 8
-- Use type hints where appropriate
-- Maximum line length: 120 characters
-- Use meaningful variable names
-- Add comments for complex logic
-
-## 6.2 Security Considerations
-
-### Protecting Secrets
-
-**Never commit secrets to version control:**
-- .env file is in .gitignore
-- Use environment variables
-- Use Docker secrets in production
-
-**Rotate Secrets Regularly:**
-```bash
-# Generate new secret
-openssl rand -hex 32
-
-# Update .env
-WEBHOOK_SECRET=new_secret
-
-# Update GitLab webhook configuration
-```
-
-### Network Security
-
-**Firewall Rules:**
-```bash
-# Allow only GitLab server IP
-sudo ufw allow from <gitlab-server-ip> to any port 8000
-
-# Or use nginx reverse proxy with SSL
-```
-
-**HTTPS/SSL:**
-- Use reverse proxy (nginx, Apache) for SSL termination
-- Enable SSL verification in GitLab webhook
-- Use Let's Encrypt for free SSL certificates
-
-### Sensitive Data Masking
-
-All tokens are automatically masked in logs using `[REDACTED***]` format:
-```
-GitLab Token: glpa...[REDACTED***]vf1
-BFA Secret Key: secr...[REDACTED***]key
-```
-
-## 6.3 FAQ
-
-**Q: Can I run multiple instances?**
-A: Yes, but they need separate ports or load balancer. Each tracks its own requests.
-
-**Q: What happens if the server crashes during processing?**
-A: Webhook responses are non-blocking. GitLab/Jenkins won't retry, but the request is logged in monitoring.db.
-
-**Q: How much storage do logs require?**
-A: Depends on pipeline frequency and log filtering. Example: 100 pipelines/day × 5 jobs × 100KB/job = ~50MB/day
-
-**Q: Can I delete old logs safely?**
-A: Yes. Delete old pipeline directories in logs/. The monitoring database tracks all requests regardless.
-
-**Q: Can I use it without Docker?**
-A: Yes. See [Manual Installation](#22-manual-installation) section.
-
-**Q: How do I upgrade to a new version?**
-A: Pull new code, rebuild Docker image, restart container. Logs and monitoring database are preserved.
-
-## 6.4 API Design History
-
-### Version 1.0 (Initial Release)
-- Basic webhook receiving
-- File-based log storage
-- Simple error handling
-
-### Version 2.0 (API Posting)
-- Added API posting capability
-- Dual mode (API + file)
-- JWT authentication support
-- Request/response logging
-
-### Version 3.0 (Current)
-- Improved logging with request ID tracking
-- Log filtering by status/project/job
-- Jenkins integration
-- Enhanced monitoring dashboard
-- Reorganized documentation
-
----
-
-**End of Documentation**
-
-For quick reference, see [README.md](README.md)
-
-**Support:**
-- Report issues in the repository
-- Check logs for troubleshooting
-- Review this documentation
-
-**Last Updated:** 2025-12-30
-**Version:** 3.0
 
 ---
 
