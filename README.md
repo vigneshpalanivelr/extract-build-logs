@@ -82,16 +82,23 @@ graph TB
     CONFIG -.->|Configuration| FETCH
     CONFIG -.->|Configuration| STORE
 
-    style WH fill:#4CAF50
-    style PARSE fill:#2196F3
-    style FETCH fill:#FF9800
-    style STORE fill:#9C27B0
-    style RETRY fill:#F44336
+    style WH fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
+    style VAL fill:#c1e1c1,stroke:#7eb07e
+    style PARSE fill:#b3d9ff,stroke:#6ba8e6
+    style FETCH fill:#ffd699,stroke:#e6a84d
+    style RETRY fill:#ffb3b3,stroke:#e66b6b
+    style STORE fill:#d9b3ff,stroke:#a86be6
+    style META fill:#e6ccff,stroke:#b380e6
+    style LOGS fill:#f0d9ff,stroke:#c699e6
+    style CONFIG fill:#c5ccd4,stroke:#8b95a1
+    style GL fill:#e8f4ea,stroke:#9db5a0
+    style PIPE fill:#f0f7f2,stroke:#b0c5b3
 ```
 
 ### Data Flow Diagram
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#a8d5ba','secondaryColor':'#b3d9ff','tertiaryColor':'#ffd699','primaryBorderColor':'#6b9e78','secondaryBorderColor':'#6ba8e6','tertiaryBorderColor':'#e6a84d'}}}%%
 sequenceDiagram
     participant GitLab
     participant Webhook as Webhook Listener
@@ -135,16 +142,15 @@ sequenceDiagram
 ### Prerequisites
 
 - **Python 3.8+** or **Docker** (Docker recommended for production)
-- GitLab instance (GitLab.com or self-hosted)
+- GitLab instance (GitLab.com)
 - GitLab Personal Access Token with `api` scope
-- Network connectivity to GitLab API
 
 ### Docker Deployment (Recommended)
 
 **1. Create configuration file:**
 ```bash
 cp .env.example .env
-nano .env  # Edit GITLAB_URL and GITLAB_TOKEN
+vi .env  # Edit GITLAB_URL and GITLAB_TOKEN
 ```
 
 **2. Build and start container:**
@@ -163,21 +169,22 @@ Your webhook is now available at: `http://your-server:8000/webhook/gitlab`
 
 **Complete Docker guide:** [DOCUMENTATION.md - Docker Operations](DOCUMENTATION.md#23-docker-operations)
 
-### Manual Installation
+<details>
+<summary><b>Manual Installation</b></summary>
 
 **1. Clone and setup:**
 ```bash
 git clone <repository-url>
 cd extract-build-logs
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate
 pip install -r requirements.txt
 ```
 
 **2. Configure environment:**
 ```bash
 cp .env.example .env
-nano .env  # Edit with your settings
+vi .env  # Edit with your settings
 ```
 
 **3. Start the server:**
@@ -189,6 +196,8 @@ python src/webhook_listener.py
 ```bash
 curl http://localhost:8000/health
 ```
+
+</details>
 
 ## Configuration
 
@@ -238,18 +247,20 @@ For detailed documentation on all features, configuration options, operations, a
 
 ### Documentation Sections
 
-- **[Features & Capabilities](DOCUMENTATION.md#features)** - Complete feature list with examples
-- **[Module Documentation](DOCUMENTATION.md#module-documentation)** - Detailed module architecture and connections
-- **[Installation & Setup](DOCUMENTATION.md#21-initial-setup)** - Complete installation guide
-- **[Docker Operations](DOCUMENTATION.md#23-docker-operations)** - Full Docker deployment guide
-- **[Configuration Guide](DOCUMENTATION.md#configuration)** - All configuration options explained
-- **[GitLab Webhook Setup](DOCUMENTATION.md#31-webhook-configuration)** - Step-by-step webhook configuration
-- **[Jenkins Integration](DOCUMENTATION.md#4-jenkins-integration)** - Complete Jenkins setup guide
-- **[API Posting](DOCUMENTATION.md#5-api-posting)** - API integration documentation
-- **[Monitoring & Operations](DOCUMENTATION.md#6-operations--monitoring)** - Monitoring, logging, and tracking
-- **[Testing](DOCUMENTATION.md#61-testing)** - Test suite and CI/CD
-- **[Troubleshooting](DOCUMENTATION.md#64-common-issues--solutions)** - Common issues and solutions
-- **[Database Maintenance](DOCUMENTATION.md#7-database-maintenance)** - Backup and maintenance procedures
+| Section | Description |
+|---------|-------------|
+| **[Features & Capabilities](DOCUMENTATION.md#features)** | Complete feature list with examples |
+| **[Module Documentation](DOCUMENTATION.md#module-documentation)** | Detailed module architecture and connections |
+| **[Installation & Setup](DOCUMENTATION.md#21-initial-setup)** | Complete installation guide |
+| **[Docker Operations](DOCUMENTATION.md#23-docker-operations)** | Full Docker deployment guide |
+| **[Configuration Guide](DOCUMENTATION.md#configuration)** | All configuration options explained |
+| **[GitLab Webhook Setup](DOCUMENTATION.md#31-webhook-configuration)** | Step-by-step webhook configuration |
+| **[Jenkins Integration](DOCUMENTATION.md#4-jenkins-integration)** | Complete Jenkins setup guide |
+| **[API Posting](DOCUMENTATION.md#5-api-posting)** | API integration documentation |
+| **[Monitoring & Operations](DOCUMENTATION.md#6-operations--monitoring)** | Monitoring, logging, and tracking |
+| **[Testing](DOCUMENTATION.md#61-testing)** | Test suite and CI/CD |
+| **[Troubleshooting](DOCUMENTATION.md#64-common-issues--solutions)** | Common issues and solutions |
+| **[Database Maintenance](DOCUMENTATION.md#7-database-maintenance)** | Backup and maintenance procedures |
 
 ---
 
@@ -257,8 +268,3 @@ For detailed documentation on all features, configuration options, operations, a
 - [Health Check](http://localhost:8000/health) - Server health status
 - [API Docs (Swagger)](http://localhost:8000/docs) - Interactive API documentation
 - [Monitoring Dashboard](http://localhost:8000/monitor/summary) - Statistics and metrics
-
-**Support:**
-- Report issues: Create an issue in the repository
-- Documentation: [DOCUMENTATION.md](DOCUMENTATION.md)
-- Configuration help: See [Configuration Guide](DOCUMENTATION.md#configuration)

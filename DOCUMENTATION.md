@@ -221,11 +221,17 @@ graph TB
     CONFIG -.->|Configuration| FETCH
     CONFIG -.->|Configuration| STORE
 
-    style WH fill:#4CAF50
-    style PARSE fill:#2196F3
-    style FETCH fill:#FF9800
-    style STORE fill:#9C27B0
-    style RETRY fill:#F44336
+    style WH fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
+    style VAL fill:#c1e1c1,stroke:#7eb07e
+    style PARSE fill:#b3d9ff,stroke:#6ba8e6
+    style FETCH fill:#ffd699,stroke:#e6a84d
+    style RETRY fill:#ffb3b3,stroke:#e66b6b
+    style STORE fill:#d9b3ff,stroke:#a86be6
+    style META fill:#e6ccff,stroke:#b380e6
+    style LOGS fill:#f0d9ff,stroke:#c699e6
+    style CONFIG fill:#c5ccd4,stroke:#8b95a1
+    style GL fill:#e8f4ea,stroke:#9db5a0
+    style PIPE fill:#f0f7f2,stroke:#b0c5b3
 ```
 
 The system consists of several key components working together:
@@ -283,36 +289,36 @@ graph LR
         MON[monitoring.py<br/>Tracking DB]
     end
 
-    subgraph "Support Modules"
+    subgraph "Helper Modules"
         CL[config_loader.py<br/>Configuration]
         EH[error_handler.py<br/>Retry Logic]
         TM[token_manager.py<br/>JWT Auth]
         LC[logging_config.py<br/>Logging Setup]
     end
 
-    WL -->|Uses| PE
-    WL -->|Uses| LF
-    WL -->|Uses| SM
-    WL -->|Uses| AP
-    WL -->|Uses| MON
-    WL -->|Uses| CL
-    LF -->|Uses| CL
-    LF -->|Uses| EH
-    SM -->|Uses| CL
-    AP -->|Uses| TM
-    AP -->|Uses| EH
-    WL -->|Uses| LC
+    WL -->|extract_pipeline_info| PE
+    WL -->|fetch_logs| LF
+    WL -->|save_logs| SM
+    WL -->|post_to_api| AP
+    WL -->|record_request| MON
+    WL -->|load_config| CL
+    LF -->|load_config| CL
+    LF -->|with_retry| EH
+    SM -->|load_config| CL
+    AP -->|generate_token| TM
+    AP -->|with_retry| EH
+    WL -->|setup_logging| LC
 
-    style WL fill:#4CAF50,stroke:#2E7D32,stroke-width:3px
-    style PE fill:#2196F3
-    style LF fill:#FF9800
-    style SM fill:#9C27B0
-    style AP fill:#E91E63
-    style MON fill:#00BCD4
-    style CL fill:#607D8B
-    style EH fill:#F44336
-    style TM fill:#FFC107
-    style LC fill:#795548
+    style WL fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
+    style PE fill:#b3d9ff,stroke:#6ba8e6
+    style LF fill:#ffd699,stroke:#e6a84d
+    style SM fill:#d9b3ff,stroke:#a86be6
+    style AP fill:#ffb3d9,stroke:#e66ba8
+    style MON fill:#b3f0ff,stroke:#6baee6
+    style CL fill:#c5ccd4,stroke:#8b95a1
+    style EH fill:#ffb3b3,stroke:#e66b6b
+    style TM fill:#ffe4b3,stroke:#e6c56b
+    style LC fill:#d4bcb0,stroke:#a18578
 ```
 
 ### Core Application Files
@@ -382,103 +388,118 @@ extract-build-logs/
 ### Data Flow Sequence Diagram
 
 ```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#a8d5ba','secondaryColor':'#b3d9ff','tertiaryColor':'#ffd699','primaryBorderColor':'#6b9e78','secondaryBorderColor':'#6ba8e6','tertiaryBorderColor':'#e6a84d'}}}%%
 sequenceDiagram
-    participant GitLab
-    participant Webhook as Webhook Listener
-    participant Extractor as Pipeline Extractor
-    participant Fetcher as Log Fetcher
-    participant Storage as Storage Manager
-    participant FileSystem as File System
+    participant GL as GitLab
+    participant WH as Webhook Listener
+    participant EX as Pipeline Extractor
+    participant FE as Log Fetcher
+    participant ST as Storage Manager
+    participant AP as API Poster
+    participant MO as Monitor DB
+    participant FS as File System
 
-    GitLab->>Webhook: POST /webhook/gitlab (Pipeline Event)
-    Webhook->>Webhook: Validate Secret Token
-    Webhook->>Extractor: Extract Pipeline Info
-    Extractor->>Extractor: Identify Pipeline Type
-    Extractor->>Extractor: Filter Jobs to Fetch
-    Extractor-->>Webhook: Pipeline Metadata
+    GL->>WH: POST /webhook/gitlab<br/>(Pipeline Event)
 
-    Webhook->>Webhook: Queue Background Processing
-    Webhook-->>GitLab: 200 OK (Acknowledged)
+    rect rgba(168, 213, 186, 0.2)
+        Note over WH: Authentication & Validation
+        WH->>WH: Validate Secret Token
+        alt Invalid Token
+            WH-->>GL: 401 Unauthorized
+        end
+        WH->>WH: Generate Request ID
+    end
 
-    Note over Webhook,Storage: Background Processing Starts
+    rect rgba(179, 217, 255, 0.2)
+        Note over WH,EX: Event Parsing & Filtering
+        WH->>EX: extract_pipeline_info(event)
+        EX->>EX: Parse pipeline metadata<br/>(ID, project, status, jobs)
+        EX->>EX: Identify pipeline type<br/>(main/child/MR)
 
-    Webhook->>Fetcher: Fetch Logs for Pipeline
-    loop For Each Job
-        Fetcher->>GitLab: GET /api/v4/projects/{id}/jobs/{job_id}/trace
-        GitLab-->>Fetcher: Log Content
-        alt API Call Fails
-            Fetcher->>Fetcher: Retry with Exponential Backoff
+        alt Check Pipeline Status Filter
+            EX->>EX: Status in LOG_SAVE_PIPELINE_STATUS?
+            Note over EX: e.g., only "failed,canceled"
+            alt Status Matches Filter
+                EX->>EX: Proceed with extraction
+            else Status Doesn't Match
+                EX-->>WH: Skip (status filtered)
+                WH->>MO: record_request(skipped)
+                WH-->>GL: 200 OK (Filtered)
+                Note over WH: Exit - No logs fetched
+            end
+        end
+
+        EX->>EX: Filter jobs by status<br/>(LOG_SAVE_JOB_STATUS)
+        EX-->>WH: Pipeline metadata + filtered jobs
+    end
+
+    WH->>WH: Queue background task
+    WH->>MO: record_request(processing)
+    WH-->>GL: 200 OK (Acknowledged)
+
+    rect rgba(255, 214, 153, 0.2)
+        Note over WH,FE: Background Log Fetching
+        WH->>FE: fetch_logs(pipeline_id, jobs)
+
+        loop For Each Filtered Job
+            FE->>GL: GET /api/v4/projects/{id}/jobs/{job_id}/trace
+            alt Success
+                GL-->>FE: Job log content
+            else API Error (4xx/5xx)
+                FE->>FE: Exponential backoff retry<br/>(2s, 4s, 8s...)
+                alt Max Retries Exceeded
+                    FE->>MO: Log fetch failure
+                    Note over FE: Continue with next job
+                else Retry Success
+                    GL-->>FE: Job log content
+                end
+            end
+        end
+        FE-->>WH: All job logs + metadata
+    end
+
+    rect rgba(217, 179, 255, 0.2)
+        Note over WH,AP: Storage & API Posting Decision
+        alt API_POST_ENABLED = true
+            WH->>AP: post_to_api(logs, metadata)
+            AP->>AP: generate_token() [JWT]
+            AP->>AP: Build request payload
+
+            loop Retry with backoff
+                AP->>AP: POST to BFA API
+                alt API Success
+                    Note over AP: API returned 200 OK
+                    AP->>MO: record_api_success()
+                else API Failure
+                    Note over AP: Retry or fallback
+                end
+            end
+
+            alt API_POST_SAVE_TO_FILE = true
+                Note over AP,ST: Dual mode: API + Files
+                AP->>ST: save_logs(logs, metadata)
+            else API_POST_SAVE_TO_FILE = false
+                Note over AP: API only, skip file storage
+            end
+        else API_POST_ENABLED = false
+            Note over WH,ST: File storage only
+            WH->>ST: save_logs(logs, metadata)
         end
     end
 
-    Fetcher-->>Storage: Job Logs + Metadata
+    rect rgba(179, 240, 255, 0.2)
+        Note over ST,FS: File System Storage
+        ST->>FS: Create directory structure<br/>(project/pipeline/)
+        ST->>FS: Save job logs (.log files)
+        ST->>FS: Save/update metadata.json
+        FS-->>ST: Confirmation
+        ST-->>WH: Storage complete
+    end
 
-    Storage->>FileSystem: Create Directory Structure
-    Storage->>FileSystem: Save Log Files
-    Storage->>FileSystem: Save/Update metadata.json
-    FileSystem-->>Storage: Confirmation
-    Storage-->>Webhook: Processing Complete
-```
+    WH->>MO: update_request(completed)<br/>Record duration & status
+    MO-->>WH: Success
 
-### Complete Event Processing Flow
-
-1. **Webhook Received**
-   - GitLab/Jenkins sends POST request to `/webhook/gitlab` or `/webhook/jenkins`
-   - Webhook listener validates secret token
-   - Request assigned unique request ID for tracking
-
-2. **Event Parsing**
-   - Pipeline extractor identifies pipeline type (main/child/MR)
-   - Extracts pipeline metadata (ID, project, status, jobs)
-   - Applies filtering based on configuration
-
-3. **Background Processing**
-   - Non-blocking response returned to GitLab/Jenkins (200 OK)
-   - Background task queued for log extraction
-   - All logs tagged with request ID for correlation
-
-4. **Log Fetching**
-   - For each job in pipeline:
-     - Fetch log content via API
-     - Retry on failures with exponential backoff
-     - Track fetch status and errors
-
-5. **Storage/API Posting**
-   - **File Mode**: Save logs to filesystem with metadata
-   - **API Mode**: POST logs to external API endpoint
-   - **Dual Mode**: Both file and API saving
-   - Fallback to file storage if API fails
-
-6. **Monitoring**
-   - Record request in SQLite database
-   - Track processing status and duration
-   - Log errors and failures
-
-**Example: Complete Processing Flow Logs**
-```
-# 1. Webhook received
-2025-12-30 10:20:15.456 | INFO  | src.webhook_listener    | a1b2c3d4 | Webhook received | event=Pipeline Hook
-
-# 2. Event parsed
-2025-12-30 10:20:15.457 | INFO  | src.pipeline_extractor  | a1b2c3d4 | Extracted info for pipeline 1061175 | project=my-app type=main status=failed jobs=7
-
-# 3. Queued for processing
-2025-12-30 10:20:15.458 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline queued for processing | pipeline_id=1061175
-
-# 4. Background processing starts
-2025-12-30 10:20:15.500 | INFO  | src.webhook_listener    | a1b2c3d4 | Starting pipeline log extraction | pipeline_id=1061175
-
-# 5. Fetching logs
-2025-12-30 10:20:16.234 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetching logs for 7 jobs
-2025-12-30 10:20:17.123 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetched log for job 456 (build) | size_bytes=12345
-2025-12-30 10:20:18.456 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetched log for job 457 (test) | size_bytes=23456
-
-# 6. Storing/posting
-2025-12-30 10:20:19.789 | INFO  | src.api_poster          | a1b2c3d4 | Posting logs to API | job_count=7
-2025-12-30 10:20:20.567 | INFO  | src.api_poster          | a1b2c3d4 | Successfully posted to API | duration_ms=778
-
-# 7. Complete
-2025-12-30 10:20:20.568 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline processing complete | duration_s=5.1 jobs_processed=7
+    Note over WH: Processing complete<br/>Request ID logged
 ```
 
 ---
@@ -501,7 +522,7 @@ This can cause permission errors on the new server.
 ```bash
 cd /home/user/extract-build-logs/
 cp .env.example .env
-nano .env  # Add your GITLAB_URL and GITLAB_TOKEN
+vi .env  # Add your GITLAB_URL and GITLAB_TOKEN
 ```
 
 #### Step 2: Create Logs Directory
@@ -553,9 +574,8 @@ Recent Logs:
 ### Prerequisites
 
 - Python 3.8 or higher
-- GitLab instance (GitLab.com or self-hosted)
+- GitLab instance (GitLab.com)
 - GitLab Personal Access Token with `api` scope
-- Network connectivity to GitLab API
 
 ### Installation Steps
 
@@ -568,12 +588,7 @@ cd extract-build-logs
 **2. Create Virtual Environment**
 ```bash
 python3 -m venv venv
-
-# On Linux/Mac:
 source venv/bin/activate
-
-# On Windows:
-venv\Scripts\activate
 ```
 
 **3. Install Dependencies**
@@ -584,7 +599,7 @@ pip install -r requirements.txt
 **4. Configure Environment**
 ```bash
 cp .env.example .env
-nano .env  # Edit with your settings
+vi .env  # Edit with your settings
 ```
 
 **Minimum Required Configuration:**
@@ -1286,7 +1301,7 @@ uvicorn src.webhook_listener:app --host 0.0.0.0 --port 8000 --workers 4
 
 **Create Service File:**
 ```bash
-sudo nano /etc/systemd/system/gitlab-log-extractor.service
+sudo vi /etc/systemd/system/gitlab-log-extractor.service
 ```
 
 **Service Configuration:**
@@ -2483,9 +2498,6 @@ A: Depends on pipeline frequency and log filtering. Example: 100 pipelines/day Ã
 
 **Q: Can I delete old logs safely?**
 A: Yes. Delete old pipeline directories in logs/. The monitoring database tracks all requests regardless.
-
-**Q: Does it support GitLab self-hosted?**
-A: Yes. Set `GITLAB_URL` to your GitLab instance URL.
 
 **Q: Can I use it without Docker?**
 A: Yes. See [Manual Installation](#22-manual-installation) section.
