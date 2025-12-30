@@ -176,7 +176,57 @@ logs/
 
 ## 1.2 Architecture & Components
 
-*For complete architecture diagrams, see [README.md - Architecture Section](README.md#architecture)*
+### System Architecture Diagram
+
+```mermaid
+graph TB
+    subgraph "GitLab"
+        GL[GitLab Server]
+        PIPE[Pipeline Events]
+    end
+
+    subgraph "Webhook Server (Port 8000)"
+        WH[Webhook Listener<br/>FastAPI Server]
+        VAL[Webhook Validator<br/>Secret Token Check]
+        PARSE[Pipeline Extractor<br/>Event Parser]
+    end
+
+    subgraph "Processing Layer"
+        FETCH[Log Fetcher<br/>GitLab API Client]
+        RETRY[Error Handler<br/>Retry Logic]
+    end
+
+    subgraph "Storage Layer"
+        STORE[Storage Manager<br/>File System]
+        META[Metadata Files<br/>JSON]
+        LOGS[Log Files<br/>.log]
+    end
+
+    subgraph "Configuration"
+        CONFIG[Config Loader<br/>Environment Variables]
+    end
+
+    GL -->|POST /webhook/gitlab| WH
+    PIPE -.->|Pipeline Complete| GL
+    WH --> VAL
+    VAL -->|Valid| PARSE
+    PARSE -->|Extract Info| FETCH
+    FETCH -->|API Call| GL
+    FETCH -.->|On Error| RETRY
+    RETRY -.->|Retry| FETCH
+    FETCH --> STORE
+    STORE --> META
+    STORE --> LOGS
+    CONFIG -.->|Configuration| WH
+    CONFIG -.->|Configuration| FETCH
+    CONFIG -.->|Configuration| STORE
+
+    style WH fill:#4CAF50
+    style PARSE fill:#2196F3
+    style FETCH fill:#FF9800
+    style STORE fill:#9C27B0
+    style RETRY fill:#F44336
+```
 
 The system consists of several key components working together:
 
@@ -222,18 +272,47 @@ The system consists of several key components working together:
 
 ### Module Connection Diagram
 
-```
-webhook_listener.py (Main Entry Point)
-    ↓
-    ├── config_loader.py (Configuration)
-    ├── pipeline_extractor.py (Parse Events)
-    ├── log_fetcher.py (Fetch Logs)
-    │   ├── error_handler.py (Retry Logic)
-    │   └── config_loader.py
-    ├── storage_manager.py (Save Files)
-    ├── api_poster.py (Post to API)
-    │   └── token_manager.py (JWT Auth)
-    └── monitoring.py (Track Requests)
+```mermaid
+graph LR
+    subgraph "Core Modules"
+        WL[webhook_listener.py<br/>Main Server]
+        PE[pipeline_extractor.py<br/>Event Parser]
+        LF[log_fetcher.py<br/>API Client]
+        SM[storage_manager.py<br/>File Storage]
+        AP[api_poster.py<br/>API Integration]
+        MON[monitoring.py<br/>Tracking DB]
+    end
+
+    subgraph "Support Modules"
+        CL[config_loader.py<br/>Configuration]
+        EH[error_handler.py<br/>Retry Logic]
+        TM[token_manager.py<br/>JWT Auth]
+        LC[logging_config.py<br/>Logging Setup]
+    end
+
+    WL -->|Uses| PE
+    WL -->|Uses| LF
+    WL -->|Uses| SM
+    WL -->|Uses| AP
+    WL -->|Uses| MON
+    WL -->|Uses| CL
+    LF -->|Uses| CL
+    LF -->|Uses| EH
+    SM -->|Uses| CL
+    AP -->|Uses| TM
+    AP -->|Uses| EH
+    WL -->|Uses| LC
+
+    style WL fill:#4CAF50,stroke:#2E7D32,stroke-width:3px
+    style PE fill:#2196F3
+    style LF fill:#FF9800
+    style SM fill:#9C27B0
+    style AP fill:#E91E63
+    style MON fill:#00BCD4
+    style CL fill:#607D8B
+    style EH fill:#F44336
+    style TM fill:#FFC107
+    style LC fill:#795548
 ```
 
 ### Core Application Files
@@ -299,6 +378,47 @@ extract-build-logs/
 ```
 
 ## 1.5 Data Flow & Processing
+
+### Data Flow Sequence Diagram
+
+```mermaid
+sequenceDiagram
+    participant GitLab
+    participant Webhook as Webhook Listener
+    participant Extractor as Pipeline Extractor
+    participant Fetcher as Log Fetcher
+    participant Storage as Storage Manager
+    participant FileSystem as File System
+
+    GitLab->>Webhook: POST /webhook/gitlab (Pipeline Event)
+    Webhook->>Webhook: Validate Secret Token
+    Webhook->>Extractor: Extract Pipeline Info
+    Extractor->>Extractor: Identify Pipeline Type
+    Extractor->>Extractor: Filter Jobs to Fetch
+    Extractor-->>Webhook: Pipeline Metadata
+
+    Webhook->>Webhook: Queue Background Processing
+    Webhook-->>GitLab: 200 OK (Acknowledged)
+
+    Note over Webhook,Storage: Background Processing Starts
+
+    Webhook->>Fetcher: Fetch Logs for Pipeline
+    loop For Each Job
+        Fetcher->>GitLab: GET /api/v4/projects/{id}/jobs/{job_id}/trace
+        GitLab-->>Fetcher: Log Content
+        alt API Call Fails
+            Fetcher->>Fetcher: Retry with Exponential Backoff
+        end
+    end
+
+    Fetcher-->>Storage: Job Logs + Metadata
+
+    Storage->>FileSystem: Create Directory Structure
+    Storage->>FileSystem: Save Log Files
+    Storage->>FileSystem: Save/Update metadata.json
+    FileSystem-->>Storage: Confirmation
+    Storage-->>Webhook: Processing Complete
+```
 
 ### Complete Event Processing Flow
 
@@ -2406,3 +2526,1104 @@ For quick reference, see [README.md](README.md)
 
 **Last Updated:** 2025-12-30
 **Version:** 3.0
+
+---
+
+# Appendix A: Comprehensive Jenkins Integration Guide
+
+## A.1 Jenkins Overview & Architecture
+
+The Jenkins integration provides:
+- Automatic build log extraction from Jenkins
+- Console log parsing to identify stages and parallel execution
+- Blue Ocean API support for better stage information
+- Structured log data posting to your API endpoint
+
+**Architecture Flow:**
+```
+Jenkins Pipeline Completes
+    ↓
+Jenkinsfile post{} block sends webhook via curl
+    ↓
+Log Extractor receives webhook at /webhook/jenkins
+    ↓
+Fetches console log via Jenkins REST API
+    ↓
+Parses parallel blocks from console log
+    ↓
+Posts structured data to your API
+```
+
+## A.2 Detailed Jenkins Configuration
+
+### Step 1: Generate Jenkins API Token
+
+**In Jenkins Web UI:**
+1. Log into Jenkins
+2. Click your username (top right) → **Configure**
+3. Scroll to **API Token** section
+4. Click **Add new Token**
+5. Give it a name (e.g., "log-extractor")
+6. Click **Generate**
+7. **Important:** Copy the token immediately (it won't be shown again)
+
+**Example Token:** `11a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5`
+
+### Step 2: Configure Environment Variables
+
+Add to your `.env` file:
+```bash
+# ============================================================================
+# JENKINS INTEGRATION
+# ============================================================================
+
+# Enable Jenkins integration
+JENKINS_ENABLED=true
+
+# Jenkins connection details
+JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your_username
+JENKINS_API_TOKEN=11a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5
+
+# Optional: Webhook secret for validation
+JENKINS_WEBHOOK_SECRET=your_secret_token_here
+
+# API Posting (required for Jenkins integration)
+API_POST_ENABLED=true
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key
+```
+
+### Step 3: Test Jenkins Connectivity
+
+```bash
+# Test if you can reach Jenkins API
+curl -u "your_username:your_api_token" \
+    "https://jenkins.example.com/api/json"
+
+# Expected: JSON response with Jenkins version info
+```
+
+### Step 4: Restart Log Extractor
+
+```bash
+./manage_container.py restart
+
+# Check logs to verify Jenkins is enabled
+./manage_container.py logs | grep "Jenkins"
+
+# Expected output:
+# 2025-12-30 10:15:00.138 | INFO | src.webhook_listener | N/A | 7. Jenkins integration: ENABLED
+```
+
+## A.3 Jenkinsfile Integration Examples
+
+### Example 1: Basic Integration (All Builds)
+
+```groovy
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                echo "Building application..."
+                sh './build.sh'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                echo "Running tests..."
+                sh './test.sh'
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                echo "Deploying..."
+                sh './deploy.sh'
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                // Send webhook for ALL builds (success or failure)
+                def webhookUrl = "http://your-log-extractor:8000/webhook/jenkins"
+                def webhookSecret = "your_secret_token"
+
+                sh """
+                    curl -X POST ${webhookUrl} \\
+                        -H 'Content-Type: application/json' \\
+                        -H 'X-Jenkins-Token: ${webhookSecret}' \\
+                        -d '{
+                            "job_name": "${env.JOB_NAME}",
+                            "build_number": ${env.BUILD_NUMBER},
+                            "build_url": "${env.BUILD_URL}",
+                            "status": "${currentBuild.result}",
+                            "duration_ms": ${currentBuild.duration},
+                            "timestamp": "${new Date().format('yyyy-MM-dd HH:mm:ss')}",
+                            "jenkins_url": "${env.JENKINS_URL}"
+                        }' || true
+                """
+            }
+        }
+    }
+}
+```
+
+### Example 2: Failed Builds Only (Recommended)
+
+```groovy
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                sh './build.sh'
+            }
+        }
+
+        stage('Test') {
+            parallel {
+                stage('Unit Tests') {
+                    steps {
+                        sh './test_unit.sh'
+                    }
+                }
+                stage('Integration Tests') {
+                    steps {
+                        sh './test_integration.sh'
+                    }
+                }
+                stage('E2E Tests') {
+                    steps {
+                        sh './test_e2e.sh'
+                    }
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh './deploy.sh'
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                // Only send webhook on FAILURES
+                sh """
+                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                        -H 'Content-Type: application/json' \\
+                        -H 'X-Jenkins-Token: your_secret_token' \\
+                        -d '{
+                            "job_name": "${env.JOB_NAME}",
+                            "build_number": ${env.BUILD_NUMBER},
+                            "build_url": "${env.BUILD_URL}",
+                            "status": "FAILURE",
+                            "jenkins_url": "${env.JENKINS_URL}"
+                        }' || true
+                """
+            }
+        }
+    }
+}
+```
+
+### Example 3: With Error Handling
+
+```groovy
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                sh './build.sh'
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def webhookUrl = "http://your-log-extractor:8000/webhook/jenkins"
+                def webhookSecret = "your_secret_token"
+
+                def payload = """
+                {
+                    "job_name": "${env.JOB_NAME}",
+                    "build_number": ${env.BUILD_NUMBER},
+                    "build_url": "${env.BUILD_URL}",
+                    "status": "${currentBuild.result}",
+                    "jenkins_url": "${env.JENKINS_URL}"
+                }
+                """
+
+                def response = sh(
+                    script: """
+                        curl -X POST ${webhookUrl} \\
+                            -H 'Content-Type: application/json' \\
+                            -H 'X-Jenkins-Token: ${webhookSecret}' \\
+                            -d '${payload}' \\
+                            -w '%{http_code}' \\
+                            -o /dev/null \\
+                            -s
+                    """,
+                    returnStdout: true
+                ).trim()
+
+                if (response == "200") {
+                    echo "✓ Successfully sent webhook to log extractor"
+                } else {
+                    echo "✗ WARNING: Webhook failed with HTTP ${response}"
+                    echo "This does not affect your build status"
+                }
+            }
+        }
+    }
+}
+```
+
+## A.4 Jenkins API Integration Details
+
+### Webhook Payload Format
+
+The webhook payload sent to the log extractor:
+```json
+{
+  "source": "jenkins",
+  "job_name": "my-app-pipeline",
+  "build_number": 123,
+  "build_url": "https://jenkins.example.com/job/my-app-pipeline/123/",
+  "status": "FAILURE",
+  "duration_ms": 45000,
+  "timestamp": "2025-12-30T10:30:00Z",
+  "jenkins_url": "https://jenkins.example.com"
+}
+```
+
+### Console Log Parsing
+
+The log extractor fetches and parses the console log to extract:
+
+1. **Stages**: Individual pipeline stages
+2. **Parallel Blocks**: Parallel execution within stages
+3. **Timestamps**: Stage start/end times
+4. **Status**: Success/failure of each stage
+
+**Example Console Log:**
+```
+Started by user Admin
+[Pipeline] Start of Pipeline
+[Pipeline] stage
+[Pipeline] { (Build)
+[Pipeline] echo
+Building application...
+[Pipeline] sh
++ ./build.sh
+Build successful
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Test)
+[Pipeline] parallel
+[Pipeline] { (Branch: Unit Tests)
+[Pipeline] { (Branch: Integration Tests)
+[Pipeline] echo
+Running unit tests...
+[Pipeline] echo
+Running integration tests...
+[Pipeline] }
+[Pipeline] // parallel
+[Pipeline] }
+[Pipeline] // stage
+```
+
+**Parsed Output:**
+```json
+{
+  "stages": [
+    {
+      "stage_name": "Build",
+      "status": "SUCCESS",
+      "duration_ms": 5000,
+      "is_parallel": false,
+      "log_content": "Building application...\nBuild successful"
+    },
+    {
+      "stage_name": "Test",
+      "status": "SUCCESS",
+      "duration_ms": 15000,
+      "is_parallel": true,
+      "parallel_blocks": [
+        {
+          "block_name": "Unit Tests",
+          "status": "SUCCESS",
+          "log_content": "Running unit tests..."
+        },
+        {
+          "block_name": "Integration Tests",
+          "status": "SUCCESS",
+          "log_content": "Running integration tests..."
+        }
+      ]
+    }
+  ]
+}
+```
+
+## A.5 Jenkins Testing & Verification
+
+### Step 1: Test Webhook Endpoint
+
+```bash
+# Verify log extractor is running
+curl http://your-log-extractor:8000/health
+
+# Expected response:
+{
+  "status": "healthy",
+  "service": "gitlab-log-extractor",
+  "version": "1.0.0"
+}
+```
+
+### Step 2: Manual Webhook Test
+
+```bash
+curl -X POST http://your-log-extractor:8000/webhook/jenkins \
+    -H 'Content-Type: application/json' \
+    -H 'X-Jenkins-Token: your_secret_token' \
+    -d '{
+        "job_name": "test-pipeline",
+        "build_number": 1,
+        "build_url": "https://jenkins.example.com/job/test-pipeline/1/",
+        "status": "FAILURE",
+        "jenkins_url": "https://jenkins.example.com"
+    }'
+
+# Expected response:
+{
+  "status": "success",
+  "message": "Jenkins build logs queued for extraction",
+  "job_name": "test-pipeline",
+  "build_number": 1,
+  "request_id": "a1b2c3d4"
+}
+```
+
+### Step 3: Verify in Application Logs
+
+```bash
+# Check application logs
+tail -f logs/application.log | grep jenkins
+
+# Expected output:
+2025-12-30 10:35:15.456 | INFO | src.webhook_listener | d5e6f7g8 | Jenkins webhook received | job=test-pipeline build=1
+2025-12-30 10:35:16.123 | INFO | src.jenkins_extractor | d5e6f7g8 | Fetching console log from Jenkins
+2025-12-30 10:35:17.234 | INFO | src.jenkins_extractor | d5e6f7g8 | Parsed 3 stages from console log
+2025-12-30 10:35:18.345 | INFO | src.api_poster | d5e6f7g8 | Posting Jenkins logs to API
+2025-12-30 10:35:19.456 | INFO | src.api_poster | d5e6f7g8 | Successfully posted Jenkins build logs
+```
+
+### Step 4: Trigger Real Jenkins Build
+
+1. Create a test pipeline in Jenkins with the webhook configured
+2. Trigger a build (let it fail for testing)
+3. Check the log extractor logs:
+
+```bash
+./manage_container.py logs | grep "Jenkins"
+
+# You should see:
+# - Webhook received
+# - Console log fetched
+# - Stages parsed
+# - Data posted to API
+```
+
+## A.6 Jenkins Troubleshooting
+
+### Issue 1: Jenkins API Authentication Fails
+
+**Error:**
+```
+ERROR: Failed to fetch Jenkins console log: 401 Unauthorized
+```
+
+**Solutions:**
+
+1. **Verify API Token:**
+```bash
+# Test your Jenkins credentials
+curl -u "username:api_token" \
+    "https://jenkins.example.com/api/json"
+
+# Should return Jenkins info, not 401
+```
+
+2. **Check Token Hasn't Expired:**
+- Go to Jenkins → Your Profile → Configure → API Token
+- Check if token is listed
+- If not, generate a new one
+
+3. **Verify Username:**
+```bash
+# Must be your Jenkins username, not email
+JENKINS_USER=johndoe  # NOT john@example.com
+```
+
+### Issue 2: Webhook Not Triggering
+
+**Symptoms:**
+- Jenkins build completes
+- No logs in log extractor
+
+**Debug Steps:**
+
+1. **Check Jenkinsfile:**
+```groovy
+post {
+    always {
+        script {
+            // Add echo for debugging
+            echo "Sending webhook to log extractor..."
+
+            sh """
+                curl -v -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                    -H 'Content-Type: application/json' \\
+                    -H 'X-Jenkins-Token: your_secret' \\
+                    -d '{
+                        "job_name": "${env.JOB_NAME}",
+                        "build_number": ${env.BUILD_NUMBER},
+                        "build_url": "${env.BUILD_URL}",
+                        "status": "${currentBuild.result}"
+                    }'
+            """
+
+            echo "Webhook sent!"
+        }
+    }
+}
+```
+
+2. **Check Jenkins Console Output:**
+- Open the build in Jenkins
+- Go to Console Output
+- Look for the webhook curl command output
+- Check for errors
+
+3. **Network Connectivity:**
+```bash
+# From Jenkins server, test connectivity
+curl -I http://your-log-extractor:8000/health
+
+# Should return 200 OK
+```
+
+### Issue 3: Console Log Parsing Fails
+
+**Error:**
+```
+WARN: Failed to parse parallel blocks from console log
+```
+
+**Causes:**
+- Non-standard Jenkins output
+- Custom logging that interferes with parsing
+- Very large console logs (>10MB)
+
+**Solutions:**
+
+1. **Check Console Log Size:**
+```bash
+# In Jenkins, check the console output size
+# If > 10MB, consider reducing verbosity
+```
+
+2. **Simplify Logging:**
+```groovy
+// Reduce noise in console output
+pipeline {
+    options {
+        // Limit console output
+        timestamps()
+        ansiColor('xterm')
+    }
+}
+```
+
+3. **Enable Debug Logging:**
+```bash
+# In .env
+LOG_LEVEL=DEBUG
+
+# Restart and check detailed parsing logs
+```
+
+### Issue 4: Parallel Blocks Not Detected
+
+**Symptoms:**
+- Parallel stages run in Jenkins
+- But appear as single stage in extracted logs
+
+**Solution:**
+
+Ensure you're using declarative pipeline parallel syntax:
+```groovy
+stage('Test') {
+    parallel {
+        stage('Unit Tests') {
+            steps {
+                sh './test_unit.sh'
+            }
+        }
+        stage('Integration Tests') {
+            steps {
+                sh './test_integration.sh'
+            }
+        }
+    }
+}
+```
+
+NOT scripted pipeline:
+```groovy
+// This won't be parsed correctly
+stage('Test') {
+    steps {
+        script {
+            parallel (
+                unitTest: { sh './test_unit.sh' },
+                integrationTest: { sh './test_integration.sh' }
+            )
+        }
+    }
+}
+```
+
+## A.7 Jenkins Advanced Topics
+
+### Blue Ocean API Integration
+
+If Blue Ocean plugin is installed, the log extractor can use Blue Ocean API for better stage information:
+
+**Benefits:**
+- More accurate stage timing
+- Better parallel block detection
+- Stage duration in milliseconds
+- Status per stage
+
+**Blue Ocean API Endpoint:**
+```
+GET /blue/rest/organizations/jenkins/pipelines/{job_name}/runs/{build_number}/nodes/
+```
+
+**Example Response:**
+```json
+[
+  {
+    "id": "3",
+    "displayName": "Build",
+    "state": "FINISHED",
+    "result": "SUCCESS",
+    "durationInMillis": 5234,
+    "startTime": "2025-12-30T10:00:00.000+0000"
+  },
+  {
+    "id": "7",
+    "displayName": "Test",
+    "state": "FINISHED",
+    "result": "SUCCESS",
+    "durationInMillis": 15678,
+    "startTime": "2025-12-30T10:00:05.234+0000"
+  }
+]
+```
+
+### Multi-Branch Pipeline Support
+
+The log extractor supports multi-branch pipelines:
+
+**Branch Information Included:**
+```json
+{
+  "job_name": "my-app/feature-branch",
+  "branch_name": "feature-branch",
+  "build_number": 123
+}
+```
+
+**Example Jenkinsfile for Multi-Branch:**
+```groovy
+pipeline {
+    agent any
+
+    stages {
+        stage('Build') {
+            steps {
+                echo "Building branch: ${env.BRANCH_NAME}"
+                sh './build.sh'
+            }
+        }
+    }
+
+    post {
+        failure {
+            script {
+                sh """
+                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                        -H 'Content-Type: application/json' \\
+                        -d '{
+                            "job_name": "${env.JOB_NAME}",
+                            "branch_name": "${env.BRANCH_NAME}",
+                            "build_number": ${env.BUILD_NUMBER},
+                            "build_url": "${env.BUILD_URL}",
+                            "status": "FAILURE"
+                        }' || true
+                """
+            }
+        }
+    }
+}
+```
+
+### Pipeline Parameters
+
+Include pipeline parameters in the webhook:
+
+```groovy
+pipeline {
+    parameters {
+        string(name: 'DEPLOY_ENV', defaultValue: 'staging', description: 'Deployment environment')
+        booleanParam(name: 'RUN_TESTS', defaultValue: true, description: 'Run tests')
+    }
+
+    stages {
+        stage('Deploy') {
+            steps {
+                echo "Deploying to ${params.DEPLOY_ENV}"
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                sh """
+                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                        -H 'Content-Type: application/json' \\
+                        -d '{
+                            "job_name": "${env.JOB_NAME}",
+                            "build_number": ${env.BUILD_NUMBER},
+                            "build_url": "${env.BUILD_URL}",
+                            "status": "${currentBuild.result}",
+                            "parameters": {
+                                "DEPLOY_ENV": "${params.DEPLOY_ENV}",
+                                "RUN_TESTS": ${params.RUN_TESTS}
+                            }
+                        }' || true
+                """
+            }
+        }
+    }
+}
+```
+
+---
+
+# Appendix B: Complete Configuration Reference
+
+## B.1 All Environment Variables
+
+### GitLab Configuration
+
+```bash
+# ============================================================================
+# GITLAB CONFIGURATION (REQUIRED)
+# ============================================================================
+
+# GitLab instance URL
+# Examples: https://gitlab.com, https://gitlab.company.com
+GITLAB_URL=https://gitlab.com
+
+# GitLab Personal Access Token
+# Required scopes: api, read_api
+# Generate at: GitLab → Profile → Access Tokens
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+```
+
+### Server Configuration
+
+```bash
+# ============================================================================
+# SERVER CONFIGURATION
+# ============================================================================
+
+# Port for webhook server
+# Default: 8000
+# Valid range: 1-65535
+WEBHOOK_PORT=8000
+
+# Webhook secret token for request validation
+# Leave empty to disable validation (not recommended for production)
+# Generate with: openssl rand -hex 32
+WEBHOOK_SECRET=your_webhook_secret_here
+
+# Directory for log storage
+# Default: ./logs
+# Must be writable by the application
+LOG_OUTPUT_DIR=./logs
+
+# Logging level
+# Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# Default: INFO
+# DEBUG: Most verbose, useful for troubleshooting
+# INFO: Normal operational messages
+# WARNING: Warning messages
+# ERROR: Error messages
+# CRITICAL: Critical issues only
+LOG_LEVEL=INFO
+
+# API retry configuration
+# Number of retry attempts for failed API calls
+# Default: 3
+RETRY_ATTEMPTS=3
+
+# Delay between retries (in seconds)
+# Default: 2
+# Exponential backoff: delay * 2^attempt
+RETRY_DELAY=2
+```
+
+### Log Filtering Configuration
+
+```bash
+# ============================================================================
+# LOG FILTERING CONFIGURATION
+# ============================================================================
+
+# Pipeline status filter
+# Which pipeline statuses to save logs for
+# Options: all, failed, success, running, canceled, skipped
+# Multiple values: failed,canceled,skipped
+# Default: all
+# Examples:
+#   all - Save logs for all pipelines
+#   failed - Only save logs for failed pipelines (reduces storage ~90%)
+#   failed,canceled - Save logs for failed or canceled pipelines
+#   success - Only save logs for successful pipelines
+LOG_SAVE_PIPELINE_STATUS=all
+
+# Project whitelist
+# Comma-separated list of project IDs to include
+# Leave empty to save all projects
+# Example: 123,456,789
+# If set, only these projects will be saved
+# Overrides LOG_EXCLUDE_PROJECTS
+LOG_SAVE_PROJECTS=
+
+# Project blacklist
+# Comma-separated list of project IDs to exclude
+# Only used if LOG_SAVE_PROJECTS is empty
+# Example: 999,888
+# These projects will be excluded from log saving
+LOG_EXCLUDE_PROJECTS=
+
+# Job status filter
+# Which job statuses to save logs for within a pipeline
+# Options: all, failed, success, canceled, skipped
+# Default: all
+# Example: failed,canceled - Only save logs for failed or canceled jobs
+LOG_SAVE_JOB_STATUS=all
+
+# Metadata-only mode
+# Save pipeline metadata even if logs are filtered out
+# Options: true, false
+# Default: true
+# When true: Metadata saved for all pipelines, logs only for filtered ones
+# When false: Skip everything (metadata + logs) for filtered pipelines
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+### BFA Configuration
+
+```bash
+# ============================================================================
+# BFA CONFIGURATION (Build Failure Analyzer / LLM API)
+# ============================================================================
+
+# BFA server hostname (without http://)
+# Used to construct API endpoint: http://BFA_HOST:8000/api/analyze
+# Example: bfa-server.example.com
+# Required if API_POST_ENABLED=true
+BFA_HOST=
+
+# BFA secret key for JWT token generation
+# Used to generate Bearer tokens for API authentication
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+# If not set, application will try to fetch tokens from BFA_HOST
+BFA_SECRET_KEY=
+```
+
+### API Posting Configuration
+
+```bash
+# ============================================================================
+# API POSTING CONFIGURATION
+# ============================================================================
+
+# Enable API posting
+# When true: POST pipeline logs to external API
+# When false: Save to files only (traditional mode)
+# Default: false
+API_POST_ENABLED=false
+
+# API request timeout (in seconds)
+# Default: 30
+# Increase for slow APIs or large payloads
+API_POST_TIMEOUT=30
+
+# Enable retry logic for API requests
+# When true: Automatically retry failed API requests
+# When false: No retries, fail immediately
+# Default: true
+API_POST_RETRY_ENABLED=true
+
+# Dual mode: Save to both API and files
+# When false: API only (fallback to file on error)
+# When true: Save to both API and files
+# Default: false
+# File storage usage:
+#   false (API only): Minimal file storage (only on API failures)
+#   true (dual mode): Full file storage + API posting
+API_POST_SAVE_TO_FILE=false
+```
+
+### Jenkins Integration
+
+```bash
+# ============================================================================
+# JENKINS INTEGRATION
+# ============================================================================
+
+# Enable Jenkins integration
+# When true: Accept webhooks from Jenkins
+# When false: Jenkins webhooks will be ignored
+# Default: false
+JENKINS_ENABLED=false
+
+# Jenkins server URL
+# Example: https://jenkins.example.com
+# Required if JENKINS_ENABLED=true
+JENKINS_URL=
+
+# Jenkins username
+# Your Jenkins login username
+# Required for API authentication
+JENKINS_USER=
+
+# Jenkins API token
+# Generate at: Jenkins → Your Profile → Configure → API Token
+# Required for API authentication
+JENKINS_API_TOKEN=
+
+# Jenkins webhook secret
+# Used to validate incoming webhooks from Jenkins
+# Should match the token in your Jenkinsfile
+# Leave empty to disable validation
+JENKINS_WEBHOOK_SECRET=
+```
+
+## B.2 Configuration Examples by Use Case
+
+### Use Case 1: Development Environment
+
+**Goal:** Track all pipelines, save all logs, verbose logging
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Server
+WEBHOOK_PORT=8000
+LOG_LEVEL=DEBUG  # Verbose logging
+
+# No filtering - save everything
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=all
+LOG_SAVE_METADATA_ALWAYS=true
+
+# No API posting
+API_POST_ENABLED=false
+```
+
+### Use Case 2: Production - Failed Pipelines Only
+
+**Goal:** Minimize storage, only save failed pipelines
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.internal.com
+GITLAB_TOKEN=glpat-production-token
+
+# Server
+WEBHOOK_PORT=8000
+WEBHOOK_SECRET=production_webhook_secret_here
+LOG_LEVEL=INFO
+
+# Only save failed pipelines
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+LOG_SAVE_JOB_STATUS=all  # All jobs within failed pipelines
+LOG_SAVE_METADATA_ALWAYS=true  # Track all pipelines
+
+# No API posting
+API_POST_ENABLED=false
+```
+
+### Use Case 3: Specific Projects Only
+
+**Goal:** Monitor specific critical projects
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Server
+WEBHOOK_PORT=8000
+LOG_LEVEL=INFO
+
+# Only specific projects
+LOG_SAVE_PROJECTS=123,456,789  # Critical project IDs
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=failed  # Only failed jobs to reduce storage
+
+# No API posting
+API_POST_ENABLED=false
+```
+
+### Use Case 4: API Posting with File Fallback
+
+**Goal:** Post logs to API, fallback to files if API fails
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Server
+WEBHOOK_PORT=8000
+LOG_LEVEL=INFO
+
+# Save failed pipelines
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+
+# BFA Configuration
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key_here
+
+# API Posting (API only, fallback to file on error)
+API_POST_ENABLED=true
+API_POST_TIMEOUT=60  # Longer timeout for LLM
+API_POST_RETRY_ENABLED=true
+API_POST_SAVE_TO_FILE=false  # API only
+```
+
+### Use Case 5: Dual Mode (API + File)
+
+**Goal:** Maximum reliability - save to both API and files
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Server
+WEBHOOK_PORT=8000
+LOG_LEVEL=INFO
+
+# Save all pipelines
+LOG_SAVE_PIPELINE_STATUS=all
+
+# BFA Configuration
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key_here
+
+# API Posting (dual mode - both API and files)
+API_POST_ENABLED=true
+API_POST_TIMEOUT=60
+API_POST_RETRY_ENABLED=true
+API_POST_SAVE_TO_FILE=true  # Dual mode
+```
+
+### Use Case 6: GitLab + Jenkins Multi-Platform
+
+**Goal:** Extract logs from both GitLab and Jenkins
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Server
+WEBHOOK_PORT=8000
+LOG_LEVEL=INFO
+
+# Log Filtering
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+
+# Jenkins Integration
+JENKINS_ENABLED=true
+JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=jenkins_user
+JENKINS_API_TOKEN=jenkins_api_token_here
+JENKINS_WEBHOOK_SECRET=jenkins_webhook_secret
+
+# API Posting
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key_here
+API_POST_ENABLED=true
+API_POST_TIMEOUT=60
+API_POST_RETRY_ENABLED=true
+API_POST_SAVE_TO_FILE=false
+```
+
+### Use Case 7: High-Volume Environment
+
+**Goal:** Handle high pipeline volume, minimize storage
+
+```bash
+# GitLab
+GITLAB_URL=https://gitlab.internal.com
+GITLAB_TOKEN=glpat-production-token
+
+# Server
+WEBHOOK_PORT=8000
+LOG_LEVEL=WARNING  # Less verbose logging
+
+# Aggressive filtering
+LOG_SAVE_PIPELINE_STATUS=failed  # Only failures
+LOG_SAVE_JOB_STATUS=failed  # Only failed jobs
+LOG_SAVE_METADATA_ALWAYS=true  # Track everything
+
+# Exclude noisy projects
+LOG_EXCLUDE_PROJECTS=999,888,777
+
+# API posting only (minimal file storage)
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key_here
+API_POST_ENABLED=true
+API_POST_SAVE_TO_FILE=false  # No file storage
+```
+
+---
+
