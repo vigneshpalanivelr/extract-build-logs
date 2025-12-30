@@ -1,424 +1,1713 @@
-# GitLab Pipeline Log Extractor - Complete Documentation
+# GitLab & Jenkins Pipeline Log Extraction System - Complete Documentation
 
 > **Comprehensive guide for setup, configuration, operations, and maintenance**
 
-**Last Updated:** 2025-12-29
-**Version:** 2.0
+**Last Updated:** 2025-12-30
+**Version:** 3.0
 
 ---
 
 ## Table of Contents
 
-### 1. Quick Start & Deployment
-- [1.1 Quick Deployment Guide](#11-quick-deployment-guide)
-  - [Problem & Solution](#the-problem-you-encountered)
-  - [3-Step Setup](#solution-3-steps)
-  - [Why This Happened](#why-this-happened)
-- [1.2 Full Deployment Guide](#12-full-deployment-guide)
-  - [Prerequisites](#prerequisites)
-  - [Transferring Docker Image](#transferring-docker-image)
-  - [Configuration Setup](#configuration-setup)
-  - [Deployment Checklist](#deployment-checklist)
-  - [Troubleshooting Common Issues](#troubleshooting-common-deployment-issues)
-- [1.3 Production Deployment Best Practices](#13-production-deployment-best-practices)
-  - [Docker Secrets](#docker-secrets-docker-swarmcompose)
-  - [Kubernetes Deployment](#kubernetes-deployment)
-  - [Monitoring and Logging](#production-monitoring-and-logging)
+### 1. System Overview
+- [1.1 Features & Capabilities](#11-features--capabilities)
+- [1.2 Architecture & Components](#12-architecture--components)
+- [1.3 Module Documentation](#13-module-documentation)
+- [1.4 Project Structure](#14-project-structure)
+- [1.5 Data Flow & Processing](#15-data-flow--processing)
 
-### 2. Setup & Installation
-- [2.1 Initial Setup](#21-initial-setup)
-  - [Prerequisites](#prerequisites-1)
-  - [Environment Configuration](#environment-configuration)
-- [2.2 Running the Application](#22-running-the-application)
-  - [Docker Deployment (Recommended)](#option-1-docker-recommended-for-production)
-  - [Direct Python Deployment](#option-2-direct-python)
-  - [Systemd Service](#option-3-systemd-service-linux)
-- [2.3 Docker Operations](#23-docker-operations)
-  - [Common Commands](#common-commands)
-  - [Monitoring & Testing](#monitoring--testing)
+### 2. Quick Start
+- [2.1 Quick Deployment (Docker)](#21-quick-deployment-docker)
+- [2.2 Manual Installation](#22-manual-installation)
+- [2.3 First Steps & Verification](#23-first-steps--verification)
 
-### 3. GitLab Webhook Setup
-- [3.1 Webhook Configuration](#31-webhook-configuration)
-  - [Prerequisites](#prerequisites-2)
-  - [Setup Steps](#setup-steps)
-  - [Testing the Webhook](#testing-the-webhook)
-- [3.2 Webhook Troubleshooting](#32-webhook-troubleshooting)
-  - [Common Issues](#webhook-troubleshooting-issues)
-  - [Security Best Practices](#security-best-practices)
+### 3. Configuration
+- [3.1 Environment Variables Reference](#31-environment-variables-reference)
+- [3.2 GitLab Webhook Setup](#32-gitlab-webhook-setup)
+- [3.3 Jenkins Integration](#33-jenkins-integration)
+- [3.4 API Posting Setup](#34-api-posting-setup)
+- [3.5 Log Filtering Configuration](#35-log-filtering-configuration)
+- [3.6 Configuration Examples & Scenarios](#36-configuration-examples--scenarios)
 
-### 4. Jenkins Integration
-- [4.1 Jenkins Setup](#41-jenkins-setup)
-  - [Overview](#jenkins-overview)
-  - [Configuration](#jenkins-configuration)
-  - [Jenkinsfile Examples](#jenkinsfile-setup)
-- [4.2 Jenkins API Integration](#42-jenkins-api-integration)
-  - [Payload Format](#jenkins-api-payload-format)
-  - [Testing](#jenkins-testing)
-  - [Troubleshooting](#jenkins-troubleshooting)
-- [4.3 Jenkins Advanced Topics](#43-jenkins-advanced-topics)
-  - [Architecture Details](#jenkins-architecture-details)
-  - [Advanced Examples](#jenkins-advanced-examples)
-  - [Next Steps](#jenkins-next-steps)
+### 4. Usage & Operations
+- [4.1 Running the Application](#41-running-the-application)
+- [4.2 Docker Operations](#42-docker-operations)
+- [4.3 Application Logging](#43-application-logging)
+- [4.4 Monitoring & Tracking](#44-monitoring--tracking)
+- [4.5 Usage Examples](#45-usage-examples)
+- [4.6 API Endpoints Reference](#46-api-endpoints-reference)
 
-### 5. API Posting
-- [5.1 API Configuration](#51-api-configuration)
-  - [Overview](#api-overview)
-  - [Environment Variables](#api-environment-variables)
-  - [Payload Format](#api-payload-format)
-- [5.2 API Authentication & Requests](#52-api-authentication--requests)
-  - [Bearer Token Authentication](#bearer-token-authentication)
-  - [Request/Response Details](#api-request-and-response-details)
-  - [Operating Modes](#operating-modes)
-- [5.3 API Retry & Logging](#53-api-retry--logging)
-  - [Retry Logic](#retry-logic)
-  - [Request Logging](#api-request-logging)
-  - [Debugging](#api-debugging)
+### 5. Advanced Topics
+- [5.1 Production Deployment](#51-production-deployment)
+- [5.2 Testing & CI/CD Pipeline](#52-testing--cicd-pipeline)
+- [5.3 Database Maintenance](#53-database-maintenance)
+- [5.4 Troubleshooting & Common Issues](#54-troubleshooting--common-issues)
 
-### 6. Operations & Monitoring
-- [6.1 Testing](#61-testing)
-- [6.2 Application Logging](#62-application-logging)
-  - [Logging Features](#application-logging-features)
-  - [Log Files & Formats](#log-files-and-formats)
-  - [Log Rotation](#log-rotation-behavior)
-  - [Viewing & Searching Logs](#viewing-logs)
-  - [Request ID Tracking](#request-id-tracking)
-- [6.3 Monitoring Dashboard](#63-monitoring-dashboard)
-  - [What is Tracked](#what-is-tracked)
-  - [CLI Dashboard](#cli-dashboard-tool)
-  - [API Endpoints](#monitoring-api-endpoints)
-  - [Database Queries](#database-queries)
-- [6.4 Common Issues & Solutions](#64-common-issues--solutions)
-
-### 7. Database Maintenance
-- [7.1 SQLite Maintenance](#71-sqlite-maintenance)
-  - [Daily Tasks](#daily-tasks)
-  - [Weekly Tasks](#weekly-tasks)
-  - [Monthly Tasks](#monthly-tasks)
-- [7.2 Backup & Restore](#72-backup--restore)
-  - [Backup Strategies](#backup-strategies)
-  - [Restore Procedures](#restore-procedures)
-  - [Automated Scripts](#automated-backup-scripts)
-- [7.3 Health Checks](#73-health-checks)
-  - [Database Health](#database-health-check)
-  - [Best Practices](#database-best-practices)
-
-### 8. Appendices
-- [8.1 FAQ](#81-faq)
-- [8.2 Security Considerations](#82-security-considerations)
-- [8.3 Getting Help](#83-getting-help)
-- [8.4 API Design History](#84-api-design-history)
+### 6. Reference
+- [6.1 Development & Contributing](#61-development--contributing)
+- [6.2 Security Considerations](#62-security-considerations)
+- [6.3 FAQ](#63-faq)
+- [6.4 API Design History](#64-api-design-history)
 
 ---
 
-# 1. Quick Start & Deployment
+# 1. System Overview
 
-## 1.1 Quick Deployment Guide
+## 1.1 Features & Capabilities
 
-### The Problem You Encountered
+### Multi-Source Support
+- **GitLab Integration**: Full webhook integration for pipeline events
+- **Jenkins Integration**: Build log extraction with parallel stage parsing
+- Automatic log extraction from all jobs/stages
+- Support for multiple pipeline types (main, child, merge request)
+
+### Advanced Logging System
+- **Aligned log columns** for easy reading
+- **Project names** in logs instead of just IDs
+- **Request ID tracking** to trace pipeline processing across all entries
+- **Pipe-delimited format** for easy parsing
+- **Consolidated logging**: Single application.log file
+- **Configurable log levels** (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+- **Automatic log rotation** with size limits
+- **Sensitive data masking** using `[REDACTED***]` format
+
+**Example Startup Logs:**
+```
+2025-12-30 10:15:00.123 | INFO  | src.webhook_listener    | N/A      | ======================================================================
+2025-12-30 10:15:00.124 | INFO  | src.webhook_listener    | N/A      | GitLab Pipeline Log Extractor - Initializing
+2025-12-30 10:15:00.125 | INFO  | src.webhook_listener    | N/A      | ======================================================================
+2025-12-30 10:15:00.126 | INFO  | src.webhook_listener    | N/A      | Configuration .env loaded successfully | operation=config_load
+2025-12-30 10:15:00.127 | INFO  | src.webhook_listener    | N/A      | GitLab URL: https://gitlab.example.com
+2025-12-30 10:15:00.128 | INFO  | src.webhook_listener    | N/A      | Webhook receiver Port: 8000
+2025-12-30 10:15:00.129 | DEBUG | src.webhook_listener    | N/A      | GitLab Token: glpa...[REDACTED***]vf1
+2025-12-30 10:15:00.130 | INFO  | src.webhook_listener    | N/A      | Initializing 7 components...
+2025-12-30 10:15:00.131 | DEBUG | src.webhook_listener    | N/A      | 1. Pipeline extractor initialized
+2025-12-30 10:15:00.132 | DEBUG | src.webhook_listener    | N/A      | 2. Log fetcher initialized
+2025-12-30 10:15:00.133 | DEBUG | src.webhook_listener    | N/A      | 3. Storage manager initialized
+2025-12-30 10:15:00.134 | DEBUG | src.monitoring          | N/A      | 4. SQLite database initialized with WAL mode: logs/monitoring.db
+2025-12-30 10:15:00.135 | INFO  | src.webhook_listener    | N/A      | 6. API Poster endpoint: http://api.example.com:8000/api/analyze
+2025-12-30 10:15:00.136 | INFO  | src.api_poster          | N/A      | 6. API Poster log file: logs/api-requests.log
+2025-12-30 10:15:00.137 | DEBUG | src.api_poster          | N/A      | 6. API Poster initialized
+2025-12-30 10:15:00.138 | INFO  | src.webhook_listener    | N/A      | 7. Jenkins integration: DISABLED
+2025-12-30 10:15:00.139 | INFO  | src.webhook_listener    | N/A      | All components initialized successfully
+```
+
+### Flexible Log Filtering
+Configure which logs to save based on:
+- **Pipeline status** (all, failed, success, running, canceled, skipped)
+- **Project whitelist/blacklist** (save specific projects or exclude noisy ones)
+- **Job status** (all, failed, success, canceled, skipped)
+- **Metadata-only mode** for tracking without storing logs
+
+**Example: Pipeline Processing with Filtering**
+```
+2025-12-30 10:20:15.456 | INFO  | src.webhook_listener    | a1b2c3d4 | Request ID a1b2c3d4 tracking pipeline 1061175 from project 'my-app' (ID: 123)
+2025-12-30 10:20:15.457 | INFO  | src.pipeline_extractor  | a1b2c3d4 | Extracted info for pipeline 1061175 from project 'my-app' (type: main, status: failed)
+2025-12-30 10:20:15.458 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline queued for processing | pipeline_id=1061175 project_id=123
+2025-12-30 10:20:15.500 | INFO  | src.webhook_listener    | a1b2c3d4 | Starting pipeline log extraction for 'my-app' | pipeline_id=1061175
+2025-12-30 10:20:16.234 | INFO  | src.webhook_listener    | a1b2c3d4 | Job filtering: 5 jobs to fetch, 2 jobs skipped by filter | pipeline_id=1061175
+```
+
+### API Posting
+Send extracted logs to external API endpoints:
+- **Configurable modes**: API only, dual (API + file), or file only
+- **Bearer token authentication** with JWT support
+- **Retry logic** with exponential backoff
+- **Request/response logging** to `logs/api-requests.log`
+- **Fallback to file storage** if API fails
+
+**Example: API Posting Flow**
+```
+2025-12-30 10:20:18.789 | INFO  | src.api_poster          | a1b2c3d4 | Posting pipeline logs to API for 'my-app' (pipeline 1061175) | job_count=5
+2025-12-30 10:20:19.234 | INFO  | src.api_poster          | a1b2c3d4 | Formatted API payload for pipeline 1061175 | payload_size_bytes=45678
+2025-12-30 10:20:20.567 | INFO  | src.api_poster          | a1b2c3d4 | Successfully posted pipeline 1061175 logs to API | duration_ms=1250
+```
+
+### Error Handling & Reliability
+- **Automatic retry** with exponential backoff
+- **Circuit breaker pattern** for cascade failure prevention
+- **Comprehensive error logging**
+- **Request correlation** via unique request IDs
+
+**Example: Retry Logic in Action**
+```
+2025-12-30 10:25:30.123 | ERROR | src.log_fetcher         | b2c3d4e5 | Failed to fetch log for job 789: Connection timeout
+2025-12-30 10:25:30.124 | INFO  | src.error_handler       | b2c3d4e5 | Retrying operation (attempt 1/3) with 2.0s backoff
+2025-12-30 10:25:32.456 | INFO  | src.log_fetcher         | b2c3d4e5 | Retry attempt 1: Fetching log for job 789
+2025-12-30 10:25:34.789 | INFO  | src.log_fetcher         | b2c3d4e5 | Successfully fetched log for job 789 | size_bytes=12345 | retry_succeeded=true
+```
+
+### Structured Storage
+- **Organized by project** name and ID
+- **Directory structure**: `{project-name}_{id}/pipeline_{id}/`
+- **Metadata files** with complete pipeline/job information
+- **Individual log files** per job
+
+**Example Directory Structure:**
+```
+logs/
+├── my-app_123/
+│   ├── pipeline_1061175/
+│   │   ├── metadata.json
+│   │   ├── job_456_build.log
+│   │   ├── job_457_test_unit.log
+│   │   └── job_459_deploy.log
+│   └── pipeline_1061180/
+│       ├── metadata.json
+│       └── job_460_build.log
+├── application.log          # All application logs
+├── api-requests.log         # API posting logs
+└── monitoring.db            # SQLite tracking database
+```
+
+### Modern Async Architecture
+- **FastAPI-based async server** with automatic API documentation
+- **Interactive API Docs**: Swagger UI at `/docs`, ReDoc at `/redoc`
+- **Background processing**: Non-blocking webhook responses
+- **Health monitoring**: Health check and statistics endpoints
+- **High performance**: Async/await for better concurrency
+
+### Production Ready
+- **Docker containerization** with optimized images
+- **Comprehensive monitoring** with SQLite tracking database
+- **Security**: Webhook secret validation, sensitive data masking
+- **Automated testing**: Unit tests with CI/CD integration
+- **Log rotation**: Automatic with configurable size limits
+
+## 1.2 Architecture & Components
+
+*For complete architecture diagrams, see [README.md - Architecture Section](README.md#architecture)*
+
+The system consists of several key components working together:
+
+### Core Components
+
+1. **Webhook Listener** (`webhook_listener.py`)
+   - FastAPI async web server
+   - Receives webhook events from GitLab/Jenkins
+   - Validates webhook secrets
+   - Queues background processing
+
+2. **Pipeline Extractor** (`pipeline_extractor.py`)
+   - Parses webhook payloads
+   - Identifies pipeline types (main/child/MR)
+   - Filters jobs based on configuration
+
+3. **Log Fetcher** (`log_fetcher.py`)
+   - Communicates with GitLab/Jenkins API
+   - Fetches job logs with retry logic
+   - Handles authentication
+
+4. **Storage Manager** (`storage_manager.py`)
+   - Creates directory structures
+   - Saves log files and metadata
+   - Manages file organization
+
+5. **API Poster** (`api_poster.py`)
+   - Posts logs to external API endpoints
+   - Handles authentication and retries
+   - Logs all API requests/responses
+
+6. **Monitoring** (`monitoring.py`)
+   - SQLite database for tracking
+   - Records all webhook requests
+   - Provides statistics and reporting
+
+7. **Error Handler** (`error_handler.py`)
+   - Implements retry logic with exponential backoff
+   - Circuit breaker pattern
+   - Comprehensive error tracking
+
+## 1.3 Module Documentation
+
+### Module Connection Diagram
+
+```
+webhook_listener.py (Main Entry Point)
+    ↓
+    ├── config_loader.py (Configuration)
+    ├── pipeline_extractor.py (Parse Events)
+    ├── log_fetcher.py (Fetch Logs)
+    │   ├── error_handler.py (Retry Logic)
+    │   └── config_loader.py
+    ├── storage_manager.py (Save Files)
+    ├── api_poster.py (Post to API)
+    │   └── token_manager.py (JWT Auth)
+    └── monitoring.py (Track Requests)
+```
+
+### Core Application Files
+
+| File | Purpose | Key Responsibilities |
+|------|---------|---------------------|
+| `webhook_listener.py` | Main server | FastAPI server, webhook handling, background processing |
+| `pipeline_extractor.py` | Event parsing | Parse payloads, identify types, filter jobs |
+| `log_fetcher.py` | API client | Fetch logs from GitLab/Jenkins, handle authentication |
+| `storage_manager.py` | File storage | Create directories, save logs, manage metadata |
+| `api_poster.py` | API integration | POST logs to external APIs, handle retries |
+| `monitoring.py` | Tracking | SQLite database, statistics, reporting |
+| `error_handler.py` | Error handling | Retry logic, circuit breaker, error tracking |
+| `config_loader.py` | Configuration | Load environment variables, validate settings |
+| `logging_config.py` | Logging | Configure logging, format output, mask secrets |
+| `token_manager.py` | Authentication | JWT token generation and management |
+
+## 1.4 Project Structure
+
+```
+extract-build-logs/
+│
+├── src/                          # Main application code
+│   ├── webhook_listener.py      # FastAPI server and main entry point
+│   ├── pipeline_extractor.py    # Pipeline event parsing
+│   ├── log_fetcher.py            # GitLab/Jenkins API client
+│   ├── storage_manager.py        # File system storage
+│   ├── api_poster.py             # API posting functionality
+│   ├── monitoring.py             # SQLite tracking database
+│   ├── config_loader.py          # Configuration management
+│   ├── error_handler.py          # Retry logic
+│   ├── logging_config.py         # Logging configuration
+│   └── token_manager.py          # JWT token management
+│
+├── tests/                        # Test suite
+│   ├── test_pipeline_extractor.py
+│   ├── test_storage_manager.py
+│   ├── test_error_handler.py
+│   ├── test_api_poster.py
+│   └── test_webhook_listener.py
+│
+├── scripts/                      # Utility scripts
+│   ├── manage_database.sh        # Database management
+│   └── monitor_dashboard.py      # Monitoring dashboard
+│
+├── logs/                         # Output directory (created automatically)
+│   ├── {project-name}_{id}/      # Organized by project
+│   │   └── pipeline_{id}/        # Then by pipeline
+│   │       ├── metadata.json     # Pipeline metadata
+│   │       └── job_{id}_{name}.log  # Job logs
+│   ├── application.log           # Application logs
+│   ├── api-requests.log          # API request logs
+│   └── monitoring.db             # SQLite tracking database
+│
+├── .env                          # Environment configuration
+├── .env.example                  # Configuration template
+├── requirements.txt              # Python dependencies
+├── Dockerfile                    # Docker image definition
+├── log-extractor-entrypoint.sh   # Container entrypoint script
+├── manage_container.py           # Container management tool
+├── README.md                     # Quick start guide
+└── DOCUMENTATION.md              # This file
+```
+
+## 1.5 Data Flow & Processing
+
+### Complete Event Processing Flow
+
+1. **Webhook Received**
+   - GitLab/Jenkins sends POST request to `/webhook/gitlab` or `/webhook/jenkins`
+   - Webhook listener validates secret token
+   - Request assigned unique request ID for tracking
+
+2. **Event Parsing**
+   - Pipeline extractor identifies pipeline type (main/child/MR)
+   - Extracts pipeline metadata (ID, project, status, jobs)
+   - Applies filtering based on configuration
+
+3. **Background Processing**
+   - Non-blocking response returned to GitLab/Jenkins (200 OK)
+   - Background task queued for log extraction
+   - All logs tagged with request ID for correlation
+
+4. **Log Fetching**
+   - For each job in pipeline:
+     - Fetch log content via API
+     - Retry on failures with exponential backoff
+     - Track fetch status and errors
+
+5. **Storage/API Posting**
+   - **File Mode**: Save logs to filesystem with metadata
+   - **API Mode**: POST logs to external API endpoint
+   - **Dual Mode**: Both file and API saving
+   - Fallback to file storage if API fails
+
+6. **Monitoring**
+   - Record request in SQLite database
+   - Track processing status and duration
+   - Log errors and failures
+
+**Example: Complete Processing Flow Logs**
+```
+# 1. Webhook received
+2025-12-30 10:20:15.456 | INFO  | src.webhook_listener    | a1b2c3d4 | Webhook received | event=Pipeline Hook
+
+# 2. Event parsed
+2025-12-30 10:20:15.457 | INFO  | src.pipeline_extractor  | a1b2c3d4 | Extracted info for pipeline 1061175 | project=my-app type=main status=failed jobs=7
+
+# 3. Queued for processing
+2025-12-30 10:20:15.458 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline queued for processing | pipeline_id=1061175
+
+# 4. Background processing starts
+2025-12-30 10:20:15.500 | INFO  | src.webhook_listener    | a1b2c3d4 | Starting pipeline log extraction | pipeline_id=1061175
+
+# 5. Fetching logs
+2025-12-30 10:20:16.234 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetching logs for 7 jobs
+2025-12-30 10:20:17.123 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetched log for job 456 (build) | size_bytes=12345
+2025-12-30 10:20:18.456 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetched log for job 457 (test) | size_bytes=23456
+
+# 6. Storing/posting
+2025-12-30 10:20:19.789 | INFO  | src.api_poster          | a1b2c3d4 | Posting logs to API | job_count=7
+2025-12-30 10:20:20.567 | INFO  | src.api_poster          | a1b2c3d4 | Successfully posted to API | duration_ms=778
+
+# 7. Complete
+2025-12-30 10:20:20.568 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline processing complete | duration_s=5.1 jobs_processed=7
+```
+
+---
+
+# 2. Quick Start
+
+## 2.1 Quick Deployment (Docker)
+
+### The Problem
 
 When shipping a Docker image from one server to another:
 - Docker image contains: Application code, dependencies
-- NOT: Docker image does NOT contain: `.env` file, `logs/` directory
+- NOT included: `.env` file, `logs/` directory
 
-This causes permission errors on the new server.
+This can cause permission errors on the new server.
 
 ### Solution (3 Steps)
 
-#### 1️⃣ Create .env File
+#### Step 1: Create .env File
 ```bash
 cd /home/user/extract-build-logs/
 cp .env.example .env
 nano .env  # Add your GITLAB_URL and GITLAB_TOKEN
 ```
 
-#### 2️⃣ Create Logs Directory
+#### Step 2: Create Logs Directory
 ```bash
 mkdir -p logs
 chmod 755 logs
-chown $USER:$USER logs  # Use your username
 ```
 
-#### 3️⃣ Start Container
+#### Step 3: Start Container
 ```bash
 ./manage_container.py start
 ```
 
-### Why This Happened
+**Your webhook is now available at:** `http://your-server:8000/webhook/gitlab`
 
-#### Root Cause Analysis
+### Verification
 
-**Issue #1: Missing .env File**
-```
-Docker Mount Behavior:
-  If file doesn't exist → Docker creates it as directory → Permission denied
+```bash
+# Check container status
+./manage_container.py status
 
-Your daemon: --userns-remap user:group
-  Container UID 0 → Host UID 100000+ (no write permission)
-```
+# Check health endpoint
+curl http://localhost:8000/health
+# Expected: {"status":"healthy","service":"gitlab-log-extractor","version":"1.0.0"}
 
-**Issue #2: Missing logs Directory**
-```
-Docker Volume Mount:
-  If directory doesn't exist → Docker creates it with wrong ownership
-
-Result: Container can't write logs
+# View logs
+./manage_container.py logs
 ```
 
-#### Why It Worked on Build Server
+**Example: Successful Startup**
+```
+Container: bfa-gitlab-pipeline-extractor
+Status: running (healthy)
+Uptime: 2 minutes
+Memory: 245 MB / 2 GB
+CPU: 0.5%
+Port Mapping: 0.0.0.0:8000 -> 8000/tcp
 
-| Server A (Build)           | Server B (Deploy)          |
-|----------------------------|----------------------------|
-| YES: .env file exists        | NO: .env file missing       |
-| YES: logs/ directory exists  | NO: logs/ directory missing |
-| YES: Permissions correct     | NO: No pre-existing files   |
+Recent Logs:
+2025-12-30 10:15:00.139 | INFO  | src.webhook_listener    | N/A      | All components initialized successfully
+2025-12-30 10:15:00.140 | INFO  | uvicorn.server          | N/A      | Started server process
+2025-12-30 10:15:00.141 | INFO  | uvicorn.server          | N/A      | Waiting for application startup
+2025-12-30 10:15:00.142 | INFO  | uvicorn.server          | N/A      | Application startup complete
+2025-12-30 10:15:00.143 | INFO  | uvicorn.server          | N/A      | Uvicorn running on http://0.0.0.0:8000
+```
 
-#### Deployment Improvements: Before vs After
-
-| Scenario                    | Before Fix     | After Fix      |
-|-----------------------------|----------------|----------------|
-| Deploy to new server        | NO: Manual setup | YES: Auto-setup  |
-| Missing logs directory      | NO: Fails       | YES: Auto-creates |
-| Wrong permissions           | NO: Manual fix  | YES: Auto-corrects |
-| User namespace remapping    | NO: Issues      | YES: Bypassed    |
-
-**What changed:**
-- `manage_container.py` now auto-creates logs directory with proper permissions
-- Container runs with `userns_mode='host'` to bypass namespace remapping
-- Automatic permission correction on startup
-- Clear error messages if .env file is missing
-
----
-
-## 1.2 Full Deployment Guide
+## 2.2 Manual Installation
 
 ### Prerequisites
 
-- Docker installed on the target server
-- Docker image transferred to target server
-- Access to GitLab instance with API token
-- Port 8000 (or custom port) available
+- Python 3.8 or higher
+- GitLab instance (GitLab.com or self-hosted)
+- GitLab Personal Access Token with `api` scope
+- Network connectivity to GitLab API
 
-### Transferring Docker Image
+### Installation Steps
 
-**Option A: Using Docker Registry** (Recommended)
+**1. Clone Repository**
 ```bash
-# On build server (Server A)
-docker tag bfa-gitlab-pipeline-extractor your-registry/bfa-gitlab-pipeline-extractor:latest
-docker push your-registry/bfa-gitlab-pipeline-extractor:latest
-
-# On deployment server (Server B)
-docker pull your-registry/bfa-gitlab-pipeline-extractor:latest
-docker tag your-registry/bfa-gitlab-pipeline-extractor:latest bfa-gitlab-pipeline-extractor
+git clone <repository-url>
+cd extract-build-logs
 ```
 
-**Option B: Using docker save/load**
+**2. Create Virtual Environment**
 ```bash
-# On build server (Server A)
-docker save bfa-gitlab-pipeline-extractor | gzip > bfa-extractor.tar.gz
-scp bfa-extractor.tar.gz user@server-b:/tmp/
+python3 -m venv venv
 
-# On deployment server (Server B)
-gunzip -c /tmp/bfa-extractor.tar.gz | docker load
+# On Linux/Mac:
+source venv/bin/activate
+
+# On Windows:
+venv\Scripts\activate
 ```
 
-### Configuration Setup
-
-**Required Files:**
+**3. Install Dependencies**
 ```bash
-extract-build-logs/
-├── .env.example        # Configuration template
-├── manage_container.py # Container management script
-└── logs/               # Will be auto-created
+pip install -r requirements.txt
 ```
 
-**Create .env Configuration:**
+**4. Configure Environment**
 ```bash
-# Create .env from template
 cp .env.example .env
-
-# Edit with your credentials
-nano .env
+nano .env  # Edit with your settings
 ```
 
-**Required Settings:**
+**Minimum Required Configuration:**
+```bash
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=your_gitlab_token_here
+WEBHOOK_PORT=8000
+```
+
+**5. Start the Server**
+```bash
+python src/webhook_listener.py
+```
+
+## 2.3 First Steps & Verification
+
+### Verify Installation
+
+**1. Check Server Health**
+```bash
+curl http://localhost:8000/health
+```
+
+**Expected Response:**
+```json
+{
+  "status": "healthy",
+  "service": "gitlab-log-extractor",
+  "version": "1.0.0"
+}
+```
+
+**2. Access API Documentation**
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+**3. Check Application Logs**
+```bash
+tail -f logs/application.log
+```
+
+**4. Verify Directory Structure**
+```bash
+ls -la logs/
+# Should show: application.log, monitoring.db
+```
+
+### Next Steps
+
+1. **Configure GitLab Webhook** → See [Section 3.2](#32-gitlab-webhook-setup)
+2. **Configure Log Filtering** (optional) → See [Section 3.5](#35-log-filtering-configuration)
+3. **Enable API Posting** (optional) → See [Section 3.4](#34-api-posting-setup)
+4. **Set up Monitoring** → See [Section 4.4](#44-monitoring--tracking)
+
+---
+
+# 3. Configuration
+
+## 3.1 Environment Variables Reference
+
+All configuration is done through environment variables in the `.env` file.
+
+### Required Settings
+
 ```bash
 # GitLab Configuration (REQUIRED)
-GITLAB_URL=https://gitlab.example.com
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=your_gitlab_token_here
+```
 
-# Webhook Configuration (OPTIONAL)
-WEBHOOK_PORT=8000
-WEBHOOK_SECRET=your_webhook_secret
+### Optional Settings
 
-# BFA Configuration (OPTIONAL - for API posting)
+#### Server Configuration
+```bash
+WEBHOOK_PORT=8000                    # Server port (default: 8000)
+WEBHOOK_SECRET=your_webhook_secret   # Webhook validation secret
+LOG_OUTPUT_DIR=./logs                # Log storage directory
+LOG_LEVEL=INFO                       # Logging level (DEBUG, INFO, WARNING, ERROR)
+RETRY_ATTEMPTS=3                     # API retry attempts
+RETRY_DELAY=2                        # Retry delay in seconds
+```
+
+#### Log Filtering
+```bash
+# Pipeline status filter
+LOG_SAVE_PIPELINE_STATUS=all         # Options: all, failed, success, running, canceled, skipped
+
+# Project filtering
+LOG_SAVE_PROJECTS=                   # Comma-separated project IDs to include (empty = all)
+LOG_EXCLUDE_PROJECTS=                # Comma-separated project IDs to exclude
+
+# Job status filter
+LOG_SAVE_JOB_STATUS=all              # Options: all, failed, success, canceled, skipped
+
+# Metadata-only mode
+LOG_SAVE_METADATA_ALWAYS=true        # Save metadata even if logs are filtered
+```
+
+#### API Posting Configuration
+```bash
+# BFA Configuration (required for API posting)
+BFA_HOST=bfa-server.example.com      # BFA server hostname
+BFA_SECRET_KEY=your_bfa_secret_key   # Secret key for JWT token generation
+
+# API Posting
+API_POST_ENABLED=false               # Enable API posting
+API_POST_TIMEOUT=30                  # Request timeout in seconds
+API_POST_RETRY_ENABLED=true          # Enable retry logic
+API_POST_SAVE_TO_FILE=false          # Dual mode: save to both API and files
+```
+
+#### Jenkins Integration
+```bash
+JENKINS_ENABLED=false                         # Enable Jenkins integration
+JENKINS_URL=https://jenkins.example.com       # Jenkins server URL
+JENKINS_USER=your_username                    # Jenkins username
+JENKINS_API_TOKEN=your_jenkins_token          # Jenkins API token
+JENKINS_WEBHOOK_SECRET=your_webhook_secret    # Jenkins webhook secret
+```
+
+### Configuration Validation
+
+The system validates configuration on startup:
+
+```
+2025-12-30 10:15:00.126 | INFO  | src.webhook_listener    | N/A      | Configuration .env loaded successfully
+2025-12-30 10:15:00.127 | INFO  | src.webhook_listener    | N/A      | GitLab URL: https://gitlab.example.com
+2025-12-30 10:15:00.128 | INFO  | src.webhook_listener    | N/A      | Webhook receiver Port: 8000
+```
+
+**Validation Errors:**
+```
+ERROR: Invalid GITLAB_URL format (must start with http:// or https://)
+ERROR: GITLAB_TOKEN too short (minimum 10 characters)
+ERROR: Invalid WEBHOOK_PORT: 99999 (must be 1-65535)
+ERROR: BFA_HOST required when API_POST_ENABLED is true
+```
+
+## 3.2 GitLab Webhook Setup
+
+### Prerequisites
+
+- GitLab project with admin/maintainer access
+- Running webhook server (see [Quick Start](#2-quick-start))
+- Webhook secret token (optional but recommended)
+
+### Setup Steps
+
+**1. Navigate to Webhook Settings**
+- Go to your GitLab project
+- Settings → Webhooks
+
+**2. Add Webhook URL**
+```
+http://your-server:8000/webhook/gitlab
+```
+
+**3. Configure Secret Token**
+- Generate a secure secret: `openssl rand -hex 32`
+- Add to GitLab webhook configuration
+- Add same secret to `.env`: `WEBHOOK_SECRET=your_secret_here`
+
+**4. Select Trigger Events**
+- Enable **Pipeline events** only
+- Disable all other events
+
+**5. Configure Options**
+- ✓ Enable SSL verification (if using HTTPS)
+- ✓ Push events (optional, for testing)
+
+**6. Add Webhook**
+- Click "Add webhook"
+
+**7. Test the Webhook**
+- Click "Test" → "Pipeline events"
+- Check server logs for confirmation
+
+**Example: Successful Webhook Test**
+```
+2025-12-30 10:30:15.123 | INFO  | src.webhook_listener    | c4d5e6f7 | Webhook received | event=Pipeline Hook
+2025-12-30 10:30:15.124 | INFO  | src.pipeline_extractor  | c4d5e6f7 | Extracted info for pipeline 123456 | project=test-project type=main
+2025-12-30 10:30:15.125 | INFO  | src.webhook_listener    | c4d5e6f7 | Pipeline queued for processing | pipeline_id=123456
+```
+
+### Webhook Payload Example
+
+GitLab sends a JSON payload like this:
+```json
+{
+  "object_kind": "pipeline",
+  "object_attributes": {
+    "id": 123456,
+    "status": "success",
+    "ref": "main",
+    "sha": "abc123..."
+  },
+  "project": {
+    "id": 789,
+    "name": "my-project",
+    "web_url": "https://gitlab.com/myorg/my-project"
+  },
+  "builds": [...]
+}
+```
+
+### Troubleshooting
+
+**Issue: 401 Unauthorized**
+- Check `WEBHOOK_SECRET` matches GitLab webhook configuration
+- Check for extra spaces or newlines in secret
+
+**Issue: Webhook not triggering**
+- Verify webhook URL is accessible from GitLab server
+- Check firewall/network settings
+- Test with `curl` from GitLab server
+
+**Issue: 500 Internal Server Error**
+- Check server logs: `tail -f logs/application.log`
+- Verify all required environment variables are set
+- Check GitLab token has correct permissions
+
+## 3.3 Jenkins Integration
+
+### Overview
+
+Jenkins integration allows extracting build logs including parallel execution blocks.
+
+### Configuration
+
+Add to `.env`:
+```bash
+JENKINS_ENABLED=true
+JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your_username
+JENKINS_API_TOKEN=your_api_token
+JENKINS_WEBHOOK_SECRET=your_webhook_secret
+```
+
+### Obtaining Jenkins API Token
+
+1. Log in to Jenkins
+2. Click your name → Configure
+3. API Token → Add new Token
+4. Copy token and add to `.env`
+
+### Jenkins Webhook Setup
+
+**1. Install Generic Webhook Trigger Plugin**
+- Manage Jenkins → Manage Plugins
+- Install "Generic Webhook Trigger Plugin"
+
+**2. Configure Job Webhook**
+- Job → Configure → Build Triggers
+- Enable "Generic Webhook Trigger"
+- Add POST content parameters
+- Set token: same as `JENKINS_WEBHOOK_SECRET`
+
+**3. Webhook URL**
+```
+http://your-server:8000/webhook/jenkins
+```
+
+### Jenkinsfile Integration
+
+Add to your Jenkinsfile:
+```groovy
+pipeline {
+    agent any
+
+    post {
+        always {
+            script {
+                // Extract build logs and send to webhook server
+                def buildUrl = env.BUILD_URL
+                def jobName = env.JOB_NAME
+                def buildNumber = env.BUILD_NUMBER
+
+                // Webhook server will fetch logs via Jenkins API
+                sh """
+                curl -X POST http://your-server:8000/webhook/jenkins \
+                    -H "Content-Type: application/json" \
+                    -H "X-Jenkins-Token: ${JENKINS_WEBHOOK_SECRET}" \
+                    -d '{"job_name":"${jobName}","build_number":${buildNumber},"build_url":"${buildUrl}"}'
+                """
+            }
+        }
+    }
+}
+```
+
+### Example: Jenkins Logs with Parallel Stages
+
+```
+2025-12-30 10:35:15.456 | INFO  | src.webhook_listener    | d5e6f7g8 | Jenkins webhook received | job=my-pipeline build=42
+2025-12-30 10:35:16.123 | INFO  | src.jenkins_extractor   | d5e6f7g8 | Extracted Jenkins build info | stages=5 parallel_blocks=2
+2025-12-30 10:35:16.234 | INFO  | src.jenkins_log_fetcher | d5e6f7g8 | Fetching logs for parallel stage: test-unit
+2025-12-30 10:35:16.345 | INFO  | src.jenkins_log_fetcher | d5e6f7g8 | Fetching logs for parallel stage: test-integration
+2025-12-30 10:35:17.456 | INFO  | src.storage_manager     | d5e6f7g8 | Saved Jenkins logs | job=my-pipeline build=42 files=5
+```
+
+## 3.4 API Posting Setup
+
+### Overview
+
+API posting sends extracted logs to an external API endpoint instead of (or in addition to) saving them to files.
+
+### Configuration
+
+Add to `.env`:
+```bash
+# BFA Configuration (required)
 BFA_HOST=bfa-server.example.com
 BFA_SECRET_KEY=your_bfa_secret_key
+
+# Enable API posting
+API_POST_ENABLED=true
+API_POST_TIMEOUT=30
+API_POST_RETRY_ENABLED=true
+API_POST_SAVE_TO_FILE=false  # false = API only, true = dual mode
 ```
 
-### Deployment Checklist
+### Operating Modes
 
-For future deployments to new servers:
-
-**Required Manual Steps:**
-- [ ] Transfer Docker image to new server
-- [ ] Copy `manage_container.py` to new server
-- [ ] Copy `.env.example` to new server
-- [ ] Create `.env` file with credentials
-- [ ] Install Python dependencies: `pip install docker rich python-dotenv`
-- [ ] Verify Docker is installed and running
-- [ ] Verify port 8000 is available (or custom port configured)
-
-**Auto-handled by manage_container.py:**
-- [x] Create logs directory
-- [x] Set proper permissions
-- [x] Configure container with namespace bypass
-- [x] Mount volumes correctly
-- [x] Start container with correct settings
-
-**Post-Deployment Verification:**
-- [ ] Container started successfully (`./manage_container.py status`)
-- [ ] Health check endpoint responds (`curl http://localhost:8000/health`)
-- [ ] GitLab webhook configured and tested
-
-### Troubleshooting Common Deployment Issues
-
-#### Issue 1: "Permission denied" when mounting .env
-
-**Error:**
-```
-docker: Error response from daemon: error while creating mount source path
-'/home/user/extract-build-logs/.env': permission denied.
-```
-
-**Solution:**
+**1. API Only Mode** (default when `API_POST_ENABLED=true`)
 ```bash
-# Create .env file
-cp .env.example .env
-nano .env
+API_POST_ENABLED=true
+API_POST_SAVE_TO_FILE=false
+```
+- Logs are POSTed to API only
+- Falls back to file storage if API fails
+- Reduces storage requirements
 
-# Verify it exists
-ls -la .env
+**2. Dual Mode** (API + File)
+```bash
+API_POST_ENABLED=true
+API_POST_SAVE_TO_FILE=true
+```
+- Logs saved to both API and files
+- Maximum reliability
+- Higher storage requirements
+
+**3. File Only Mode** (traditional)
+```bash
+API_POST_ENABLED=false
+```
+- Logs saved to files only
+- No API integration
+
+### API Endpoint
+
+The API endpoint is automatically constructed as:
+```
+http://${BFA_HOST}:8000/api/analyze
 ```
 
-#### Issue 2: "Cannot write to log directory"
+### Authentication
 
-**Solution:**
+Uses Bearer token authentication with JWT:
+- If `BFA_SECRET_KEY` is set: Generates JWT tokens locally
+- If `BFA_HOST` is set (no secret): Fetches tokens from BFA server
+- Token included in `Authorization: Bearer <token>` header
+
+### API Request Format
+
+The system POSTs JSON payloads:
+```json
+{
+  "pipeline_id": 123456,
+  "project_id": 789,
+  "project_name": "my-app",
+  "status": "failed",
+  "ref": "main",
+  "sha": "abc123...",
+  "pipeline_type": "main",
+  "created_at": "2025-12-30T10:00:00Z",
+  "duration": 120.5,
+  "user": {
+    "username": "johndoe",
+    "email": "john@example.com"
+  },
+  "stages": ["build", "test", "deploy"],
+  "jobs": [
+    {
+      "job_id": 456,
+      "job_name": "build:production",
+      "log_content": "Full build logs...",
+      "status": "success",
+      "stage": "build",
+      "duration": 60.2
+    }
+  ]
+}
+```
+
+### Request Logging
+
+All API requests/responses are logged to `logs/api-requests.log`:
+```
+[2025-12-30 10:20:20] PIPELINE_ID=123456 PROJECT_ID=789 URL=http://api.example.com:8000/api/analyze STATUS=200 DURATION=1250ms RESPONSE={"success":true}
+```
+
+### Example: API Posting Logs
+
+```
+2025-12-30 10:20:18.789 | INFO  | src.api_poster          | a1b2c3d4 | Posting pipeline logs to API for 'my-app' (pipeline 123456) | job_count=5
+2025-12-30 10:20:19.234 | INFO  | src.api_poster          | a1b2c3d4 | Formatted API payload | payload_size_bytes=45678
+2025-12-30 10:20:19.235 | INFO  | src.api_poster          | a1b2c3d4 | Sending POST request to http://api.example.com:8000/api/analyze
+2025-12-30 10:20:20.567 | INFO  | src.api_poster          | a1b2c3d4 | API returned success | http_status=200 duration_ms=1333
+2025-12-30 10:20:20.568 | INFO  | src.api_poster          | a1b2c3d4 | Successfully posted pipeline 123456 logs to API
+```
+
+### Retry Logic
+
+Automatic retry with exponential backoff:
+- Attempt 1: Immediate
+- Attempt 2: Wait 2s
+- Attempt 3: Wait 4s
+- Attempt 4: Wait 8s
+
+```
+2025-12-30 10:25:30.123 | ERROR | src.api_poster          | b2c3d4e5 | API POST failed: Connection timeout
+2025-12-30 10:25:30.124 | INFO  | src.api_poster          | b2c3d4e5 | Retrying API POST (attempt 1/3) after 2.0s
+2025-12-30 10:25:32.456 | INFO  | src.api_poster          | b2c3d4e5 | Retry attempt 1: Sending POST request
+2025-12-30 10:25:34.789 | INFO  | src.api_poster          | b2c3d4e5 | API POST succeeded on retry | attempt=1
+```
+
+## 3.5 Log Filtering Configuration
+
+### Overview
+
+Log filtering reduces storage by saving only relevant logs based on pipeline status, project, or job status.
+
+### Pipeline Status Filtering
+
+Save logs only for specific pipeline statuses:
 ```bash
-# Option 1: Let manage_container.py auto-create it
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+```
+
+**Options:** `all`, `failed`, `success`, `running`, `canceled`, `skipped`
+
+**Examples:**
+```bash
+# Save only failed pipelines (reduce storage by ~90%)
+LOG_SAVE_PIPELINE_STATUS=failed
+
+# Save failed and canceled pipelines
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+
+# Save all pipelines (default)
+LOG_SAVE_PIPELINE_STATUS=all
+```
+
+### Project Filtering
+
+**Whitelist specific projects:**
+```bash
+LOG_SAVE_PROJECTS=123,456,789
+```
+
+**Blacklist noisy projects:**
+```bash
+LOG_EXCLUDE_PROJECTS=999,888,777
+```
+
+**Note:** If `LOG_SAVE_PROJECTS` is set, `LOG_EXCLUDE_PROJECTS` is ignored.
+
+### Job Status Filtering
+
+Save logs only for specific job statuses within a pipeline:
+```bash
+LOG_SAVE_JOB_STATUS=failed,canceled
+```
+
+**Options:** `all`, `failed`, `success`, `canceled`, `skipped`
+
+**Example:**
+```bash
+# Save all pipelines but only failed job logs
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=failed
+```
+
+### Metadata-Only Mode
+
+Track all pipelines but save logs only for filtered ones:
+```bash
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+When `true`:
+- Metadata saved for all pipelines
+- Logs saved only for filtered pipelines
+- Useful for tracking all activity while reducing storage
+
+### Example: Filtering in Action
+
+**Configuration:**
+```bash
+LOG_SAVE_PIPELINE_STATUS=failed
+LOG_SAVE_JOB_STATUS=all
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+**Logs:**
+```
+# Successful pipeline - metadata saved, logs skipped
+2025-12-30 10:40:15.456 | INFO  | src.webhook_listener    | e6f7g8h9 | Pipeline 789 status: success - metadata saved, logs skipped by filter
+
+# Failed pipeline - metadata and logs saved
+2025-12-30 10:45:15.456 | INFO  | src.webhook_listener    | f7g8h9i0 | Pipeline 790 status: failed - saving logs (filter match)
+2025-12-30 10:45:16.234 | INFO  | src.webhook_listener    | f7g8h9i0 | Job filtering: 5 jobs to fetch, 0 jobs skipped by filter
+```
+
+## 3.6 Configuration Examples & Scenarios
+
+### Scenario 1: Production - Failed Logs Only
+
+**Goal:** Save storage by storing only failed pipeline logs.
+
+```bash
+# GitLab Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Log Filtering
+LOG_SAVE_PIPELINE_STATUS=failed,canceled
+LOG_SAVE_METADATA_ALWAYS=true
+
+# Storage reduced by ~90%
+```
+
+### Scenario 2: Development - Specific Projects Only
+
+**Goal:** Track only development projects.
+
+```bash
+# GitLab Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Project Filtering
+LOG_SAVE_PROJECTS=123,456,789  # Dev project IDs
+
+# All other projects ignored
+```
+
+### Scenario 3: CI/CD Monitoring - All Pipelines, Failed Jobs
+
+**Goal:** Track all pipeline activity, save logs for failed jobs only.
+
+```bash
+# GitLab Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Log Filtering
+LOG_SAVE_PIPELINE_STATUS=all
+LOG_SAVE_JOB_STATUS=failed,canceled
+LOG_SAVE_METADATA_ALWAYS=true
+
+# Metadata for all pipelines, logs for failed jobs only
+```
+
+### Scenario 4: API Posting with File Fallback
+
+**Goal:** Post logs to API, fall back to files if API fails.
+
+```bash
+# GitLab Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# BFA Configuration
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key
+
+# API Posting
+API_POST_ENABLED=true
+API_POST_SAVE_TO_FILE=false  # API only, fallback to file on error
+API_POST_RETRY_ENABLED=true
+```
+
+### Scenario 5: Dual Mode - Maximum Reliability
+
+**Goal:** Save logs to both API and files for redundancy.
+
+```bash
+# GitLab Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# BFA Configuration
+BFA_HOST=bfa-server.example.com
+BFA_SECRET_KEY=your_bfa_secret_key
+
+# API Posting
+API_POST_ENABLED=true
+API_POST_SAVE_TO_FILE=true  # Dual mode: both API and files
+API_POST_RETRY_ENABLED=true
+
+# Higher storage usage but maximum reliability
+```
+
+### Scenario 6: Multi-Platform - GitLab + Jenkins
+
+**Goal:** Extract logs from both GitLab and Jenkins.
+
+```bash
+# GitLab Configuration
+GITLAB_URL=https://gitlab.com
+GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
+
+# Jenkins Configuration
+JENKINS_ENABLED=true
+JENKINS_URL=https://jenkins.example.com
+JENKINS_USER=your_username
+JENKINS_API_TOKEN=your_jenkins_token
+
+# Both platforms supported simultaneously
+```
+
+---
+
+*Due to length constraints, I'm creating this as DOCUMENTATION_NEW.md. This is Section 1-3 complete. Sections 4-6 will continue in the same file.*
+
+**Status: Sections 1-3 complete (System Overview, Quick Start, Configuration)**
+**Next: Sections 4-6 (Usage & Operations, Advanced Topics, Reference)**
+
+# 4. Usage & Operations
+
+## 4.1 Running the Application
+
+### Option 1: Docker (Recommended for Production)
+
+**Start Container:**
+```bash
 ./manage_container.py start
-
-# Option 2: Create manually with proper permissions
-mkdir -p logs
-chmod 755 logs
-chown $USER:$USER logs
 ```
 
-#### Issue 3: Docker User Namespace Issues
-
-**Error:**
-```
-Permission denied errors despite correct ownership
-```
-
-**Cause:** Docker daemon running with `--userns-remap`
-
-**Solution:** The container now runs with these settings to bypass namespace issues:
-```python
-user='root'           # Run as root inside container
-userns_mode='host'    # Bypass user namespace remapping
-```
-
-This is already configured in `manage_container.py` (lines 734-735).
-
-### Security Considerations
-
-#### Protecting Secrets
-
-**Never commit these to version control:**
-- `.env` file (contains GITLAB_TOKEN, BFA_SECRET_KEY)
-- `logs/` directory (contains pipeline logs)
-
-**Verify .gitignore includes:**
-```
-.env
-logs/
-*.log
-```
-
-#### File Permissions
-
-**Recommended permissions:**
+**Stop Container:**
 ```bash
-.env            → 644 (rw-r--r--) - readable by owner and group
-logs/           → 755 (rwxr-xr-x) - writable by owner, readable by others
-manage_container.py → 755 (rwxr-xr-x) - executable
+./manage_container.py stop
 ```
 
-#### Network Security
-
-**Firewall rules:**
+**Restart Container:**
 ```bash
-# Allow only specific IPs to access webhook (GitLab server)
-sudo ufw allow from <gitlab-server-ip> to any port 8000
-
-# Or use nginx reverse proxy with SSL
+./manage_container.py restart
 ```
 
-## 1.3 Production Deployment Best Practices
+**View Status:**
+```bash
+./manage_container.py status
+```
+
+**Example Output:**
+```
+Container: bfa-gitlab-pipeline-extractor
+Status: running (healthy)
+Uptime: 2 hours, 15 minutes
+Memory: 245 MB / 2 GB (12.3%)
+CPU: 0.5%
+Port Mapping: 0.0.0.0:8000 -> 8000/tcp
+
+Health Check: Healthy
+Last Check: 2 seconds ago
+Checks Passed: 145 / 145 (100%)
+```
+
+### Option 2: Direct Python
+
+**Start Server:**
+```bash
+# Activate virtual environment
+source venv/bin/activate
+
+# Start server
+python src/webhook_listener.py
+```
+
+**Run in Background:**
+```bash
+nohup python src/webhook_listener.py > server.log 2>&1 &
+```
+
+**Using Uvicorn Directly:**
+```bash
+# Basic
+uvicorn src.webhook_listener:app --host 0.0.0.0 --port 8000
+
+# With auto-reload (development)
+uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
+
+# With workers (production)
+uvicorn src.webhook_listener:app --host 0.0.0.0 --port 8000 --workers 4
+```
+
+### Option 3: Systemd Service (Linux)
+
+**Create Service File:**
+```bash
+sudo nano /etc/systemd/system/gitlab-log-extractor.service
+```
+
+**Service Configuration:**
+```ini
+[Unit]
+Description=GitLab Pipeline Log Extractor
+After=network.target
+
+[Service]
+Type=simple
+User=your_username
+WorkingDirectory=/home/user/extract-build-logs
+Environment="PATH=/home/user/extract-build-logs/venv/bin"
+ExecStart=/home/user/extract-build-logs/venv/bin/python src/webhook_listener.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Enable and Start:**
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable gitlab-log-extractor
+sudo systemctl start gitlab-log-extractor
+sudo systemctl status gitlab-log-extractor
+```
+
+## 4.2 Docker Operations
+
+### Common Commands
+
+**Build Image:**
+```bash
+./manage_container.py build
+```
+
+**View Logs:**
+```bash
+# Live logs
+./manage_container.py logs
+
+# Last 100 lines
+docker logs --tail 100 bfa-gitlab-pipeline-extractor
+
+# Since specific time
+docker logs --since "2025-12-30T10:00:00" bfa-gitlab-pipeline-extractor
+```
+
+**Execute Commands in Container:**
+```bash
+# Open shell
+docker exec -it bfa-gitlab-pipeline-extractor /bin/bash
+
+# Run specific command
+docker exec bfa-gitlab-pipeline-extractor ls -la /app/logs
+
+# View file
+docker exec bfa-gitlab-pipeline-extractor cat /app/logs/application.log
+```
+
+**Container Management:**
+```bash
+# Remove container (keeps data)
+./manage_container.py remove
+
+# Remove everything (including data)
+docker rm -f bfa-gitlab-pipeline-extractor
+docker volume prune
+
+# Rebuild from scratch
+./manage_container.py build
+./manage_container.py start
+```
+
+### Monitoring & Testing
+
+**Test Webhook Endpoint:**
+```bash
+./manage_container.py test
+```
+
+**View Configuration:**
+```bash
+./manage_container.py config
+```
+
+**Export Monitoring Data:**
+```bash
+./manage_container.py export data.csv
+```
+
+**Monitoring Dashboard:**
+```bash
+./manage_container.py monitor --hours 24
+```
+
+## 4.3 Application Logging
+
+### Logging Features
+
+- **Request ID tracking** - Trace single pipeline across all log entries
+- **Project names** - Human-readable logs with project names
+- **Aligned columns** - Pipe-delimited format for easy parsing
+- **Multiple log files** - Separate application and API logs
+- **Automatic rotation** - Size-based rotation with configurable backups
+- **Sensitive data masking** - Tokens automatically redacted with `[REDACTED***]`
+- **Configurable log levels** - DEBUG, INFO, WARNING, ERROR, CRITICAL
+
+### Log Files
+
+| File | Purpose | Size Limit | Backups | Total Storage |
+|------|---------|------------|---------|---------------|
+| **application.log** | All application logs | 100 MB | 10 | ~1.1 GB |
+| **api-requests.log** | API posting requests/responses | 50 MB | 10 | ~550 MB |
+
+### Log Format
+
+```
+TIMESTAMP | LEVEL | LOGGER | REQUEST_ID | MESSAGE | CONTEXT
+```
+
+**Example Logs:**
+```
+2025-12-30 10:20:15.456 | INFO  | src.webhook_listener    | a1b2c3d4 | Webhook received | event_type=Pipeline Hook
+2025-12-30 10:20:15.457 | INFO  | src.pipeline_extractor  | a1b2c3d4 | Extracted info for pipeline 1061175 | project=my-app type=main
+2025-12-30 10:20:15.500 | INFO  | src.webhook_listener    | a1b2c3d4 | Starting pipeline log extraction | pipeline_id=1061175
+2025-12-30 10:20:16.234 | INFO  | src.webhook_listener    | a1b2c3d4 | Job filtering: 5 jobs to fetch | pipeline_id=1061175
+2025-12-30 10:20:20.568 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline processing complete | duration_s=5.1 jobs=5
+```
+
+### Viewing Logs
+
+**Method 1: Docker Logs**
+```bash
+# Follow live logs
+./manage_container.py logs
+
+# Last 100 lines
+docker logs --tail 100 bfa-gitlab-pipeline-extractor
+```
+
+**Method 2: Log Files (Most Detailed)**
+```bash
+# Tail application log
+tail -f ./logs/application.log
+
+# View with color highlighting
+tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
+
+# API request logs
+tail -f ./logs/api-requests.log
+```
+
+**Method 3: Inside Container**
+```bash
+docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/application.log
+docker exec bfa-gitlab-pipeline-extractor grep ERROR /app/logs/application.log
+```
+
+### Searching Logs
+
+**By Request ID:**
+```bash
+# Find all logs for specific request
+grep "a1b2c3d4" logs/application.log
+
+# With context (5 lines before/after)
+grep -C 5 "a1b2c3d4" logs/application.log
+```
+
+**By Pipeline ID:**
+```bash
+grep "pipeline_id=12345" logs/application.log*
+```
+
+**By Project Name:**
+```bash
+grep "project_name=my-app" logs/application.log
+grep "from project 'my-app'" logs/application.log
+```
+
+**By Log Level:**
+```bash
+# Only errors
+grep "| ERROR |" logs/application.log
+
+# Errors and warnings
+grep -E "| ERROR | | WARN |" logs/application.log
+```
+
+### Request ID Tracking
+
+Every webhook request gets a unique 8-character request ID that tracks the entire processing flow:
+
+**Example: Complete Request Flow**
+```
+2025-12-30 10:20:15.456 | INFO  | src.webhook_listener    | a1b2c3d4 | Request ID a1b2c3d4 tracking pipeline 1061175
+2025-12-30 10:20:15.457 | INFO  | src.pipeline_extractor  | a1b2c3d4 | Extracted info for pipeline 1061175
+2025-12-30 10:20:15.500 | INFO  | src.webhook_listener    | a1b2c3d4 | Starting pipeline log extraction
+2025-12-30 10:20:16.123 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetching logs for 5 jobs
+2025-12-30 10:20:17.234 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetched log for job 456 (build)
+2025-12-30 10:20:18.345 | INFO  | src.log_fetcher         | a1b2c3d4 | Fetched log for job 457 (test)
+2025-12-30 10:20:19.456 | INFO  | src.api_poster          | a1b2c3d4 | Posting pipeline logs to API
+2025-12-30 10:20:20.567 | INFO  | src.api_poster          | a1b2c3d4 | Successfully posted to API
+2025-12-30 10:20:20.568 | INFO  | src.webhook_listener    | a1b2c3d4 | Pipeline processing complete | duration_s=5.1
+```
+
+To trace a complete request:
+```bash
+grep "a1b2c3d4" logs/application.log
+```
+
+## 4.4 Monitoring & Tracking
+
+### What is Tracked
+
+The system automatically tracks every webhook request in a SQLite database (`logs/monitoring.db`):
+
+- Total requests received
+- Processing status (queued, processing, completed, failed, skipped)
+- Success/failure rates
+- Processing times
+- Job counts per pipeline
+- Error messages
+- Pipeline types
+
+### CLI Dashboard Tool
+
+**View Recent Requests:**
+```bash
+python scripts/monitor_dashboard.py
+
+# Show last 100 requests
+python scripts/monitor_dashboard.py --recent 100
+
+# Show requests from last 24 hours
+python scripts/monitor_dashboard.py --hours 24
+```
+
+**Example Output:**
+```
+GitLab Pipeline Log Extractor - Monitoring Dashboard
+====================================================
+
+Summary (Last 24 hours):
+  Total Requests: 145
+  Completed: 132 (91.0%)
+  Failed: 8 (5.5%)
+  Skipped: 5 (3.4%)
+
+Processing Times:
+  Average: 5.2s
+  Median: 4.8s
+  P95: 12.3s
+  P99: 18.7s
+
+Recent Requests:
+┏━━━━━━━━━━┳━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Pipeline ┃ Project    ┃ Status      ┃ Jobs      ┃ Duration  ┃
+┡━━━━━━━━━━╇━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ 1061175  │ my-app     │ completed   │ 5         │ 5.1s      │
+│ 1061180  │ other-app  │ completed   │ 3         │ 3.2s      │
+│ 1061185  │ my-app     │ failed      │ 7         │ 12.5s     │
+└──────────┴────────────┴─────────────┴───────────┴───────────┘
+```
+
+**Export to CSV:**
+```bash
+python scripts/monitor_dashboard.py --export pipeline_data.csv
+```
+
+### Monitoring API Endpoints
+
+**Get Summary Statistics:**
+```bash
+curl http://localhost:8000/monitor/summary?hours=24
+```
+
+**Response:**
+```json
+{
+  "total_requests": 145,
+  "completed": 132,
+  "failed": 8,
+  "skipped": 5,
+  "success_rate": 91.0,
+  "average_duration_seconds": 5.2,
+  "total_jobs_processed": 678
+}
+```
+
+**Get Recent Requests:**
+```bash
+curl http://localhost:8000/monitor/recent?limit=50
+```
+
+**Get Specific Pipeline Details:**
+```bash
+curl http://localhost:8000/monitor/pipeline/12345
+```
+
+**Download CSV Export:**
+```bash
+curl -O http://localhost:8000/monitor/export/csv?hours=24
+```
+
+### Database Queries
+
+Query the SQLite database directly:
+
+```bash
+sqlite3 logs/monitoring.db "SELECT * FROM requests ORDER BY timestamp DESC LIMIT 10"
+```
+
+**Useful Queries:**
+
+```sql
+-- Success rate by project
+SELECT 
+    project_name,
+    COUNT(*) as total,
+    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+    ROUND(100.0 * SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) / COUNT(*), 2) as success_rate
+FROM requests
+WHERE timestamp > datetime('now', '-24 hours')
+GROUP BY project_name
+ORDER BY total DESC;
+
+-- Average processing time by pipeline type
+SELECT 
+    pipeline_type,
+    AVG(processing_duration_seconds) as avg_duration,
+    COUNT(*) as count
+FROM requests
+WHERE status = 'completed'
+GROUP BY pipeline_type;
+
+-- Failed requests
+SELECT pipeline_id, project_name, error_message, timestamp
+FROM requests
+WHERE status = 'failed'
+ORDER BY timestamp DESC
+LIMIT 20;
+```
+
+## 4.5 Usage Examples
+
+### Example 1: Monitor Failed Pipelines
+
+**Goal:** Get notified when pipelines fail.
+
+**Configuration:**
+```bash
+LOG_SAVE_PIPELINE_STATUS=failed
+LOG_SAVE_METADATA_ALWAYS=true
+```
+
+**Monitor:**
+```bash
+# Watch for failed pipelines
+watch -n 10 'sqlite3 logs/monitoring.db "SELECT pipeline_id, project_name, timestamp FROM requests WHERE status = \"failed\" ORDER BY timestamp DESC LIMIT 5"'
+```
+
+### Example 2: Track Specific Project
+
+**Goal:** Monitor all activity for a specific project.
+
+**Search Logs:**
+```bash
+# Real-time monitoring
+tail -f logs/application.log | grep "project_name=my-app"
+
+# Count today's pipelines
+grep "project_name=my-app" logs/application.log | grep "$(date +%Y-%m-%d)" | wc -l
+```
+
+### Example 3: Investigate Slow Pipeline
+
+**Goal:** Debug why a pipeline is processing slowly.
+
+**1. Find the request ID:**
+```bash
+grep "pipeline_id=12345" logs/application.log | head -1
+# Output: 2025-12-30 10:20:15.456 | INFO | src.webhook_listener | a1b2c3d4 | ...
+```
+
+**2. Trace complete flow:**
+```bash
+grep "a1b2c3d4" logs/application.log
+```
+
+**3. Analyze timing:**
+```bash
+grep "a1b2c3d4" logs/application.log | awk '{print $2, $3, $NF}'
+```
+
+### Example 4: Export Data for Analysis
+
+**Goal:** Analyze pipeline trends over time.
+
+**Export Data:**
+```bash
+# Export last 7 days
+python scripts/monitor_dashboard.py --hours 168 --export last_7_days.csv
+
+# Import into Excel, Google Sheets, or pandas for analysis
+```
+
+## 4.6 API Endpoints Reference
+
+### Health Check
+
+**Endpoint:** `GET /health`
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "gitlab-log-extractor",
+  "version": "1.0.0"
+}
+```
+
+**Usage:**
+```bash
+curl http://localhost:8000/health
+```
+
+### Storage Statistics
+
+**Endpoint:** `GET /stats`
+
+**Response:**
+```json
+{
+  "total_projects": 5,
+  "total_pipelines": 23,
+  "total_jobs": 156,
+  "total_size_bytes": 45678901,
+  "total_size_mb": 43.56
+}
+```
+
+**Usage:**
+```bash
+curl http://localhost:8000/stats
+```
+
+### GitLab Webhook
+
+**Endpoint:** `POST /webhook/gitlab`
+
+**Headers:**
+- `X-Gitlab-Event`: Event type (must be "Pipeline Hook")
+- `X-Gitlab-Token`: Webhook secret token
+- `Content-Type`: application/json
+
+**Request Body:** GitLab pipeline webhook payload
+
+**Responses:**
+- `200 OK`: Successfully processed or queued
+- `400 Bad Request`: Invalid JSON payload
+- `401 Unauthorized`: Invalid secret token
+- `500 Internal Server Error`: Processing error
+
+### Jenkins Webhook
+
+**Endpoint:** `POST /webhook/jenkins`
+
+**Headers:**
+- `X-Jenkins-Token`: Webhook secret token
+- `Content-Type`: application/json
+
+**Request Body:**
+```json
+{
+  "job_name": "my-pipeline",
+  "build_number": 42,
+  "build_url": "https://jenkins.example.com/job/my-pipeline/42/"
+}
+```
+
+### Interactive API Documentation
+
+**Swagger UI:** http://localhost:8000/docs
+**ReDoc:** http://localhost:8000/redoc
+
+
+# 5. Advanced Topics
+
+## 5.1 Production Deployment
 
 ### Docker Secrets (Docker Swarm/Compose)
 
-For production deployments with Docker Swarm or Docker Compose, use Docker secrets to manage sensitive credentials securely:
+**Use Docker secrets for sensitive configuration:**
 
 ```yaml
 # docker-compose.yml
 version: '3.8'
+
 services:
-  extractor:
+  gitlab-log-extractor:
     image: bfa-gitlab-pipeline-extractor
     secrets:
       - gitlab_token
+      - bfa_secret_key
     environment:
-      GITLAB_URL: https://gitlab.example.com
+      GITLAB_URL: https://gitlab.com
       GITLAB_TOKEN_FILE: /run/secrets/gitlab_token
-      WEBHOOK_PORT: 8000
+      BFA_SECRET_KEY_FILE: /run/secrets/bfa_secret_key
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
 
 secrets:
   gitlab_token:
-    file: ./secrets/gitlab_token.txt
+    external: true
+  bfa_secret_key:
+    external: true
 ```
 
-**Setup:**
+**Create secrets:**
 ```bash
-# Create secrets directory
-mkdir -p secrets
-echo "glpat-xxxxxxxxxxxxxxxxxxxx" > secrets/gitlab_token.txt
-chmod 600 secrets/gitlab_token.txt
-
-# Deploy with Docker Compose
-docker-compose up -d
+echo "glpat-xxxxxxxxxxxxxxxxxxxx" | docker secret create gitlab_token -
+echo "your_bfa_secret_key" | docker secret create bfa_secret_key -
 ```
 
 ### Kubernetes Deployment
 
-For Kubernetes environments, use Kubernetes Secrets and Deployments:
+**Kubernetes manifest:**
 
 ```yaml
-# kubernetes-deployment.yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: gitlab-credentials
-type: Opaque
-stringData:
-  GITLAB_TOKEN: glpat-xxxxxxxxxxxxxxxxxxxx
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: gitlab-log-extractor
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: gitlab-log-extractor
@@ -432,3120 +1721,615 @@ spec:
         image: bfa-gitlab-pipeline-extractor:latest
         ports:
         - containerPort: 8000
-        envFrom:
-        - secretRef:
-            name: gitlab-credentials
         env:
         - name: GITLAB_URL
-          value: "https://gitlab.example.com"
-        - name: WEBHOOK_PORT
-          value: "8000"
+          value: "https://gitlab.com"
+        - name: GITLAB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: gitlab-secrets
+              key: token
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+      volumes:
+      - name: logs
+        persistentVolumeClaim:
+          claimName: log-extractor-logs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-log-extractor
+spec:
+  selector:
+    app: gitlab-log-extractor
+  ports:
+  - port: 8000
+    targetPort: 8000
+  type: LoadBalancer
 ```
 
-**Deploy to Kubernetes:**
+**Create secrets:**
 ```bash
-# Apply configuration
-kubectl apply -f kubernetes-deployment.yaml
-
-# Verify deployment
-kubectl get pods
-kubectl logs -f <pod-name>
+kubectl create secret generic gitlab-secrets \
+  --from-literal=token='glpat-xxxxxxxxxxxxxxxxxxxx'
 ```
 
 ### Production Monitoring and Logging
 
-**Monitor Container Health:**
+**1. Health Check Monitoring:**
 ```bash
-# Continuous health monitoring
-watch -n 5 'curl -s http://localhost:8000/health'
-
-# Monitor application logs in real-time
-./manage_container.py logs
-
-# Export monitoring data for analysis
-./manage_container.py export monitoring-$(date +%Y%m%d).csv
-```
-
-**Alerting and Monitoring:**
-```bash
-# Set up Prometheus monitoring endpoint (if configured)
-curl http://localhost:8000/metrics
-
-# Monitor webhook processing rate
-curl -s http://localhost:8000/monitor/summary | jq '.by_status'
-
-# Check for failed API posts
-grep "ERROR" logs/api-requests.log | tail -20
-```
-
-**Log Aggregation:**
-- Use ELK Stack (Elasticsearch, Logstash, Kibana) for centralized logging
-- Forward logs to Splunk or DataDog for enterprise monitoring
-- Set up alerts for error patterns in application logs
-
----
-
-# 2. Setup & Installation
-
-## 2.1 Initial Setup
-
-### Prerequisites
-
-- Python 3.8 or higher
-- GitLab access token with 'api' scope
-- Docker (for containerized deployment)
-
-### Environment Configuration
-
-**Quick Start:**
-```bash
-# 1. Clone and navigate
-git clone <repository-url>
-cd extract-build-logs
-
-# 2. Create virtual environment
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Configure environment
-cp .env.example .env
-vi .env  # Update GITLAB_URL, GITLAB_TOKEN, etc.
-```
-
-## 2.2 Running the Application
-
-### Option 1: Docker (Recommended for Production)
-
-```bash
-# Build and start
-./manage_container.py build
-./manage_container.py start
-
-# Check status
-./manage_container.py status
-
-# Update after code changes
-./manage_container.py remove
-./manage_container.py build && ./manage_container.py restart
-```
-
-**Benefits:** Isolated environment, automatic restarts, persistent storage, easy deployment
-
-### Option 2: Direct Python
-
-```bash
-# Standard run
-python src/webhook_listener.py
-
-# Development mode (auto-reload)
-uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
-
-# Background process
-nohup python src/webhook_listener.py > server.log 2>&1 &
-```
-
-### Option 3: Systemd Service (Linux)
-
-**Setup:**
-```bash
-# 1. Clone/copy the repository to /opt
-sudo mkdir -p /opt
-sudo cp -r . /opt/extract-build-logs
-cd /opt/extract-build-logs
-
-# 2. Configure environment
-sudo cp .env.example .env
-sudo nano .env  # Edit GITLAB_URL, GITLAB_TOKEN, etc.
-
-# 3. Build Docker image
-sudo ./manage_container.py build
-
-# 4. Install systemd service
-sudo cp scripts/gitlab-log-extractor.service /etc/systemd/system/
-sudo systemctl daemon-reload
-
-# 5. Start and enable service
-sudo systemctl start gitlab-log-extractor
-sudo systemctl enable gitlab-log-extractor
-
-# 6. Verify it's running
-sudo systemctl status gitlab-log-extractor
+# Add to monitoring system (Prometheus, Datadog, etc.)
 curl http://localhost:8000/health
+
+# Expected response
+{"status":"healthy","service":"gitlab-log-extractor","version":"1.0.0"}
 ```
 
-**Manage the service:**
+**2. Log Aggregation:**
+- Forward logs to centralized logging (ELK, Splunk, CloudWatch)
+- Use structured logging format for easy parsing
+- Monitor error rates and processing times
+
+**3. Metrics Collection:**
 ```bash
-# View status
-sudo systemctl status gitlab-log-extractor
+# Monitor via API
+curl http://localhost:8000/monitor/summary?hours=1
 
-# View logs
-sudo journalctl -u gitlab-log-extractor -f
-
-# Restart service
-sudo systemctl restart gitlab-log-extractor
-
-# Stop service
-sudo systemctl stop gitlab-log-extractor
+# Track:
+# - Request rate (requests/min)
+# - Success rate (% completed)
+# - Processing time (avg, p95, p99)
+# - Error count
 ```
 
-## 2.3 Docker Operations
-
-### Common Commands
-
-```bash
-./manage_container.py build      # Build/rebuild image
-./manage_container.py start      # Start container
-./manage_container.py stop       # Stop container
-./manage_container.py restart    # Restart container
-./manage_container.py status     # View status and resource usage
-./manage_container.py logs       # View live logs
-./manage_container.py monitor    # View monitoring dashboard
-./manage_container.py test       # Send test webhook
-./manage_container.py remove     # Remove container/image (interactive)
-```
-
-### Monitoring & Testing
-
-```bash
-# View monitoring dashboard
-./manage_container.py monitor --hours 24
-
-# Export monitoring data
-./manage_container.py export data.csv
-
-# Send test webhook
-./manage_container.py test
-
-# Access API endpoints
-curl http://localhost:8000/health
-curl http://localhost:8000/monitor/summary?hours=24
-```
-
----
-
-# 3. GitLab Webhook Setup
-
-## 3.1 Webhook Configuration
-
-### Prerequisites
-
-- Access to GitLab project settings (Maintainer or Owner role)
-- Running webhook server
-- Server accessible from GitLab
-
-### Setup Steps
-
-#### 1. Navigate to Webhook Settings
-
-1. Go to your GitLab project
-2. Navigate to **Settings → Webhooks**
-
-#### 2. Configure Webhook URL
-
-Enter your server URL:
-```
-http://your-server-ip:8000/webhook/gitlab
-```
-
-**Examples:**
-- Production: `https://logs.internal.com/webhook/gitlab`
-- Local (with ngrok): `https://abc123.ngrok.io/webhook/gitlab`
-- Local network: `http://192.168.1.100:8000/webhook/gitlab`
-
-#### 3. Set Secret Token (Recommended)
-
-```bash
-# Generate a secure token
-openssl rand -hex 32
-
-# Add to GitLab webhook settings
-# Add same token to .env:
-WEBHOOK_SECRET=your_generated_token_here
-```
-
-#### 4. Select Trigger Events
-
-**Enable only Pipeline events:**
-- **Pipeline events** (REQUIRED)
-
-Disable all other events unless you plan to handle them.
-
-#### 5. Configure SSL Verification
-
-- **Production**: Enable SSL verification
-- **Development**: Disable if using self-signed certificates
-
-#### 6. Test the Webhook
-
-1. Click **"Add webhook"** to save
-
-2. Scroll down to find your webhook in the list
-
-3. Click **"Test" → "Pipeline events"**
-
-4. Check your server logs for the test event:
-   ```bash
-   tail -f logs/application.log
-   ```
-
-5. Expected response: `200 OK` with JSON response
-
-#### 7. Verify Event Reception
-
-Trigger a real pipeline and verify logs are extracted:
-
-1. **Push a commit or manually run a pipeline**
-
-2. **Check server logs:**
-   ```bash
-   tail -f logs/application.log
-   ```
-
-   You should see:
-   - `Webhook received | event_type=Pipeline Hook`
-   - `Pipeline info extracted | pipeline_id=XXXXX`
-   - `Pipeline processing completed`
-
-3. **Verify logs were saved:**
-   ```bash
-   ls -lah logs/
-   ```
-
-   You should see log files corresponding to the pipeline that just ran.
-
-## 3.2 Webhook Troubleshooting
-
-### Webhook Troubleshooting Issues
-
-#### Webhook Returns 401 Unauthorized
-
-**Problem:** Secret token mismatch
-
-**Solution:**
-- Verify `WEBHOOK_SECRET` in `.env` matches GitLab webhook secret
-- Check for extra spaces or newlines in token
-
-#### Webhook Returns 500 Internal Server Error
-
-**Solution:**
-- Check server logs: `tail -f logs/application.log`
-- Verify `GITLAB_TOKEN` has correct permissions
-- Ensure `GITLAB_URL` is correct
-
-#### Connection Refused
-
-**Solution:**
-- Verify server is running: `curl http://localhost:8000/health`
-- Check firewall rules
-- For local development, use ngrok
-
-### Security Best Practices
-
-1. **Always use HTTPS in production**
-   - Use reverse proxy (nginx, Apache) with SSL certificate
-   - Use Let's Encrypt for free SSL certificates
-
-2. **Configure webhook secret token**
-   - Use strong random tokens (32+ characters)
-   - Rotate tokens periodically
-
-3. **Restrict network access**
-   - Use firewall rules to allow only GitLab IP ranges
-   - GitLab.com IP ranges: https://docs.gitlab.com/ee/user/gitlab_com/
-
-4. **Monitor webhook activity**
-   - Review logs regularly
-   - Set up alerts for failed requests
-
-5. **Limit webhook scope**
-   - Only enable Pipeline events
-   - Consider separate webhooks for different purposes
-
-### Testing with curl
-
-You can test the webhook endpoint manually:
-
-```bash
-curl -X POST http://localhost:8000/webhook/gitlab \
-  -H "Content-Type: application/json" \
-  -H "X-Gitlab-Event: Pipeline Hook" \
-  -H "X-Gitlab-Token: your_secret_token" \
-  -d @test_payload.json
-```
-
-**Example test payload (minimal):**
-```bash
-cat > test_payload.json << 'EOF'
-{
-  "object_kind": "pipeline",
-  "object_attributes": {
-    "id": 12345,
-    "ref": "main",
-    "status": "success"
-  },
-  "project": {
-    "id": 123,
-    "name": "test-project"
-  },
-  "builds": []
-}
-EOF
-```
-
-**Complete webhook payload structure:**
-
-GitLab sends POST requests with this structure:
-
-```json
-{
-  "object_kind": "pipeline",
-  "object_attributes": {
-    "id": 12345,
-    "ref": "main",
-    "sha": "abc123...",
-    "status": "success",
-    "source": "push",
-    "duration": 225
-  },
-  "project": {
-    "id": 123,
-    "name": "my-project",
-    "path_with_namespace": "group/my-project"
-  },
-  "builds": [
-    {
-      "id": 456,
-      "name": "build",
-      "stage": "build",
-      "status": "success"
-    },
-    {
-      "id": 457,
-      "name": "test",
-      "stage": "test",
-      "status": "failed"
-    }
-  ]
-}
-```
-
-### Next Steps After Webhook Setup
-
-After completing webhook configuration:
-
-1. **Monitor Initial Pipeline Runs**
-   - Watch the first few pipelines to ensure webhooks are received
-   - Check logs: `tail -f logs/application.log | grep "webhook"`
-
-2. **Verify Log Extraction Works**
-   - Confirm logs are saved to `logs/` directory
-   - Check API posting logs: `tail -f logs/api-requests.log`
-
-3. **Adjust Configuration as Needed**
-   - Fine-tune filtering with `LOG_SAVE_PIPELINE_STATUS`
-   - Configure log rotation based on volume
-   - Adjust retry settings if API posts fail frequently
-
-4. **Set Up Log Analysis Tools**
-   - Implement automated error pattern detection
-   - Create dashboards for monitoring pipeline failures
-   - Set up alerts for critical build failures
-
----
-
-# 4. Jenkins Integration
-
-## 4.1 Jenkins Setup
-
-### Jenkins Overview
-
-The Jenkins integration allows you to:
-- Automatically extract build logs from Jenkins
-- Parse console logs to identify stages and parallel execution
-- Post structured log data to your API endpoint
-- Handle Blue Ocean API data for better stage information
-
-**Flow:**
-```
-Jenkins Pipeline Completes
-    ↓
-Jenkinsfile post{} block sends webhook via curl
-    ↓
-Log Extractor receives webhook at /webhook/jenkins
-    ↓
-Fetches console log via Jenkins REST API
-    ↓
-Parses parallel blocks from console log
-    ↓
-Posts structured data to your API
-```
-
-### Jenkins Configuration
-
-**Step 1: Generate Jenkins API Token**
-1. Log into Jenkins
-2. Go to your user profile → **Configure**
-3. Under **API Token**, click **Add new Token**
-4. Copy the generated token
-
-**Step 2: Configure Environment Variables**
-
-```bash
-# Enable Jenkins integration
-JENKINS_ENABLED=true
-
-# Jenkins connection details
-JENKINS_URL=https://jenkins.example.com
-JENKINS_USER=your_username
-JENKINS_API_TOKEN=your_api_token_here
-
-# Optional: Webhook secret
-JENKINS_WEBHOOK_SECRET=your_secret_token
-
-# Enable API posting
-API_POST_ENABLED=true
-BFA_HOST=bfa-server.example.com
-BFA_SECRET_KEY=your_secret_key
-```
-
-**Step 3: Restart Service**
-```bash
-./manage_container.py restart
-```
-
-### Jenkinsfile Setup
-
-**Option A: Post on Failures Only** (Recommended)
-
-```groovy
-pipeline {
-    agent any
-
-    stages {
-        stage('Build') {
-            steps {
-                echo "Building..."
-                sh './build.sh'
-            }
-        }
-
-        stage('Test') {
-            parallel {
-                stage('Unit Tests') {
-                    steps {
-                        sh './test_unit.sh'
-                    }
-                }
-                stage('Integration Tests') {
-                    steps {
-                        sh './test_integration.sh'
-                    }
-                }
-            }
-        }
-    }
-
-    post {
-        failure {
-            script {
-                sh """
-                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                        -H 'Content-Type: application/json' \\
-                        -H 'X-Jenkins-Token: your_secret_token' \\
-                        -d '{
-                            "job_name": "${env.JOB_NAME}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "${currentBuild.result}",
-                            "jenkins_url": "${env.JENKINS_URL}"
-                        }' || true
-                """
-            }
-        }
-    }
-}
-```
-
-## 4.2 Jenkins API Integration
-
-### Jenkins API Payload Format
-
-```json
-{
-  "source": "jenkins",
-  "job_name": "my-pipeline",
-  "build_number": 123,
-  "build_url": "https://jenkins.example.com/job/my-pipeline/123/",
-  "status": "FAILURE",
-  "duration_ms": 45000,
-  "timestamp": "2025-11-05T10:30:00Z",
-  "stages": [
-    {
-      "stage_name": "Build",
-      "stage_id": "1",
-      "status": "SUCCESS",
-      "duration_ms": 10000,
-      "is_parallel": false,
-      "log_content": "... build logs here ..."
-    },
-    {
-      "stage_name": "Test",
-      "stage_id": "2",
-      "status": "FAILURE",
-      "duration_ms": 30000,
-      "is_parallel": true,
-      "parallel_blocks": [
-        {
-          "block_name": "Unit Tests",
-          "status": "SUCCESS",
-          "log_content": "..."
-        },
-        {
-          "block_name": "Integration Tests",
-          "status": "FAILURE",
-          "log_content": "... error details ..."
-        }
-      ]
-    }
-  ]
-}
-```
-
-### Jenkins Testing
-
-#### Step 1: Test Webhook Endpoint
-
-```bash
-# Test that the endpoint is accessible
-curl http://your-log-extractor:8000/health
-
-# Expected response:
-# {"status":"healthy","service":"gitlab-log-extractor","version":"1.0.0"}
-```
-
-#### Step 2: Manual Webhook Test
-
-```bash
-curl -X POST http://your-log-extractor:8000/webhook/jenkins \
-    -H 'Content-Type: application/json' \
-    -H 'X-Jenkins-Token: your_secret_token' \
-    -d '{
-        "job_name": "test-pipeline",
-        "build_number": 1,
-        "build_url": "https://jenkins.example.com/job/test-pipeline/1/",
-        "status": "FAILURE",
-        "jenkins_url": "https://jenkins.example.com"
-    }'
-
-# Expected response:
-# {
-#   "status": "success",
-#   "message": "Jenkins build logs queued for extraction",
-#   "job_name": "test-pipeline",
-#   "build_number": 1,
-#   "request_id": "a1b2c3d4"
-# }
-```
-
-#### Step 3: Trigger Jenkins Build
-
-1. Run a Jenkins pipeline that has the webhook configured
-2. Let it fail (or complete)
-3. Check the logs:
-
-```bash
-# View container logs
-./manage_container.py logs
-
-# Or check API request logs
-tail -f logs/api-requests.log
-```
-
-#### Step 4: Verify API Received Data
-
-Check your API endpoint to confirm it received the payload with:
-- Job name and build number
-- All stages
-- Parallel blocks (if any)
-- Full console logs
-
-### Jenkins Troubleshooting
-
-#### "Jenkins integration is not enabled"
-
-**Solution:**
-```bash
-grep JENKINS_ENABLED .env  # Should be: true
-./manage_container.py restart
-```
-
-#### "Failed to fetch console log"
-
-**Problem:** Can't retrieve logs from Jenkins
-
-**Solution:**
-```bash
-# Test Jenkins API access manually
-curl -u username:api_token \
-    https://jenkins.example.com/job/my-pipeline/123/consoleText
-
-# Check:
-# 1. JENKINS_URL is correct (no trailing slash)
-# 2. JENKINS_USER is correct
-# 3. JENKINS_API_TOKEN is valid
-# 4. Network connectivity from container to Jenkins
-
-# Verify configuration
-grep JENKINS_ .env
-```
-
-#### "Parallel blocks not detected"
-
-**Problem:** All stages show `is_parallel: false`
-
-**Solution:**
-- Jenkins must be using **Scripted Pipeline** or **Declarative Pipeline** with `parallel` keyword
-- Console log must contain `[Pipeline] parallel` markers
-- If using Blue Ocean, check that the plugin is installed:
-  - Jenkins → Manage Plugins → Installed → search for "Blue Ocean"
-
-#### "API POST failed"
-
-**Problem:** Logs extracted but not posted to API
-
-**Solution:**
-```bash
-# Check API configuration
-grep API_POST .env
-
-# Test API endpoint manually
-curl -X POST http://bfa-server:8000/api/analyze \
-    -H 'Content-Type: application/json' \
-    -H 'Authorization: Bearer your_token' \
-    -d '{"test": "data"}'
-
-# Check logs for error details
-grep "API" logs/api-requests.log
-```
-
-#### Viewing Detailed Logs
-
-```bash
-# Enable debug logging
-# Edit .env:
-LOG_LEVEL=DEBUG
-
-# Restart service
-./manage_container.py restart
-
-# View logs in real-time
-./manage_container.py logs
-```
-
-## 4.3 Jenkins Advanced Topics
-
-### Jenkins Architecture Details
-
-#### Log Parsing Strategy
-
-The log extractor uses two strategies for parsing Jenkins logs:
-
-**1. With Blue Ocean API (Preferred):**
-- Fetch `/wfapi/describe` endpoint for stage structure
-- Match console log segments to stages
-- Extract parallel blocks with accurate timing
-- Better metadata about stage execution
-
-**2. Without Blue Ocean API (Fallback):**
-- Parse console log for `[Pipeline]` markers
-- Detect `parallel` blocks in output
-- Extract logs between pipeline markers
-- Timing data may be approximate
-
-#### Retry Logic
-
-- Uses same retry configuration as GitLab API (`RETRY_ATTEMPTS`, `RETRY_DELAY`)
-- Retries on network errors, timeouts, and 5xx responses
-- Does not retry on 4xx errors (client errors)
-- Exponential backoff between retries
-
-#### Security Considerations
-
-- **Webhook Secret**: Optional but recommended for production
-- **API Token**: Stored securely in `.env` (never in Jenkinsfile)
-- **HTTPS**: Always use HTTPS in production environments
-- **Network Isolation**: Run service in private network if possible
-- **Credentials**: Use Jenkins credentials plugin for sensitive data
-
-### Jenkins Advanced Examples
-
-#### Multi-Branch Pipeline
-
-For multi-branch pipelines, include the branch name in the webhook data:
-
-```groovy
-pipeline {
-    agent any
-    stages {
-        stage('Build') {
-            steps {
-                sh './build.sh'
-            }
-        }
-    }
-    post {
-        failure {
-            script {
-                // Include branch name in job_name
-                def jobName = "${env.JOB_NAME}/${env.BRANCH_NAME}"
-
-                sh """
-                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "job_name": "${jobName}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "${currentBuild.result}"
-                        }' || true
-                """
-            }
-        }
-    }
-}
-```
-
-#### Conditional Logging
-
-Send logs only for specific conditions (e.g., master branch failures):
-
-```groovy
-post {
-    always {
-        script {
-            // Only send logs for master branch failures
-            if (env.BRANCH_NAME == 'master' && currentBuild.result != 'SUCCESS') {
-                sh """
-                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "job_name": "${env.JOB_NAME}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "${currentBuild.result}"
-                        }' || true
-                """
-            }
-        }
-    }
-}
-```
-
-### Jenkins Next Steps
-
-After setting up Jenkins integration:
-
-1. **Monitor**: Check `logs/api-requests.log` for API calls
-   ```bash
-   tail -f logs/api-requests.log | grep jenkins
-   ```
-
-2. **Tune**: Adjust retry settings based on your API's reliability
-   - Modify `RETRY_ATTEMPTS` and `RETRY_DELAY` in `.env`
-   - Monitor success/failure rates
-
-3. **Scale**: Run multiple instances behind a load balancer if needed
-   - Use Redis for shared state (if implementing)
-   - Configure health checks for load balancer
-
-4. **Alert**: Set up monitoring for webhook failures
-   - Monitor webhook endpoint availability
-   - Alert on repeated failures
-   - Track API posting success rates
-
-**Additional Resources:**
-- See `README.md` for general setup
-- See `API_POSTING.md` for API posting documentation
-- See `.env.example` for all configuration options
-
----
-
-# 5. API Posting
-
-## 5.1 API Configuration
-
-### API Overview
-
-The API posting feature allows you to **send pipeline logs to an external API** instead of (or in addition to) saving them to files.
-
-**Use Cases:**
-- Centralized log aggregation
-- Real-time log analysis
-- Integration with monitoring systems
-- Custom log processing pipelines
-
-**Key Features:**
-- HTTP POST with JSON payload
-- Bearer token authentication
-- Automatic retry with exponential backoff
-- Fallback to file storage on failure
-- Dual mode (API + file simultaneously)
-- 97-99% smaller payloads (error extraction)
-
-### API Environment Variables
-
-```bash
-# ============================================================================
-# BFA Server Configuration (Required for API Posting)
-# ============================================================================
-
-# BFA Host - hostname or IP (without http:// prefix)
-BFA_HOST=bfa-server.example.com
-
-# BFA Secret Key - used for Bearer token authentication
-BFA_SECRET_KEY=your_bfa_secret_key
-
-# ============================================================================
-# API Posting Configuration
-# ============================================================================
-
-# Enable/disable API posting
-API_POST_ENABLED=true
-
-# Request timeout in seconds (default: 30, range: 1-300)
-API_POST_TIMEOUT=30
-
-# Enable retry on failure (default: true)
-API_POST_RETRY_ENABLED=true
-
-# Save to file even if API succeeds (dual mode, default: false)
-API_POST_SAVE_TO_FILE=false
-```
-
-**Validation Rules:**
-
-| Variable | Required | Default | Validation |
-|----------|----------|---------|------------|
-| `BFA_HOST` | Yes (if API enabled) | - | Hostname or IP address |
-| `BFA_SECRET_KEY` | Yes (if API enabled) | - | Any string (used as Bearer token) |
-| `API_POST_ENABLED` | No | `false` | Must be `true` or `false` |
-| `API_POST_TIMEOUT` | No | `30` | Integer between 1-300 |
-| `API_POST_RETRY_ENABLED` | No | `true` | Must be `true` or `false` |
-| `API_POST_SAVE_TO_FILE` | No | `false` | Must be `true` or `false` |
-
-**API Endpoint (Auto-constructed):**
-```
-http://{BFA_HOST}:8000/api/analyze
-```
-
-### API Payload Format
-
-**Simplified Format (v2.0) - Error Extraction:**
-
-```json
-{
-  "repo": "api-backend",
-  "branch": "feature/user-auth",
-  "commit": "abc123d",
-  "job_name": ["build:docker", "test:unit", "test:integration"],
-  "pipeline_id": "12345",
-  "triggered_by": "john.doe",
-  "failed_steps": [
-    {
-      "step_name": "build:docker",
-      "error_lines": [
-        "npm ERR! code ERESOLVE",
-        "npm ERR! ERESOLVE unable to resolve dependency tree",
-        "ERROR: Build failed with exit code 1"
-      ]
-    },
-    {
-      "step_name": "test:integration",
-      "error_lines": [
-        "AssertionError: expected 401 but got 500",
-        "TypeError: Cannot read property 'id' of undefined"
-      ]
-    }
-  ]
-}
-```
-
-### Field Descriptions
-
-| Field | Type | Description | Example |
-|-------|------|-------------|---------|
-| `repo` | string | Repository name (short form, without org/group) | `"api-backend"` |
-| `branch` | string | Git branch or tag name | `"main"`, `"feature/xyz"` |
-| `commit` | string | Short commit SHA (7 characters) | `"abc123d"` |
-| `job_name` | array of strings | List of **all** job names in pipeline | `["build", "test", "deploy"]` |
-| `pipeline_id` | string | Pipeline ID as string | `"12345"` |
-| `triggered_by` | string | Username who triggered pipeline, or source type | `"john.doe"`, `"push"`, `"schedule"` |
-| `failed_steps` | array of objects | **Only failed jobs** with extracted error lines | See below |
-
-**failed_steps Object:**
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `step_name` | string | Name of the failed job |
-| `error_lines` | array of strings | Extracted error lines from job log (max 50 lines per job) |
-
-### Error Line Extraction
-
-The system **automatically extracts error lines** from job logs by detecting these patterns (case-insensitive):
-
-**Error Keywords:**
-- `error`, `err!`, `failed`, `failure`, `exception`, `traceback`
-- `fatal`, `critical`, `exit code`
-
-**Error Types:**
-- `SyntaxError`, `TypeError`, `AssertionError`, `ValueError`, `RuntimeError`
-- `AttributeError`, `ImportError`, `KeyError`, etc.
-
-**Test Failures:**
-- `tests failed`, `assertion failed`, `expected X but got Y`
-
-**Build Failures:**
-- `build failed`, `compilation error`, `npm ERR!`, `ERESOLVE`
-
-**Automatic Cleaning:**
-- Removes timestamps (e.g., `2024-01-01 10:00:00`)
-- Removes ANSI color codes
-- Trims whitespace
-- Removes duplicate lines
-- Limits to 50 error lines per job (configurable)
-
-### Example: Full Logs vs Error Extraction
-
-**Original Job Log (2.3 KB):**
-```
-Step 1/5 : FROM node:18-alpine
- ---> abc123
-Step 2/5 : WORKDIR /app
- ---> Using cache
- ---> def456
-Step 3/5 : COPY package*.json ./
- ---> 789ghi
-Step 4/5 : RUN npm ci
-npm ERR! code ERESOLVE
-npm ERR! ERESOLVE unable to resolve dependency tree
-npm ERR! Could not resolve dependency:
-npm ERR! peer react@"^17.0.0" from react-dom@17.0.2
-ERROR: npm install failed
-ERROR: Build failed with exit code 1
-The command '/bin/sh -c npm ci' returned a non-zero code: 1
-```
-
-**Extracted error_lines (0.2 KB):**
-```json
-[
-  "npm ERR! code ERESOLVE",
-  "npm ERR! ERESOLVE unable to resolve dependency tree",
-  "npm ERR! Could not resolve dependency:",
-  "npm ERR! peer react@\"^17.0.0\" from react-dom@17.0.2",
-  "ERROR: npm install failed",
-  "ERROR: Build failed with exit code 1"
-]
-```
-
-### Successful Pipelines
-
-If `LOG_SAVE_PIPELINE_STATUS=failed` (recommended):
-- **Successful pipelines are ignored** - no API call is made
-- Only failed pipelines trigger API posting
-- Reduces API traffic by 80-90% in typical environments
-
-If `LOG_SAVE_PIPELINE_STATUS=all`:
-- Successful pipelines will have `failed_steps: []` (empty array)
-
-**Payload Size Comparison:**
-
-| Pipeline Type | Old Format | New Format | Reduction |
-|--------------|------------|------------|-----------|
-| Small (3 jobs, 10KB logs) | ~30 KB | ~1 KB | **97%** |
-| Medium (10 jobs, 100KB logs) | ~1 MB | ~3 KB | **99.7%** |
-| Large (50 jobs, 500KB logs) | ~25 MB | ~15 KB | **99.9%** |
-
-## 5.2 API Authentication & Requests
-
-### Bearer Token Authentication
-
-```http
-POST /api/analyze HTTP/1.1
-Host: bfa-server.example.com:8000
-Authorization: Bearer your_bfa_secret_key
-Content-Type: application/json
-
-{payload}
-```
-
-**Security:**
-- Token is masked in logs (`Bearer *****`)
-- Token never written to log files
-- Same secret key used for JWT token signing
-
-### API Request and Response Details
-
-**Success Response (HTTP 200):**
-```json
-{
-  "status": "ok",
-  "results": [
-    {
-      "error_hash": "60b7634d...",
-      "source": "slack_posted",
-      "step_name": "unit-test",
-      "error_text": "semi colon missing",
-      "fix": "## Fix: Semi colon missing\n\n**Root Cause:** Missing semicolon...\n\n**Code Fix:**\n```javascript\nconst value = obj.property;\n```"
-    }
-  ]
-}
-```
-
-**Failure Response (HTTP != 200):**
-```json
-{
-  "error": "Invalid payload format",
-  "message": "Missing required field: pipeline_id",
-  "code": "INVALID_PAYLOAD"
-}
-```
-
-### Operating Modes
-
-**Mode 1: API Only (Default)**
-```bash
-API_POST_ENABLED=true
-API_POST_SAVE_TO_FILE=false
-```
-- Try API first, fallback to files on failure
-
-**Mode 2: Dual Mode (API + File)**
-```bash
-API_POST_ENABLED=true
-API_POST_SAVE_TO_FILE=true
-```
-- POST to API AND save to file (always)
-
-**Mode 3: File Only**
-```bash
-API_POST_ENABLED=false
-```
-- Save to files only, no API calls
-
-## 5.3 API Retry & Logging
-
-### Retry Logic
-
-**Exponential Backoff:**
-```
-Attempt 1: Immediate POST
-  ↓ (fails)
-Wait 2 seconds
-
-Attempt 2: Retry POST
-  ↓ (fails)
-Wait 4 seconds (2^1 * 2)
-
-Attempt 3: Retry POST
-  ↓ (fails)
-Wait 8 seconds (2^2 * 2)
-
-Attempt 4: Final retry
-```
-
-**Configuration:**
-```bash
-API_POST_RETRY_ENABLED=true
-RETRY_ATTEMPTS=3
-RETRY_DELAY=2
-```
-
-**Retriable errors:** Network errors, timeouts, HTTP 500-599, 429
-**Non-retriable:** HTTP 400-499 (except 429)
-
-### API Request Logging
-
-**Log File:** `logs/api-requests.log`
-
-**Format:**
-```
-[2024-01-01 10:05:00] PIPELINE_ID=12345 STATUS=success DURATION=234ms
-REQUEST: POST http://bfa-server:8000/api/analyze
-  Headers: Authorization: Bearer *****, Content-Type: application/json
-  Payload Size: 1234 bytes (5 jobs)
-RESPONSE: 200 OK
-  Body: {"status": "ok", "results": [...]}
-```
-
-**Rotation:**
-- Size limit: 50 MB per file
-- Backups: 10 rotated files
-- Total storage: ~550 MB
-
-### API Debugging
-
-#### Step 1: Check Configuration
-
-```bash
-# Verify environment variables are set:
-grep "^API_POST" .env
-
-# Expected output:
-# API_POST_ENABLED=true
-# BFA_HOST=bfa-server.example.com
-# BFA_SECRET_KEY=your_secret_key
-
-# Check if configuration loaded correctly:
-grep "API posting" logs/application.log
-
-# Expected output:
-# INFO | API posting enabled: http://bfa-server.example.com:8000/api/analyze
-```
-
-#### Step 2: Test API Endpoint Manually
-
-```bash
-# Test with curl:
-curl -X POST http://bfa-server.example.com:8000/api/analyze \
-  -H "Authorization: Bearer your_token" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "repo": "test",
-    "branch": "main",
-    "commit": "abc123",
-    "job_name": ["test"],
-    "pipeline_id": "99999",
-    "triggered_by": "test",
-    "failed_steps": []
-  }'
-
-# Expected response:
-# {"status": "ok", "results": []}
-```
-
-#### Step 3: Send Test Webhook
-
-```bash
-# Use built-in test command:
-./manage_container.py test
-
-# This triggers a test pipeline event
-# Check if API POST was attempted:
-tail -20 logs/api-requests.log
-```
-
-#### Step 4: Check API Request Log
-
-```bash
-# View last 50 lines:
-tail -50 logs/api-requests.log
-
-# Look for:
-# - REQUEST line (should show your API URL)
-# - RESPONSE line (should show 200 OK)
-# - Any error messages
-```
-
-#### Step 5: Check Application Log
-
-```bash
-# Search for API-related errors:
-grep -i "api post" logs/application.log
-
-# Search for specific pipeline:
-grep "pipeline_id=12345" logs/application.log
-```
-
-#### Step 6: Verify Network Connectivity
-
-```bash
-# Test if API is reachable:
-curl -I http://bfa-server.example.com:8000/api/analyze
-
-# Expected:
-# HTTP/1.1 200 OK (or 405 Method Not Allowed for GET)
-
-# Check DNS resolution:
-nslookup bfa-server.example.com
-
-# Check connectivity:
-ping bfa-server.example.com
-```
-
-#### Step 7: Check Container Logs
-
-```bash
-# If using Docker:
-docker logs bfa-gitlab-pipeline-extractor | grep -i "api"
-
-# Or:
-./manage_container.py logs | grep -i "api"
-```
-
-**Common Debug Commands:**
-
-```bash
-# 1. Is API posting enabled?
-grep "API_POST_ENABLED" .env
-
-# 2. What's the BFA Host?
-grep "BFA_HOST" .env
-
-# 3. Recent API requests:
-tail -n 100 logs/api-requests.log
-
-# 4. Failed API requests:
-grep "STATUS=failed" logs/api-requests.log
-
-# 5. Successful API requests:
-grep "STATUS=success" logs/api-requests.log
-
-# 6. Retry attempts:
-grep "Retry attempt" logs/api-requests.log
-
-# 7. Fallback to file storage:
-grep "falling back to file" logs/api-requests.log
-```
-
-## 5.4 API Endpoint Requirements
-
-### Your API Must Handle
-
-**HTTP Method:** `POST`
-
-**Headers:**
-- `Content-Type: application/json`
-- `Authorization: Bearer <token>` (if token configured)
-
-**Request Body:** JSON payload (see [Payload Format](#api-payload-format))
-
-**Expected Response:**
-
-**Success (200-299):**
-```json
-{
-  "status": "success",
-  "message": "Logs received and processed",
-  "id": "unique-tracking-id",
-  "timestamp": "2024-01-01T10:05:00Z"
-}
-```
-
-**Error (400-599):**
-```json
-{
-  "status": "error",
-  "message": "Database connection failed",
-  "error_code": "DB_CONNECTION_ERROR"
-}
-```
-
-### API Endpoint Implementation Example
-
-**Python FastAPI:**
-```python
-from fastapi import FastAPI, HTTPException, Header
-from pydantic import BaseModel
-from typing import List, Optional
-from datetime import datetime
-import uvicorn
-
-app = FastAPI()
-
-# Define payload models
-class FailedStep(BaseModel):
-    step_name: str
-    error_lines: List[str]
-
-class PipelinePayload(BaseModel):
-    repo: str
-    branch: str
-    commit: str
-    job_name: List[str]
-    pipeline_id: str
-    triggered_by: str
-    failed_steps: List[FailedStep]
-
-@app.post('/api/analyze')
-async def receive_logs(
-    payload: PipelinePayload,
-    authorization: Optional[str] = Header(None)
-):
-    # Verify authentication
-    if authorization != 'Bearer your_secret_token':
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    # Access payload fields
-    print(f"Pipeline {payload.pipeline_id} failed in {payload.repo}@{payload.branch} ({payload.commit})")
-    print(f"Triggered by: {payload.triggered_by}")
-    print(f"Failed steps: {len(payload.failed_steps)}")
-
-    # Log each failed step with errors
-    for step in payload.failed_steps:
-        print(f"  - {step.step_name}: {len(step.error_lines)} errors")
-        for error in step.error_lines[:3]:  # Show first 3 errors
-            print(f"    • {error}")
-
-    # Store in database, send notifications, etc.
-    # Example: await store_in_database(payload)
-    # Example: await send_slack_notification(payload.repo, payload.branch, payload.failed_steps)
-
-    # Return success
-    return {
-        "status": "success",
-        "message": f"Received {len(payload.failed_steps)} failed steps",
-        "pipeline_id": payload.pipeline_id,
-        "timestamp": datetime.utcnow().isoformat()
-    }
-
-if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=8000)
-```
-
-**Node.js Express:**
-```javascript
-const express = require('express');
-const app = express();
-
-app.use(express.json({ limit: '10mb' }));  // Smaller limit due to simplified format
-
-app.post('/api/analyze', (req, res) => {
-    // Verify authentication
-    const authHeader = req.headers.authorization;
-    if (authHeader !== 'Bearer your_secret_token') {
-        return res.status(401).json({ error: 'Unauthorized' });
-    }
-
-    // Parse new simplified payload
-    const { repo, branch, commit, pipeline_id, triggered_by, failed_steps } = req.body;
-
-    console.log(`Pipeline ${pipeline_id} failed in ${repo}@${branch} (${commit})`);
-    console.log(`Triggered by: ${triggered_by}`);
-    console.log(`Failed steps: ${failed_steps.length}`);
-
-    // Log each failed step with errors
-    failed_steps.forEach(step => {
-        console.log(`  - ${step.step_name}: ${step.error_lines.length} errors`);
-        step.error_lines.slice(0, 3).forEach(error => {  // Show first 3 errors
-            console.log(`    • ${error}`);
-        });
-    });
-
-    // Process logs (your logic here)
-    // Example: storeInDatabase(req.body)
-    // Example: sendSlackNotification(repo, branch, failed_steps)
-
-    // Return success
-    res.json({
-        status: 'success',
-        message: `Received ${failed_steps.length} failed steps`,
-        pipeline_id: pipeline_id,
-        timestamp: new Date().toISOString()
-    });
-});
-
-app.listen(8000, () => {
-    console.log('API listening on port 8000');
-});
-```
-
-## 5.5 API Testing
-
-### Step 1: Set Up Test API
-
-**Option A: Use httpbin.org (Public Test Service)**
-```bash
-# In .env:
-BFA_HOST=httpbin.org/post
-BFA_SECRET_KEY=test_token
-
-# Restart:
-./manage_container.py restart
-```
-
-**Option B: Run Local Test Server**
-```python
-# test_api_server.py
-from fastapi import FastAPI, Request
-from pydantic import BaseModel
-from typing import List
-import uvicorn
-
-app = FastAPI()
-
-class FailedStep(BaseModel):
-    step_name: str
-    error_lines: List[str]
-
-class PipelinePayload(BaseModel):
-    repo: str
-    branch: str
-    commit: str
-    job_name: List[str]
-    pipeline_id: str
-    triggered_by: str
-    failed_steps: List[FailedStep]
-
-@app.post('/api/analyze')
-async def receive_logs(payload: PipelinePayload, request: Request):
-    print("="*80)
-    print("Received API POST:")
-    print(f"Headers: {dict(request.headers)}")
-    print(f"\nPayload:")
-    print(f"  Repo: {payload.repo}")
-    print(f"  Branch: {payload.branch}")
-    print(f"  Commit: {payload.commit}")
-    print(f"  Pipeline ID: {payload.pipeline_id}")
-    print(f"  Triggered by: {payload.triggered_by}")
-    print(f"  Failed steps: {len(payload.failed_steps)}")
-
-    for step in payload.failed_steps:
-        print(f"\n  Failed step: {step.step_name}")
-        print(f"    Errors: {len(step.error_lines)}")
-        for error in step.error_lines[:3]:
-            print(f"      - {error}")
-
-    print("="*80)
-    return {"status": "ok", "results": []}
-
-if __name__ == '__main__':
-    uvicorn.run(app, host='0.0.0.0', port=5000, log_level='info')
-```
-
-```bash
-# Install FastAPI and uvicorn:
-pip install fastapi uvicorn
-
-# Run test server:
-python test_api_server.py
-
-# In another terminal, configure:
-# Update .env with: BFA_HOST=localhost:5000
-```
-
-### Step 2: Trigger Test Webhook
-
-```bash
-# Send test webhook:
-./manage_container.py test
-
-# Or manually:
-curl -X POST http://localhost:8000/webhook/gitlab \
-  -H "Content-Type: application/json" \
-  -d @test_payload.json
-```
-
-### Step 3: Verify Results
-
-```bash
-# Check API request log:
-tail -20 logs/api-requests.log
-
-# Should show:
-# - REQUEST to your API
-# - RESPONSE 200 OK
-# - STATUS=success
-
-# Check test server output:
-# Should show received payload details
-```
-
-## 5.6 API Troubleshooting
-
-### Issue: API Posting Not Working
-
-**Symptoms:**
-- No entries in `logs/api-requests.log`
-- Logs only saved to files
-
-**Solutions:**
-
-1. **Check if enabled:**
-   ```bash
-   grep "API_POST_ENABLED" .env
-   # Should be: API_POST_ENABLED=true
-   ```
-
-2. **Check BFA Host is set:**
-   ```bash
-   grep "BFA_HOST" .env
-   # Should have valid hostname
-   ```
-
-3. **Check startup logs:**
-   ```bash
-   grep "API posting" logs/application.log
-   # Should say "enabled" not "disabled"
-   ```
-
-4. **Restart service:**
-   ```bash
-   ./manage_container.py restart
-   ```
-
-### Issue: Getting 401 Unauthorized
-
-**Symptoms:**
-- `RESPONSE: 401 Unauthorized` in api-requests.log
-
-**Solutions:**
-
-1. **Check BFA Secret Key is set:**
-   ```bash
-   grep "BFA_SECRET_KEY" .env
-   ```
-
-2. **Verify token is correct:**
-   - Compare with your API's expected token
-
-3. **Test manually:**
-   ```bash
-   curl -X POST http://bfa-server:8000/api/analyze \
-     -H "Authorization: Bearer your_token" \
-     -d '{"test": true}'
-   ```
-
-### Issue: Timeout Errors
-
-**Symptoms:**
-- `RESPONSE: timeout` in logs
-- `DURATION=30000ms` (or timeout value)
-
-**Solutions:**
-
-1. **Increase timeout:**
-   ```bash
-   # In .env:
-   API_POST_TIMEOUT=60  # Increase to 60 seconds
-   ```
-
-2. **Check API performance:**
-   - Is your API slow to respond?
-   - Processing large payloads?
-
-3. **Check network:**
-   - Network latency between services
-   - Firewall rules
-
-### Issue: Connection Refused
-
-**Symptoms:**
-- `Connection refused` error
-- `Failed to establish connection`
-
-**Solutions:**
-
-1. **Check API is running:**
-   ```bash
-   curl -I http://bfa-server:8000/api/analyze
-   ```
-
-2. **Check firewall:**
-   - Is port open?
-   - Can container reach external network?
-
-3. **Check URL:**
-   - Correct protocol (http vs https)?
-   - Correct domain/IP?
-   - Correct port?
-
-### Issue: Large Payloads Failing
-
-**Symptoms:**
-- Works for small pipelines
-- Fails for large pipelines (many jobs)
-- 413 Payload Too Large
-
-**Solutions:**
-
-1. **Increase API payload limit:**
-   - Flask: `app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024`
-   - Express: `express.json({ limit: '100mb' })`
-   - Nginx: `client_max_body_size 100M;`
-
-2. **Filter jobs to reduce payload:**
-   ```bash
-   LOG_SAVE_JOB_STATUS=failed  # Only send failed jobs
-   ```
-
-### Issue: Logs Not in api-requests.log
-
-**Symptoms:**
-- API requests happening but not logged
-
-**Solutions:**
-
-1. **Check log file exists:**
-   ```bash
-   ls -lh logs/api-requests.log
-   ```
-
-2. **Check permissions:**
-   ```bash
-   ls -la logs/
-   # Should be writable by container user (1000)
-   ```
-
-3. **Check log rotation:**
-   - May have rotated to api-requests.log.1
-   ```bash
-   ls -lh logs/api-requests.log*
-   ```
-
----
-
-# 6. Operations & Monitoring
-
-## 6.1 Testing
-
-### Run Unit Tests
+### High Availability
+
+**Load Balancing:**
+- Run multiple instances behind a load balancer
+- Each instance processes webhooks independently
+- Shared storage for logs (NFS, S3)
+
+**Considerations:**
+- Webhook events may be delivered to different instances
+- Each instance tracks its own requests in monitoring.db
+- File storage requires shared filesystem or S3
+- API posting is instance-independent
+
+## 5.2 Testing & CI/CD Pipeline
+
+### Test Suite Overview
+
+| Test Module | Tests | Coverage | Focus Area |
+|-------------|-------|----------|------------|
+| `test_api_poster.py` | 20 | 99.80% | API posting, timeouts, errors, retry logic |
+| `test_error_handler.py` | 12 | 84% | Retry with backoff, circuit breaker |
+| `test_pipeline_extractor.py` | 8 | 86% | Pipeline data extraction, filtering |
+| `test_storage_manager.py` | 10 | 78% | File storage, metadata management |
+| `test_webhook_listener.py` | 15 | 95.45% | Webhook handling, routing |
+
+### Run All Tests
 
 ```bash
 # Run all tests
-pytest tests/ -v
+pytest tests/
 
-# Run with coverage
-pytest tests/ --cov=src --cov=. --cov-report=term-missing
-
-# Generate HTML coverage report
-pytest tests/ --cov=src --cov=. --cov-report=html
-# Open htmlcov/index.html in browser
+# Run with coverage report
+pytest --cov=src tests/ --cov-report=term-missing
 
 # Run specific test file
-pytest tests/test_pipeline_extractor.py -v
+pytest tests/test_api_poster.py -v
 
-# Run specific test
-pytest tests/test_pipeline_extractor.py::TestClass::test_method -v
-
-# Run tests matching pattern
-pytest tests/ -k "test_config" -v
+# Run with debugging output
+pytest tests/ -v -s
 ```
 
-### Test Container Management Script
+### CI/CD Pipeline
 
+The project includes comprehensive GitLab CI/CD configuration:
+
+**Pipeline Stages:**
+
+1. **Lint Stage** (Code Quality)
+   - Flake8: PEP 8 compliance
+   - Pylint: Comprehensive linting (advisory)
+
+2. **Test Stage**
+   - Pytest: Unit tests execution
+   - All tests must pass
+
+3. **Coverage Stage**
+   - Coverage report generation
+   - HTML and XML formats
+   - Coverage threshold tracking
+
+**Local CI Testing:**
 ```bash
-# Run all tests for manage_container.py
-pytest tests/test_manage_container.py -v
+# Run linters
+flake8 src/ tests/ --max-line-length=120
+pylint src/ --max-line-length=120
 
-# Run with coverage
-pytest tests/test_manage_container.py --cov=manage_container --cov-report=term-missing
+# Run tests with coverage
+pytest tests/ --cov=src --cov-report=html --cov-report=term-missing
 
-# Test specific functionality
-pytest tests/test_manage_container.py::TestLoadConfig -v
-pytest tests/test_manage_container.py::TestBuildImage -v
-pytest tests/test_manage_container.py::TestStartContainer -v
+# View HTML coverage report
+open coverage_html/index.html
 ```
 
-### Parallel Testing
+### Manual Testing
 
-```bash
-# Install pytest-xdist for parallel execution
-pip install pytest-xdist
-
-# Run tests in parallel (4 workers)
-pytest tests/ -n 4 -v
-
-# Run tests in parallel with coverage
-pytest tests/ -n auto --cov=src --cov-report=term-missing
-```
-
-### Watch Mode
-
-```bash
-# Install pytest-watch
-pip install pytest-watch
-
-# Auto-run tests on file changes
-ptw tests/ -- -v
-```
-
-### Test Individual Modules
-
-```bash
-# Test configuration loader
-python src/config_loader.py
-
-# Test error handler
-python src/error_handler.py
-
-# Test storage manager
-python src/storage_manager.py
-
-# Test pipeline extractor
-python src/pipeline_extractor.py
-```
-
-### Test API Endpoints
-
-```bash
-# Test health endpoint
-curl http://localhost:8000/health
-
-# Expected response:
-# {"status":"healthy","service":"gitlab-log-extractor","version":"1.0.0"}
-
-# Test stats endpoint
-curl http://localhost:8000/stats
-
-# Test webhook endpoint (with sample payload)
-curl -X POST http://localhost:8000/webhook/gitlab \
-  -H "Content-Type: application/json" \
-  -H "X-Gitlab-Event: Pipeline Hook" \
-  -H "X-Gitlab-Token: your_secret_token" \
-  -d @test_payload.json
-```
-
-### Integration Testing
-
-```bash
-# End-to-end Docker workflow
-./manage_container.py build
-./manage_container.py start --yes
-./manage_container.py status
-./manage_container.py test
-./manage_container.py logs --no-follow | tail -20
-./manage_container.py monitor
-./manage_container.py export test_data.csv
-./manage_container.py remove --force
-```
-
-### Debugging Tests
-
-```bash
-# Run with maximum verbosity
-pytest tests/ -vvv -s
-
-# Show local variables on failure
-pytest tests/ --showlocals
-
-# Drop into debugger on failure
-pytest tests/ --pdb
-
-# Run specific failing test with full output
-pytest tests/test_file.py::test_name -vv -s
-```
-
-### Create Test Webhook Payload
-
-```bash
-cat > test_payload.json << 'EOF'
-{
-  "object_kind": "pipeline",
-  "object_attributes": {
-    "id": 12345,
-    "ref": "main",
-    "status": "success"
-  },
-  "project": {
-    "id": 123,
-    "name": "test-project"
-  },
-  "builds": []
-}
-EOF
-```
-
-### Test Webhook
-
+**Test Webhook Endpoint:**
 ```bash
 curl -X POST http://localhost:8000/webhook/gitlab \
   -H "Content-Type: application/json" \
   -H "X-Gitlab-Event: Pipeline Hook" \
-  -d @test_payload.json
+  -H "X-Gitlab-Token: your_secret" \
+  -d '{
+    "object_kind":"pipeline",
+    "object_attributes":{
+      "id":123,"status":"success","ref":"main"
+    },
+    "project":{"id":789,"name":"test-project"}
+  }'
 ```
 
-## 6.2 Application Logging
-
-### Application Logging Features
-
-- **Request ID tracking** - Trace single pipeline across all log entries
-- **Project names** - Human-readable logs with project names
-- **Aligned columns** - Pipe-delimited format for easy parsing
-- **Multiple log files** - Separate application and API logs
-- **Automatic rotation** - Size-based rotation with configurable backups
-- **Sensitive data masking** - Tokens automatically redacted
-- **DEBUG level logging** - Detailed troubleshooting information
-
-### Log Files and Formats
-
-| File | Purpose | Size Limit | Backups | Total Storage |
-|------|---------|------------|---------|---------------|
-| **application.log** | All application logs | 100 MB | 10 | ~1.1 GB |
-| **api-requests.log** | API posting requests/responses | 50 MB | 10 | ~550 MB |
-
-**Example logs:**
-```
-2025-10-29 17:52:05.836 | INFO  | webhook_listener | a1b2c3d4 | Webhook received | event_type=Pipeline Hook
-2025-10-29 17:52:05.837 | INFO  | webhook_listener | a1b2c3d4 | Pipeline info extracted | pipeline_id=12345
-2025-10-29 17:52:06.450 | ERROR | storage_manager  | a1b2c3d4 | Failed to save log | job_id=789
-```
-
-### Log Rotation Behavior
-
-**Automatic rotation when size limits reached:**
-```bash
-application.log (100 MB)     →  application.log.1 (100 MB)  # Rotated
-application.log (0 KB)       ←  New file created
-application.log.10           →  DELETED (exceeded backup count)
-```
-
-**Key points:**
-- Happens automatically in real-time
-- No restart required
-- Logs persist across container restarts (volume mount)
-
-### Viewing Logs
-
-#### Method 1: Docker Logs (Console Output)
-
-View logs in real-time from Docker console:
-
-```bash
-# Follow live logs
-./manage_container.py logs
-
-# Or directly with Docker
-docker logs -f bfa-gitlab-pipeline-extractor
-
-# Last 100 lines
-docker logs --tail 100 bfa-gitlab-pipeline-extractor
-
-# Monitor 100 lines
-docker logs -f --tail 100 bfa-gitlab-pipeline-extractor
-
-# Logs since specific time
-docker logs --since "2025-10-29T10:00:00" bfa-gitlab-pipeline-extractor
-```
-
-**What you see:** Console handler output (respects LOG_LEVEL from .env configuration)
-
-#### Method 2: Log Files (Most Detailed)
-
-Read log files directly for complete DEBUG-level information:
-
-```bash
-# Tail application log (real-time)
-tail -f ./logs/application.log
-
-# Last 100 lines
-tail -n 100 ./logs/application.log
-
-# View with less (scrollable)
-less ./logs/application.log
-
-# Real-time with color highlighting
-tail -f ./logs/application.log | grep --color=always -E 'ERROR|WARN|$'
-```
-
-#### Method 3: Inside Container
-
-```bash
-# View logs inside container using docker exec
-docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/application.log
-docker exec bfa-gitlab-pipeline-extractor grep ERROR /app/logs/application.log
-docker exec bfa-gitlab-pipeline-extractor tail -f /app/logs/api-requests.log
-```
-
-#### Method 4: Watch Mode (Auto-refresh)
-
-```bash
-# Refresh every 2 seconds
-watch -n 2 'tail -20 ./logs/application.log'
-
-# Monitor multiple logs
-watch -n 5 'echo "=== APPLICATION ===" && tail -10 ./logs/application.log && echo && echo "=== API REQUESTS ===" && tail -10 ./logs/api-requests.log'
-```
-
-### Searching Logs
-
-#### Search by Request ID
-
-Track a complete request flow:
-
-```bash
-# Find all logs for specific request
-grep "a1b2c3d4" logs/application.log
-
-# Search across all rotated files
-grep "a1b2c3d4" logs/application.log*
-
-# With context (5 lines before/after)
-grep -C 5 "a1b2c3d4" logs/application.log
-```
-
-#### Search by Pipeline ID
-
-```bash
-# Find all logs for pipeline
-grep "pipeline_id=12345" logs/application.log*
-
-# Count occurrences
-grep -c "pipeline_id=12345" logs/application.log
-
-# Extract only those lines
-grep "pipeline_id=12345" logs/application.log > pipeline_12345_logs.txt
-```
-
-#### Search by Project Name
-
-```bash
-# Find all logs for a specific project
-grep "project_name=my-app" logs/application.log
-
-# Search with project name in message
-grep "from project 'my-app'" logs/application.log
-
-# Extract all project names
-grep -oP "project_name=\K[^' |]+" logs/application.log | sort -u
-
-# Count logs by project
-grep -oP "project_name=\K[^' |]+" logs/application.log | sort | uniq -c | sort -rn
-```
-
-#### Search by Log Level
-
-```bash
-# All errors
-grep "| ERROR |" logs/application.log
-
-# All errors and warnings
-grep -E "| ERROR | | WARN |" logs/application.log
-
-# Count errors in last hour (assuming recent log)
-grep "| ERROR |" logs/application.log | tail -1000 | wc -l
-```
-
-#### Search by Time Range
-
-```bash
-# Logs from specific date
-grep "2025-10-29" logs/application.log
-
-# Logs from specific hour
-grep "2025-10-29 17:" logs/application.log
-
-# Logs from specific time range
-grep "2025-10-29 17:5[0-9]" logs/application.log
-```
-
-#### Complex Searches
-
-```bash
-# Failed requests with error details
-grep "| ERROR |" logs/application.log | grep "pipeline_id"
-
-# Performance issues (> 10 seconds) - check duration_ms in logs
-grep "duration_ms" logs/application.log | awk -F'|' '$6 ~ /[0-9]{5,}/ {print}'
-
-# Extract all pipeline IDs
-grep -oP 'pipeline_id=\K[0-9]+' logs/application.log | sort -u
-
-# Top 10 most logged pipelines
-grep -oP 'pipeline_id=\K[0-9]+' logs/application.log | sort | uniq -c | sort -rn | head -10
-```
-
-#### Search with awk (for pipe-delimited logs)
-
-```bash
-# Extract specific fields
-awk -F'|' '{print $1, $2, $5}' logs/application.log | tail -20
-
-# Filter by level
-awk -F'|' '$2 ~ /ERROR/ {print}' logs/application.log
-
-# Count by level
-awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); print $2}' logs/application.log | sort | uniq -c
-```
-
-### Request ID Tracking
-
-Every webhook request gets a unique **Request ID** (e.g., `a1b2c3d4`) that appears in all related logs.
-
-**Example:**
-```
-2025-10-31 06:15:13.670 | INFO  | webhook_listener    | 4729a324 | Request ID 4729a324 tracking pipeline 1061175
-2025-10-31 06:15:13.670 | INFO  | pipeline_extractor  | 4729a324 | Extracted info for pipeline 1061175
-2025-10-31 06:15:13.925 | INFO  | log_fetcher         | 4729a324 | Successfully fetched logs for 5 jobs
-2025-10-31 06:15:13.926 | INFO  | webhook_listener    | 4729a324 | Pipeline processing completed
-```
-
-**Benefits:**
-```bash
-# See everything that happened for one request
-grep "4729a324" logs/application.log
-
-# Track across all log files
-grep "4729a324" logs/*.log
-```
-
-### Log Filtering Configuration
-
-The system supports flexible filtering to control which logs are saved, reducing storage requirements while maintaining visibility into important events.
-
-#### Filtering Options
-
-All filtering is configured via environment variables in `.env`:
-
-```bash
-# ============================================================================
-# LOG FILTERING CONFIGURATION
-# ============================================================================
-
-# Which pipeline statuses to save logs for
-# Options: all, failed, success, running, canceled, skipped
-# Multiple values: failed,canceled,skipped
-LOG_SAVE_PIPELINE_STATUS=all
-
-# Which projects to save logs for (comma-separated project IDs)
-# Leave empty to save all projects
-LOG_SAVE_PROJECTS=
-
-# Which projects to exclude from logging
-LOG_EXCLUDE_PROJECTS=
-
-# Which job statuses to save logs for
-# Options: all, failed, success, canceled, skipped
-LOG_SAVE_JOB_STATUS=all
-
-# Save pipeline metadata even if logs are filtered
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-#### Common Filtering Scenarios
-
-**Scenario 1: Save only failed pipeline logs (90% storage reduction)**
-```bash
-LOG_SAVE_PIPELINE_STATUS=failed,canceled
-LOG_SAVE_JOB_STATUS=all
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-**Result:**
-- Only pipelines with status `failed` or `canceled` will have logs saved
-- Metadata for all pipelines is still saved (for tracking)
-- Logs show: "Pipeline X skipped - status 'success' not in filter [failed,canceled]"
-
-**Scenario 2: Save logs only for specific projects**
-```bash
-LOG_SAVE_PROJECTS=123,456,789
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=all
-```
-
-**Result:**
-- Only projects with IDs 123, 456, or 789 will have logs saved
-- All other projects are skipped
-- Logs show: "Pipeline X from 'other-project' (ID: 999) skipped - not in whitelist [123,456,789]"
-
-**Scenario 3: Exclude noisy test projects**
-```bash
-LOG_EXCLUDE_PROJECTS=999,888
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=all
-```
-
-**Result:**
-- All projects except 999 and 888 will have logs saved
-- Logs show: "Pipeline X from 'test-project' (ID: 999) skipped - in blacklist [999,888]"
-
-**Scenario 4: Save all pipelines, but only failed job logs**
-```bash
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=failed,canceled
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-**Result:**
-- All pipeline metadata is saved
-- Only job logs with status `failed` or `canceled` are saved
-- Successful jobs are skipped
-- Logs show: "Job 456 'test-job' from 'my-app' skipped - status 'success' not in filter [failed,canceled]"
-
-#### Filtering Benefits
-
-- **Storage Savings**: Reduce storage by 70-90% by saving only failed pipelines
-- **Focus on Failures**: Makes it easier to find and debug problems
-- **Multi-Project Support**: Easily add/remove projects without code changes
-- **Flexible**: Combine filters for fine-grained control
-- **Visibility**: Always know what's being filtered via logs
-
-#### Monitoring Filtered Logs
-
-Check how many logs are being filtered:
-
-```bash
-# Count filtered pipelines
-grep "skipped - status" logs/application.log | wc -l
-
-# See which projects are being filtered
-grep "skipped - not in whitelist" logs/application.log
-
-# Count skipped jobs
-grep "Job.*skipped" logs/application.log | wc -l
-```
-
-### Troubleshooting with Logs
-
-#### Problem: Container won't start
-
-```bash
-# Check Docker container logs
-docker logs bfa-gitlab-pipeline-extractor
-
-# Check if log directory has permission issues
-ls -la ./logs
-chmod 755 ./logs
-
-# Check application log for startup errors
-cat ./logs/application.log | grep ERROR
-```
-
-#### Problem: No logs appearing in files
-
-```bash
-# Check log directory exists and is writable
-ls -la ./logs
-touch ./logs/test.txt && rm ./logs/test.txt
-
-# Check LOG_DIR setting
-cat .env | grep LOG_DIR
-
-# Check Docker volume mount
-docker inspect bfa-gitlab-pipeline-extractor | grep -A 5 Mounts
-
-# Verify inside container
-docker exec bfa-gitlab-pipeline-extractor ls -la /app/logs
-```
-
-#### Problem: Logs filling up disk
-
-```bash
-# Check current usage
-du -sh ./logs
-
-# Check disk space
-df -h .
-
-# Immediate cleanup (delete old rotations)
-rm ./logs/*.log.[5-9]* ./logs/*.log.1[0-9]*
-
-# Reduce backup counts in src/logging_config.py
-# Then rebuild container
-```
-
-#### Problem: Can't find specific request
-
-```bash
-# Search all log files including rotated
-grep "pipeline_id=12345" ./logs/*.log*
-
-# Search by date
-grep "2025-10-29" ./logs/application.log*
-
-# Search by request ID (returned in API response)
-grep "a1b2c3d4" ./logs/*.log*
-```
-
-#### Problem: Performance degradation
-
-```bash
-# Check log file sizes
-ls -lh ./logs/*.log
-
-# If files are huge, rotation might be failing
-# Force rotation by moving current log
-mv ./logs/application.log ./logs/application.log.backup
-# Container will create new file automatically
-
-# Check for I/O errors in system logs
-dmesg | grep -i error
-```
-
-#### Problem: Sensitive data in logs
-
-Tokens and secrets are automatically masked:
-
-```bash
-# Tokens are automatically masked
-grep "token" ./logs/application.log
-
-# Example output:
-# Using token: glpat-****
-# Authorization: ****
-```
-
-If you find unmasked sensitive data:
-
-```bash
-# Report it (add pattern to SensitiveDataFilter in src/logging_config.py)
-# Then remove from logs:
-sed -i 's/your-secret-token/****REDACTED****/g' ./logs/*.log*
-```
-
-## 6.3 Monitoring Dashboard
-
-### What is Tracked
-
-Every webhook request is tracked with:
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `id` | Unique request ID | 1, 2, 3... |
-| `timestamp` | When request was received | 2024-01-01T12:00:00Z |
-| `project_id` | GitLab project ID | 123 |
-| `pipeline_id` | GitLab pipeline ID | 789 |
-| `pipeline_type` | Type of pipeline | main, child, merge_request |
-| `status` | Processing status | queued, processing, completed, failed |
-| `processing_time` | Time to process (seconds) | 12.5 |
-| `job_count` | Number of jobs | 5 |
-| `error_message` | Error message if failed | Connection timeout |
-
-### CLI Dashboard Tool
-
-```bash
-# Show 24-hour summary (default)
-python scripts/monitor_dashboard.py
-
-# Show 48-hour summary
-python scripts/monitor_dashboard.py --hours 48
-
-# Show recent 100 requests
-python scripts/monitor_dashboard.py --recent 100
-
-# Show details for specific pipeline
-python scripts/monitor_dashboard.py --pipeline 12345
-
-# Export data to CSV
-python scripts/monitor_dashboard.py --export data.csv
-```
-
-**Dashboard Output Example:**
-```
-======================================================================
-  PIPELINE MONITORING DASHBOARD - Last 24 Hours
-======================================================================
-
-OVERALL STATISTICS
-   Total Requests:      150
-   Success Rate:        92.3%
-   Avg Processing Time: 12.5s
-   Total Jobs Processed: 450
-
-REQUESTS BY STATUS
-╔═══════════╦═══════╗
-║ Status    ║ Count ║
-╠═══════════╬═══════╣
-║ Completed ║   120 ║
-║ Failed    ║    10 ║
-║ Skipped   ║    15 ║
-╚═══════════╩═══════╝
-```
-
-### Monitoring API Endpoints
-
-**1. Monitoring Summary**
-```bash
-curl http://localhost:8000/monitor/summary?hours=24 | jq
-```
-
-**Response:**
+**Expected Response:**
 ```json
 {
-  "time_period_hours": 24,
-  "total_requests": 250,
-  "by_status": {
-    "completed": 200,
-    "failed": 15,
-    "skipped": 25
-  },
-  "success_rate": 93.0,
-  "avg_processing_time_seconds": 14.2
+  "status": "success",
+  "message": "Pipeline logs queued for extraction",
+  "pipeline_id": 123,
+  "project_id": 789
 }
 ```
 
-**2. Recent Requests**
+## 5.3 Database Maintenance
+
+### SQLite Maintenance
+
+#### Daily Tasks
+
+**Check Database Health:**
 ```bash
-curl http://localhost:8000/monitor/recent?limit=10 | jq
+./scripts/manage_database.sh check
 ```
 
-**3. Pipeline Details**
-```bash
-curl http://localhost:8000/monitor/pipeline/12345 | jq
+**Example Output:**
+```
+Database Health Check
+====================
+Database: logs/monitoring.db
+Size: 12.5 MB
+Total Requests: 1,234
+Status: Healthy
+WAL Mode: Enabled
 ```
 
-**4. Export to CSV**
+#### Weekly Tasks
+
+**Create Backup:**
 ```bash
-curl -O http://localhost:8000/monitor/export/csv?hours=24
+# Automatic backup with timestamp
+./scripts/manage_database.sh backup weekly
 ```
 
-### Database Queries
-
+**List Backups:**
 ```bash
-# Connect to database
-sqlite3 logs/monitoring.db
-
-# Total requests
-SELECT COUNT(*) FROM requests;
-
-# Requests by status
-SELECT status, COUNT(*) as count
-FROM requests
-GROUP BY status
-ORDER BY count DESC;
-
-# Average processing time
-SELECT AVG(processing_time) as avg_time
-FROM requests
-WHERE status = 'completed';
-
-# Failed pipelines
-SELECT pipeline_id, error_message, timestamp
-FROM requests
-WHERE status = 'failed'
-ORDER BY timestamp DESC
-LIMIT 10;
+./scripts/manage_database.sh list
 ```
 
-### Real-World Examples
-
-#### Example 1: Check Today's Activity
-
-```bash
-# View dashboard
-python scripts/monitor_dashboard.py --hours 24
-
-# Export to CSV
-python scripts/monitor_dashboard.py --export today.csv --hours 24
-
-# Check via API
-curl http://localhost:8000/monitor/summary?hours=24 | jq
+**Example Output:**
+```
+Available Backups:
+- monitoring_backup_2025-12-30_10-30-00.db (12.5 MB)
+- monitoring_backup_2025-12-23_10-30-00.db (11.2 MB)
+- monitoring_backup_2025-12-16_10-30-00.db (10.8 MB)
 ```
 
-#### Example 2: Troubleshoot Failed Pipeline
+#### Monthly Tasks
 
+**Vacuum Database:**
 ```bash
-# Find pipeline in recent requests
-python scripts/monitor_dashboard.py --recent 100 | grep failed
-
-# Get details for specific pipeline
-python scripts/monitor_dashboard.py --pipeline 12345
-
-# Or via API
-curl http://localhost:8000/monitor/pipeline/12345 | jq
+sqlite3 logs/monitoring.db "VACUUM;"
 ```
 
-#### Example 3: Track Performance Over Time
-
+**Optimize:**
 ```bash
-# Export last week
-python scripts/monitor_dashboard.py --export week.csv --hours 168
-
-# Open in Excel and create charts for:
-# - Requests per day
-# - Success rate trend
-# - Average processing time
-# - Jobs processed per day
+sqlite3 logs/monitoring.db "PRAGMA optimize;"
 ```
 
-#### Example 4: Monitor Active Processing
+**Archive Old Data:**
+```sql
+-- Delete requests older than 90 days
+DELETE FROM requests WHERE timestamp < datetime('now', '-90 days');
 
-```bash
-# Check current processing
-sqlite3 logs/monitoring.db "
-SELECT pipeline_id, status, timestamp
-FROM requests
-WHERE status = 'processing'
-ORDER BY timestamp DESC;
-"
+-- Vacuum after deletion
+VACUUM;
 ```
 
-#### Example 5: Generate Weekly Report
+### Backup & Restore
 
+**Manual Backup:**
 ```bash
-# Get summary for last 7 days
-curl http://localhost:8000/monitor/summary?hours=168 | jq '
-{
-  period: "Last 7 days",
-  total_requests: .total_requests,
-  success_rate: "\(.success_rate)%",
-  total_jobs: .total_jobs_processed,
-  avg_time: "\(.avg_processing_time_seconds)s",
-  breakdown: .by_status
-}' | tee weekly_report.json
+# Create backup
+./scripts/manage_database.sh backup manual
 
-# Export detailed data
-python scripts/monitor_dashboard.py --export weekly_data.csv --hours 168
+# With custom name
+cp logs/monitoring.db backups/monitoring_$(date +%Y%m%d).db
 ```
 
-### Real-Time Monitoring
-
-**Watch Mode (Linux/Mac):**
-
-Continuously monitor the dashboard in real-time:
-
+**Restore from Backup:**
 ```bash
-# Refresh dashboard every 30 seconds
-watch -n 30 python scripts/monitor_dashboard.py
-
-# Monitor processing requests via API
-watch -n 5 'curl -s http://localhost:8000/monitor/summary | jq .by_status'
+./scripts/manage_database.sh restore monitoring_backup_2025-12-30.db
 ```
 
-**Tail Logs + Monitor:**
-
-Monitor logs and metrics simultaneously:
-
+**Automated Backup Script:**
 ```bash
-# Terminal 1: Watch application logs
-tail -f logs/application.log | grep "pipeline"
-
-# Terminal 2: Monitor API requests
-tail -f logs/api-requests.log
-
-# Terminal 3: Watch dashboard
-watch -n 15 python scripts/monitor_dashboard.py --recent 20
-```
-
-**Automated Alerting:**
-
-```bash
-# Simple script to alert on failures
 #!/bin/bash
-while true; do
-  FAILURES=$(curl -s http://localhost:8000/monitor/summary?hours=1 | jq '.by_status.failed')
-  if [ "$FAILURES" -gt 5 ]; then
-    echo "ALERT: $FAILURES failed pipelines in last hour" | mail -s "Pipeline Alert" admin@example.com
-  fi
-  sleep 300  # Check every 5 minutes
-done
+# Add to crontab: 0 2 * * * /path/to/backup.sh
+
+BACKUP_DIR="/backups/gitlab-log-extractor"
+DB_PATH="/home/user/extract-build-logs/logs/monitoring.db"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/monitoring_$TIMESTAMP.db"
+
+# Create backup
+cp "$DB_PATH" "$BACKUP_FILE"
+
+# Compress
+gzip "$BACKUP_FILE"
+
+# Delete backups older than 30 days
+find "$BACKUP_DIR" -name "monitoring_*.db.gz" -mtime +30 -delete
+
+echo "Backup created: $BACKUP_FILE.gz"
 ```
 
----
+## 5.4 Troubleshooting & Common Issues
 
-## 6.4 Common Issues & Solutions
+### Server Won't Start
 
-### Issue 1: Port Already in Use
+**Issue:** Port already in use
+```
+ERROR: Port 8000 is already in use
+```
 
+**Solution:**
 ```bash
-# Find process using port
+# Check what's using the port
 lsof -i :8000
 
 # Kill the process
 kill -9 <PID>
 
-# Or change port in .env
-echo "WEBHOOK_PORT=8001" >> .env
+# Or change WEBHOOK_PORT in .env
+WEBHOOK_PORT=8001
 ```
 
-### Issue 2: Import Errors
+---
 
-```bash
-# Problem:
-# ModuleNotFoundError: No module named 'fastapi'
-
-# Solution: Install dependencies
-pip install -r requirements.txt
-
-# Verify installation
-pip show fastapi
-
-# If still failing, check Python path
-which python
-echo $PYTHONPATH
+**Issue:** Permission denied
+```
+ERROR: Permission denied: '/app/logs/application.log'
 ```
 
-### Issue 3: Configuration Not Found
-
+**Solution:**
 ```bash
-# Problem:
-# ValueError: GITLAB_URL environment variable is required
-
-# Solution 1: Check .env file exists
-ls -la .env
-
-# Solution 2: Verify .env content
-cat .env
-
-# Solution 3: Export variables manually
-export GITLAB_URL=https://gitlab.com
-export GITLAB_TOKEN=your_token
-
-# Solution 4: Load .env explicitly
-python -c "from dotenv import load_dotenv; load_dotenv(); import os; print(os.getenv('GITLAB_URL'))"
-```
-
-### Issue 4: GitLab API Authentication Failed
-
-```bash
-# Verify token is valid
-curl --header "PRIVATE-TOKEN: $GITLAB_TOKEN" \
-  "https://gitlab.com/api/v4/user"
-
-# Check token has 'api' scope in GitLab settings
-```
-
-### Issue 5: Logs Not Being Saved
-
-```bash
-# Check directory exists and permissions
+# Check permissions
 ls -la logs/
+
+# Fix permissions
 chmod 755 logs/
+chmod 644 logs/*.log
 
-# Verify LOG_OUTPUT_DIR in .env
-cat .env | grep LOG_OUTPUT_DIR
-
-# Check server logs for errors
-tail -f logs/application.log
+# For Docker
+./manage_container.py stop
+rm -rf logs/*
+./manage_container.py start
 ```
 
-### Issue 6: Database/Connection Errors
+### Webhook Returns 401
 
+**Issue:** Secret token mismatch
+
+**Solution:**
+1. Verify `WEBHOOK_SECRET` in `.env` matches GitLab webhook secret
+2. Check for extra spaces or newlines
+3. Regenerate secret if needed:
 ```bash
-# Problem:
-# Connection timeout to GitLab API
+# Generate new secret
+openssl rand -hex 32
 
-# Solution 1: Check network connectivity
-ping gitlab.com
+# Update .env
+WEBHOOK_SECRET=<new_secret>
+
+# Update GitLab webhook configuration
+# Restart server
+```
+
+### Logs Not Being Saved
+
+**Issue:** Logs filtered by configuration
+
+**Check Configuration:**
+```bash
+grep "LOG_SAVE" .env
+```
+
+**Common Causes:**
+- `LOG_SAVE_PIPELINE_STATUS=failed` but pipeline succeeded
+- `LOG_SAVE_PROJECTS` doesn't include project ID
+- `LOG_EXCLUDE_PROJECTS` includes project ID
+
+**Check Application Logs:**
+```bash
+grep "skipped by filter" logs/application.log
+```
+
+**Example:**
+```
+2025-12-30 10:20:15.456 | INFO | src.webhook_listener | a1b2c3d4 | Pipeline 123 status: success - logs skipped by filter (only saving failed)
+```
+
+---
+
+**Issue:** Permission denied writing logs
+
+**Solution:**
+```bash
+# Check directory exists and is writable
+ls -la logs/
+
+# Create directory
+mkdir -p logs
+chmod 755 logs
+
+# For Docker, let manage_container.py handle it
+./manage_container.py start
+```
+
+### API Calls Failing
+
+**Issue:** Invalid GitLab token
+
+**Check Token:**
+```bash
+# Test token manually
+curl -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" https://gitlab.com/api/v4/user
+```
+
+**Expected Response:**
+```json
+{
+  "id": 123,
+  "username": "your_username",
+  ...
+}
+```
+
+**If Invalid:**
+1. Verify token has `api` scope
+2. Check token hasn't expired
+3. Generate new token in GitLab → Profile → Access Tokens
+
+---
+
+**Issue:** Connection timeouts
+
+**Check Connectivity:**
+```bash
+# Test GitLab connectivity
 curl -I https://gitlab.com
 
-# Solution 2: Check firewall rules
-# Allow outbound HTTPS (443) to GitLab
+# Test from container
+docker exec bfa-gitlab-pipeline-extractor curl -I https://gitlab.com
+```
 
-# Solution 3: Increase retry settings in .env
+**Check Logs:**
+```bash
+grep "Connection timeout" logs/application.log
+grep "retry" logs/application.log
+```
+
+**Increase Timeout:**
+```bash
+# In .env
 RETRY_ATTEMPTS=5
-RETRY_DELAY=3
-
-# Solution 4: Test API directly
-curl -v "https://gitlab.com/api/v4/projects"
+RETRY_DELAY=5
 ```
 
----
+### API Posting Failures
 
-# 7. Database Maintenance
+**Issue:** API endpoint not reachable
 
-## Quick Start
-
-For common database operations, use the **`manage_database.sh` script** which simplifies most tasks:
-
+**Check Configuration:**
 ```bash
-# Database Operations
-./scripts/manage_database.sh backup daily       # Create backup
-./scripts/manage_database.sh restore <file>     # Restore from backup
-./scripts/manage_database.sh check              # Health check
-./scripts/manage_database.sh list               # List backups
+grep "BFA_HOST" .env
+grep "API_POST" .env
 ```
 
-## Debug Commands
-
-Useful commands for debugging SQLite database issues:
-
+**Test API Endpoint:**
 ```bash
-# Check database file size
-du -h logs/monitoring.db*
-
-# Check database integrity
-sqlite3 logs/monitoring.db "PRAGMA integrity_check;"
-
-# Check database version
-sqlite3 logs/monitoring.db "SELECT sqlite_version();"
-
-# Check WAL mode status
-sqlite3 logs/monitoring.db "PRAGMA journal_mode;"
-
-# Check database configuration
-sqlite3 logs/monitoring.db "PRAGMA compile_options;"
-
-# View database schema
-sqlite3 logs/monitoring.db ".schema"
-
-# Count total records
-sqlite3 logs/monitoring.db "SELECT COUNT(*) FROM requests;"
-
-# Check recent activity
-sqlite3 logs/monitoring.db "SELECT COUNT(*) FROM requests WHERE timestamp > datetime('now', '-1 hour');"
+curl -I http://${BFA_HOST}:8000/api/analyze
 ```
 
-## 7.1 SQLite Maintenance
-
-### Daily Tasks
-
-**Backup Database:**
+**Check API Logs:**
 ```bash
-# Online backup (no downtime)
-sqlite3 logs/monitoring.db ".backup logs/monitoring.db.backup_$(date +%Y%m%d)"
-
-# Compressed backup
-sqlite3 logs/monitoring.db ".dump" | gzip > backup_$(date +%Y%m%d).sql.gz
+tail -f logs/api-requests.log
 ```
 
-**Check Database Size:**
-```bash
-# Database file size
-du -h logs/monitoring.db*
-
-# Row count
-sqlite3 logs/monitoring.db "
-SELECT COUNT(*) as total_requests FROM requests;
-"
+**Example Failure:**
 ```
-
-### Weekly Tasks
-
-**VACUUM Database (Reclaim Space):**
-```bash
-# Full vacuum
-sqlite3 logs/monitoring.db "VACUUM;"
-
-# Check size before and after
-du -h logs/monitoring.db
+[2025-12-30 10:20:20] PIPELINE_ID=123 URL=http://api.example.com/analyze STATUS=500 ERROR="Internal Server Error"
 ```
-
-**Integrity Check:**
-```bash
-sqlite3 logs/monitoring.db "PRAGMA integrity_check;"
-# Expected output: "ok"
-```
-
-**Analyze Statistics:**
-```bash
-sqlite3 logs/monitoring.db "ANALYZE;"
-```
-
-### Monthly Tasks
-
-**Archive Old Data:**
-```bash
-# Export old data to CSV
-sqlite3 -header -csv logs/monitoring.db "
-SELECT * FROM requests
-WHERE timestamp < datetime('now', '-90 days')
-" > archive_$(date +%Y%m%d).csv
-
-# Delete old data
-sqlite3 logs/monitoring.db "
-DELETE FROM requests WHERE timestamp < datetime('now', '-90 days');
-VACUUM;
-"
-```
-
-### WAL Mode Maintenance
-
-**Check WAL status:**
-```bash
-sqlite3 logs/monitoring.db "PRAGMA journal_mode;"
-# Should show: wal
-```
-
-**Checkpoint WAL (merge WAL into main database):**
-```bash
-sqlite3 logs/monitoring.db "PRAGMA wal_checkpoint(TRUNCATE);"
-```
-
-**Why WAL checkpoint matters:**
-- Merges write-ahead log into main database file
-- Prevents WAL file from growing too large
-- Recommended before backups for consistency
-- Run weekly or when WAL file exceeds 10MB
-
----
-
-## 7.2 Backup & Restore
-
-### Backup Strategies
-
-**Daily Backups (Recommended):**
-
-```bash
-#!/bin/bash
-# backup-daily.sh
-
-BACKUP_DIR="/backups/daily"
-RETENTION_DAYS=7
-
-mkdir -p $BACKUP_DIR
-
-# SQLite backup
-sqlite3 logs/monitoring.db ".backup $BACKUP_DIR/sqlite_$(date +%Y%m%d).db"
-
-# Delete old backups
-find $BACKUP_DIR -name "*.db" -mtime +$RETENTION_DAYS -delete
-
-echo "Backup completed: $(date)"
-```
-
-**Schedule with cron:**
-```bash
-# Run daily at 2 AM
-0 2 * * * /path/to/backup-daily.sh >> /var/log/backup.log 2>&1
-```
-
-**Cloud Backups (S3/Cloud Storage):**
-
-For production environments, backup to cloud storage for disaster recovery:
-
-```bash
-#!/bin/bash
-# backup-to-s3.sh
-
-BACKUP_FILE="backup_$(date +%Y%m%d_%H%M%S).db"
-
-# Create backup
-sqlite3 logs/monitoring.db ".backup /tmp/$BACKUP_FILE"
-
-# Upload to S3 (requires aws cli)
-aws s3 cp /tmp/$BACKUP_FILE s3://your-bucket/pipeline-logs/
-
-# Cleanup local
-rm /tmp/$BACKUP_FILE
-
-echo "Backup uploaded to S3: $BACKUP_FILE"
-```
-
-**Schedule cloud backups:**
-```bash
-# Daily at 3 AM
-0 3 * * * /path/to/backup-to-s3.sh >> /var/log/s3-backup.log 2>&1
-```
-
-**Prerequisites:**
-- AWS CLI installed: `pip install awscli`
-- AWS credentials configured: `aws configure`
-- S3 bucket created with appropriate permissions
-
-### Restore Procedures
-
-**From Backup File:**
-```bash
-# Stop service
-./manage_container.py stop
-
-# Replace database
-cp logs/monitoring.db.backup_20250105 logs/monitoring.db
-
-# Remove WAL files
-rm logs/monitoring.db-wal
-rm logs/monitoring.db-shm
-
-# Start service
-./manage_container.py start
-```
-
-**From SQL Dump:**
-```bash
-./manage_container.py stop
-
-# Remove old database
-rm logs/monitoring.db*
-
-# Restore from dump
-gunzip -c backup_20250105.sql.gz | sqlite3 logs/monitoring.db
-
-./manage_container.py start
-```
-
-### Automated Backup Scripts
-
-**Using Database Management Script:**
-
-```bash
-# Daily backup (keeps last 7)
-./scripts/manage_database.sh backup daily
-
-# Weekly backup (keeps last 4)
-./scripts/manage_database.sh backup weekly
-
-# Monthly backup (keeps last 6)
-./scripts/manage_database.sh backup monthly
-
-# List available backups
-./scripts/manage_database.sh list
-
-# Restore from backup
-./scripts/manage_database.sh restore backups/daily/sqlite_20250107.db
-```
-
-**Cron Schedule:**
-```bash
-# Daily backup at 2 AM
-0 2 * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup daily
-
-# Weekly backup on Sunday at 3 AM
-0 3 * * 0 cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup weekly
-
-# Monthly backup on 1st at 4 AM
-0 4 1 * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup monthly
-```
-
-## 7.3 Health Checks
-
-### Database Health Check
-
-```bash
-# Run health check
-./scripts/manage_database.sh check
-```
-
-**Example output:**
-```
-===================================
-Database Health Check
-Type: sqlite
-Date: Thu Jan  7 10:30:00 UTC 2025
-===================================
-
-SQLite Health Check
--------------------
-Database connection: ✓ OK
-Requests table: ✓ OK (1234 rows)
-Recent activity (last hour): ✓ 45 requests
-Database size: ✓ 12 MB
-Integrity check: ✓ OK
-WAL mode: ✓ Enabled
-
-===================================
-✓ Health Check: PASSED
-===================================
-```
-
-**Schedule with cron:**
-```bash
-# Every hour
-0 * * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh check >> /var/log/db-health.log 2>&1
-```
-
-### Database Best Practices
-
-**SQLite:**
-1. Always stop service before file-based backups
-2. Use WAL mode (enabled by default)
-3. Regular VACUUM - weekly for active databases
-4. Keep database small - archive data older than 90 days
-5. Integrity checks - weekly minimum
-6. Single writer - don't run multiple instances
-
-**General:**
-1. Test restores - backup is only good if restore works
-2. Monitor disk space - keep 50% free for database operations
-3. Automate backups - don't rely on manual processes
-4. Off-site backups - copy to cloud/remote location
-5. Document procedures - ensure team knows how to restore
-6. Monitor logs - check backup logs daily for failures
-7. Regular VACUUM - keeps database file size optimized
-8. Integrity checks - detect corruption early with weekly checks
-
-## 7.4 Database Troubleshooting
-
-### Issue: Database is Locked
-
-**Symptoms:**
-```
-database is locked
-```
-
-**Causes:**
-- Long-running queries
-- Multiple processes accessing the database
-- Stale WAL file
 
 **Solutions:**
-
+1. Verify BFA_HOST is correct
+2. Check API endpoint is running
+3. Verify network connectivity
+4. Check BFA_SECRET_KEY is valid
+5. Enable fallback to file storage:
 ```bash
-# Check for long-running processes
-lsof logs/monitoring.db
+API_POST_SAVE_TO_FILE=true  # Dual mode
+```
 
-# Force checkpoint WAL
-sqlite3 logs/monitoring.db "PRAGMA wal_checkpoint(TRUNCATE);"
+### High Memory Usage
 
-# Check if service is still running
+**Check Memory Usage:**
+```bash
 ./manage_container.py status
-
-# If necessary, restart service
-./manage_container.py restart
 ```
-
-### Issue: Database Corruption
-
-**Symptoms:**
-```
-database disk image is malformed
-integrity_check fails
-```
-
-**Causes:**
-- Disk I/O errors
-- Power failure during write
-- File system corruption
 
 **Solutions:**
-
-**Step 1: Try recovery**
+1. Reduce log retention period
+2. Enable log filtering to reduce logs saved
+3. Increase Docker memory limit:
 ```bash
-# Attempt SQLite recovery
-sqlite3 logs/monitoring.db ".recover" | sqlite3 recovered.db
+# In manage_container.py or docker-compose.yml
+mem_limit: 2g
+```
 
-# If recovery works:
+### Database Issues
+
+**Issue:** Database locked
+
+**Check:**
+```bash
+# See if database is in use
+lsof logs/monitoring.db
+```
+
+**Solution:**
+```bash
+# Stop all processes using database
 ./manage_container.py stop
-mv logs/monitoring.db logs/monitoring.db.corrupt
-mv recovered.db logs/monitoring.db
+
+# Check for WAL files
+ls -la logs/monitoring.db*
+
+# Restart
 ./manage_container.py start
 ```
-
-**Step 2: Restore from backup**
-```bash
-# If recovery fails, restore from backup
-./manage_container.py stop
-cp logs/monitoring.db.backup_YYYYMMDD logs/monitoring.db
-
-# Remove WAL files
-rm logs/monitoring.db-wal
-rm logs/monitoring.db-shm
-
-# Restart service
-./manage_container.py start
-```
-
-**Prevention:**
-- Regular backups (automated via cron)
-- Integrity checks (weekly)
-- Monitor disk health
-- Use reliable storage (avoid NFS for SQLite)
-
-### Issue: Slow Queries
-
-**Symptoms:**
-- Monitoring dashboard slow to load
-- API endpoints timeout
-- High CPU usage
-
-**Causes:**
-- Large database file
-- Missing indexes (not applicable in simple schema)
-- Fragmentation
-- Too many old records
-
-**Solutions:**
-
-**Step 1: Check database size**
-```bash
-# Check file size
-du -h logs/monitoring.db
-
-# Count records
-sqlite3 logs/monitoring.db "SELECT COUNT(*) FROM requests;"
-```
-
-**Step 2: Run VACUUM to optimize**
-```bash
-sqlite3 logs/monitoring.db "VACUUM;"
-
-# This can take several minutes for large databases
-# Expected size reduction: 20-50%
-```
-
-**Step 3: Rebuild indexes**
-```bash
-sqlite3 logs/monitoring.db "REINDEX;"
-```
-
-**Step 4: Archive old data**
-```bash
-# Archive data older than 90 days
-sqlite3 -header -csv logs/monitoring.db "
-SELECT * FROM requests
-WHERE timestamp < datetime('now', '-90 days')
-" > archive_$(date +%Y%m%d).csv
-
-# Delete old records
-sqlite3 logs/monitoring.db "
-DELETE FROM requests WHERE timestamp < datetime('now', '-90 days');
-VACUUM;
-"
-```
-
-**Step 5: Check query performance**
-```bash
-# Enable query timer
-sqlite3 logs/monitoring.db
-.timer ON
-.stats ON
-
-# Run slow query to identify bottleneck
-SELECT status, COUNT(*) FROM requests GROUP BY status;
-```
-
-**Prevention:**
-- Regular VACUUM (weekly)
-- Archive old data (monthly)
-- Monitor database size
-- Set up automated cleanup
 
 ---
 
-# 8. Appendices
+**Issue:** Database corruption
 
-## 8.1 FAQ
+**Symptoms:**
+```
+ERROR: database disk image is malformed
+```
 
-**Q: What are the webhook endpoints?**
-A:
-- GitLab: `http://your-host:8000/webhook/gitlab`
-- Jenkins: `http://your-host:8000/webhook/jenkins`
+**Recovery:**
+```bash
+# Create backup
+cp logs/monitoring.db logs/monitoring.db.corrupt
 
-**Q: How do I test the webhook?**
-A: Run `./manage_container.py test` to send a test webhook
+# Try to recover
+sqlite3 logs/monitoring.db ".recover" | sqlite3 logs/monitoring_recovered.db
 
-**Q: Where are logs stored?**
-A: In `logs/` directory:
-- `application.log` - All application logs (DEBUG level)
-- `api-requests.log` - API posting requests/responses
-- `monitoring.db` - SQLite database with request tracking
+# If recovery works, replace
+mv logs/monitoring_recovered.db logs/monitoring.db
 
-**Q: Can I query the database while server is running?**
-A: Yes, SQLite with WAL mode supports concurrent reads
+# If recovery fails, restore from backup
+./scripts/manage_database.sh restore monitoring_backup_latest.db
+```
 
-**Q: How long is data kept?**
-A:
-- Logs: Automatically rotated based on size
-- Monitoring data: Forever, unless manually cleaned via `cleanup_old_records()`
+---
 
-**Q: What does the remove command do?**
-A: Interactively asks what to remove:
-- Container only (keeps image)
-- Container and image
-- Logs are always preserved
+# 6. Reference
 
-**Q: How to backup data?**
-A:
-- Logs: `tar -czf logs_backup.tar.gz ./logs`
-- Database: `./scripts/manage_database.sh backup daily`
+## 6.1 Development & Contributing
 
-## 8.2 Security Considerations
+### Development Setup
+
+**1. Clone Repository:**
+```bash
+git clone <repository-url>
+cd extract-build-logs
+```
+
+**2. Create Development Environment:**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+pip install pytest pytest-cov flake8 pylint
+```
+
+**3. Run in Development Mode:**
+```bash
+# With auto-reload
+uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
+```
+
+### Adding New Features
+
+**1. Create Feature Branch:**
+```bash
+git checkout -b feature/your-feature-name
+```
+
+**2. Write Code:**
+- Add code in `src/`
+- Follow existing code style
+- Add docstrings
+- Handle errors appropriately
+
+**3. Write Tests:**
+- Add tests in `tests/`
+- Aim for >80% coverage
+- Test success and error cases
+
+**4. Run Tests:**
+```bash
+pytest tests/ --cov=src --cov-report=term-missing
+flake8 src/ tests/
+pylint src/
+```
+
+**5. Update Documentation:**
+- Update README.md if needed
+- Update DOCUMENTATION.md with new features
+- Add configuration examples
+
+**6. Create Pull Request:**
+- Push changes to your branch
+- Create PR with clear description
+- Include test results
+
+### Code Style
+
+- Follow PEP 8
+- Use type hints where appropriate
+- Maximum line length: 120 characters
+- Use meaningful variable names
+- Add comments for complex logic
+
+## 6.2 Security Considerations
 
 ### Protecting Secrets
 
-**Never commit to version control:**
-- `.env` file (contains tokens and secrets)
-- `logs/` directory
+**Never commit secrets to version control:**
+- .env file is in .gitignore
+- Use environment variables
+- Use Docker secrets in production
 
-**Verify .gitignore:**
-```
-.env
-logs/
-*.log
-```
-
-**File Permissions:**
+**Rotate Secrets Regularly:**
 ```bash
-.env            → 644 (rw-r--r--)
-logs/           → 755 (rwxr-xr-x)
-manage_container.py → 755 (rwxr-xr-x)
+# Generate new secret
+openssl rand -hex 32
+
+# Update .env
+WEBHOOK_SECRET=new_secret
+
+# Update GitLab webhook configuration
 ```
 
 ### Network Security
 
-**Firewall rules:**
+**Firewall Rules:**
 ```bash
 # Allow only GitLab server IP
 sudo ufw allow from <gitlab-server-ip> to any port 8000
@@ -3553,205 +2337,72 @@ sudo ufw allow from <gitlab-server-ip> to any port 8000
 # Or use nginx reverse proxy with SSL
 ```
 
-**HTTPS in Production:**
-- Use reverse proxy (nginx) with SSL certificate
+**HTTPS/SSL:**
+- Use reverse proxy (nginx, Apache) for SSL termination
+- Enable SSL verification in GitLab webhook
 - Use Let's Encrypt for free SSL certificates
-- Always use HTTPS for webhook URLs
 
-### Better Alternatives (Future Improvements)
+### Sensitive Data Masking
 
-For enhanced security in future deployments, consider these alternatives:
-
-**1. Run container as specific UID:**
-```python
-# In manage_container.py container configuration
-user='1000:1000'  # Run as specific user's UID instead of root
+All tokens are automatically masked in logs using `[REDACTED***]` format:
+```
+GitLab Token: glpa...[REDACTED***]vf1
+BFA Secret Key: secr...[REDACTED***]key
 ```
 
-**Benefits:**
-- Eliminates need for root inside container
-- Better security isolation
-- No namespace remapping issues
+## 6.3 FAQ
 
-**2. Use Docker Secrets:**
-```bash
-# Create secret
-docker secret create gitlab_token .env
+**Q: Can I run multiple instances?**
+A: Yes, but they need separate ports or load balancer. Each tracks its own requests.
 
-# Reference in container
-docker run ... --secret gitlab_token ...
-```
+**Q: What happens if the server crashes during processing?**
+A: Webhook responses are non-blocking. GitLab/Jenkins won't retry, but the request is logged in monitoring.db.
 
-**Benefits:**
-- Secrets encrypted at rest
-- No plain text files
-- Better for Docker Swarm/Kubernetes
+**Q: How much storage do logs require?**
+A: Depends on pipeline frequency and log filtering. Example: 100 pipelines/day × 5 jobs × 100KB/job = ~50MB/day
 
-**3. Pass environment variables directly:**
-```python
-# In manage_container.py
-environment={
-    'GITLAB_URL': 'https://gitlab.example.com',
-    'GITLAB_TOKEN': os.environ.get('GITLAB_TOKEN'),
-    # ... other vars
-}
-```
+**Q: Can I delete old logs safely?**
+A: Yes. Delete old pipeline directories in logs/. The monitoring database tracks all requests regardless.
 
-**Benefits:**
-- No .env file mounting needed
-- Can use external secret managers (Vault, AWS Secrets Manager)
-- Easier CI/CD integration
+**Q: Does it support GitLab self-hosted?**
+A: Yes. Set `GITLAB_URL` to your GitLab instance URL.
 
-**Implementation Note:** These alternatives require code modifications but provide better security and operational characteristics for production environments.
+**Q: Can I use it without Docker?**
+A: Yes. See [Manual Installation](#22-manual-installation) section.
+
+**Q: How do I upgrade to a new version?**
+A: Pull new code, rebuild Docker image, restart container. Logs and monitoring database are preserved.
+
+## 6.4 API Design History
+
+### Version 1.0 (Initial Release)
+- Basic webhook receiving
+- File-based log storage
+- Simple error handling
+
+### Version 2.0 (API Posting)
+- Added API posting capability
+- Dual mode (API + file)
+- JWT authentication support
+- Request/response logging
+
+### Version 3.0 (Current)
+- Improved logging with request ID tracking
+- Log filtering by status/project/job
+- Jenkins integration
+- Enhanced monitoring dashboard
+- Reorganized documentation
 
 ---
 
-## 8.3 Getting Help
+**End of Documentation**
 
-1. **Check Logs**: Always check `logs/application.log` first
-2. **View Container Status**: Run `./manage_container.py status`
-3. **Test Endpoints**: Run `./manage_container.py test`
-4. **Enable Debug Logging**: Set `LOG_LEVEL=DEBUG` in .env
-5. **Check GitHub Issues**: Look for similar problems
+For quick reference, see [README.md](README.md)
 
-**When reporting issues, include:**
-- Python version
-- Operating system
-- Error messages from logs
-- Container status output
-- Configuration (with secrets redacted)
+**Support:**
+- Report issues in the repository
+- Check logs for troubleshooting
+- Review this documentation
 
-### External Documentation
-
-**Official Documentation:**
-- [Docker Documentation](https://docs.docker.com/) - Container deployment and management
-- [GitLab Webhooks](https://docs.gitlab.com/ee/user/project/integrations/webhooks.html) - Webhook configuration and testing
-- [SQLite Documentation](https://www.sqlite.org/docs.html) - Database operations and maintenance
-  - [SQLite Backup](https://www.sqlite.org/backup.html) - Backup strategies
-  - [SQLite WAL Mode](https://www.sqlite.org/wal.html) - Write-Ahead Logging
-
-**Related Tools:**
-- [FastAPI Documentation](https://fastapi.tiangolo.com/) - For implementing API receivers
-- [Jenkins Documentation](https://www.jenkins.io/doc/) - CI/CD server integration
-
----
-
-## 8.4 API Design History
-
-### Original Design (v1.0)
-
-The API posting feature was originally designed to send complete pipeline logs with full job output to external APIs. Below is the historical design documentation preserved for reference.
-
-#### Design Overview
-
-**Goal:** POST pipeline logs to an API endpoint instead of/in addition to saving to files.
-
-**Approach:** Batch all jobs for a pipeline into ONE API call with complete log content.
-
-#### Original Payload Format (v1.0 - Legacy)
-
-```json
-{
-  "pipeline_id": 12345,
-  "project_id": 123,
-  "project_name": "my-app",
-  "status": "success",
-  "ref": "main",
-  "sha": "abc123def456...",
-  "source": "push",
-  "pipeline_type": "main",
-  "created_at": "2024-01-01T00:00:00Z",
-  "finished_at": "2024-01-01T00:02:00Z",
-  "duration": 120.5,
-  "user": {
-    "name": "John Doe",
-    "email": "john@example.com"
-  },
-  "stages": ["build", "test", "deploy"],
-  "jobs": [
-    {
-      "job_id": 456,
-      "job_name": "build:production",
-      "log_content": "Full build logs here...",
-      "status": "success",
-      "stage": "build",
-      "created_at": "2024-01-01T00:00:00Z",
-      "started_at": "2024-01-01T00:00:05Z",
-      "finished_at": "2024-01-01T00:01:05Z",
-      "duration": 60.2,
-      "ref": "main"
-    }
-  ]
-}
-```
-
-**Issues with v1.0:**
-- Large payload sizes (1-25 MB for typical pipelines)
-- Network transfer overhead
-- Included full logs with success messages mixed with errors
-- Included all jobs (successful and failed)
-
-#### Evolution to v2.0
-
-**Motivation:** Reduce payload size by 97-99% and focus on actionable error data.
-
-**Changes in v2.0:**
-1. **Simplified structure** - Removed timestamps, durations, stages metadata
-2. **Error extraction** - Parse logs to extract only error lines
-3. **Failed jobs only** - Include only failed steps in `failed_steps` array
-4. **Short identifiers** - 7-char commit SHA, repo name without org
-5. **Error cleaning** - Remove timestamps, ANSI codes, duplicates from error lines
-
-**Result:** Typical payload reduced from 30KB-25MB to 1-15KB (97-99% reduction)
-
-#### Implementation Details
-
-**Files Modified:**
-- `src/config_loader.py` - API configuration fields
-- `src/api_poster.py` - API posting logic with v2.0 format
-- `src/webhook_listener.py` - Integration with pipeline processing
-- `.env.example` - Configuration examples
-- Documentation (this file)
-
-**Implemented:** 2025-11-04
-**Updated to v2.0:** 2025-11-07
-
-#### Design Decisions
-
-**Q: One API call per pipeline vs. one per job?**
-A: One per pipeline (batched) to reduce API calls and provide complete context.
-
-**Q: Log to file or database?**
-A: Log to `logs/api-requests.log` file for simplicity and separation of concerns.
-
-**Q: Compress large payloads?**
-A: Not needed with v2.0 format (payloads now <15KB). Can add if required later.
-
-**Q: Retry logic?**
-A: Yes, exponential backoff with configurable retries (default: 3 attempts, 2/4/8s delays).
-
-**Q: Fallback on failure?**
-A: Controlled by `API_POST_SAVE_TO_FILE` setting. If true, saves to files on API failure.
-
-#### Behavior Characteristics
-
-- **Batch Processing:** All jobs sent in single API request
-- **Retry Logic:** Uses existing error handler with exponential backoff
-- **Fallback:** Optional file storage if API fails
-- **Continue on Error:** Logs error and continues (doesn't crash)
-- **Filtering:** Respects LOG_SAVE_PIPELINE_STATUS and other filters
-- **Error Handling:** Graceful degradation if API unavailable
-
-#### Future Enhancements (Potential)
-
-- Payload compression (gzip) for very large error outputs
-- Webhook-style confirmation/acknowledgment from receiving API
-- Batch multiple pipelines in single API call (configurable)
-- Custom payload transformations via plugins
-- Metrics/monitoring dashboard for API posting success rates
-
----
-
-**© 2025 GitLab Pipeline Log Extractor**
-**Documentation Version:** 2.0
-**Last Updated:** 2025-12-29
+**Last Updated:** 2025-12-30
+**Version:** 3.0
