@@ -1,0 +1,18 @@
+{
+  "instances": [
+    {
+      "jenkins_url": "https://jenkins1.example.com",
+      "jenkins_user": "admin",
+      "jenkins_api_token": "your_jenkins_1_api_token_here",
+      "jenkins_webhook_secret": "your_webhook_secret_1",
+      "description": "Main Jenkins instance for Team A"
+    },
+    {
+      "jenkins_url": "https://jenkins2.example.com",
+      "jenkins_user": "ci-user",
+      "jenkins_api_token": "your_jenkins_2_api_token_here",
+      "jenkins_webhook_secret": "your_webhook_secret_2",
+      "description": "Jenkins instance for Team B"
+    }
+  ]
+}
