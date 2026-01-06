@@ -34,32 +34,50 @@ class JenkinsLogFetcher:
     - Fetching build metadata
 
     Attributes:
-        config (Config): Application configuration
+        jenkins_url (str): Jenkins instance URL
         auth (HTTPBasicAuth): Jenkins API authentication
         error_handler (ErrorHandler): Retry handler for failed requests
     """
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Optional[Config] = None, jenkins_url: Optional[str] = None,
+                 jenkins_user: Optional[str] = None, jenkins_api_token: Optional[str] = None,
+                 retry_attempts: int = 3, retry_delay: int = 2):
         """
         Initialize the Jenkins log fetcher.
 
+        Can be initialized either from a Config object or with explicit credentials.
+
         Args:
-            config (Config): Application configuration with Jenkins settings
+            config (Optional[Config]): Application configuration with Jenkins settings
+            jenkins_url (Optional[str]): Jenkins instance URL (alternative to config)
+            jenkins_user (Optional[str]): Jenkins username (alternative to config)
+            jenkins_api_token (Optional[str]): Jenkins API token (alternative to config)
+            retry_attempts (int): Number of retry attempts (default: 3)
+            retry_delay (int): Base delay for retries in seconds (default: 2)
 
         Raises:
-            ValueError: If Jenkins configuration is invalid
+            ValueError: If neither config nor explicit credentials are provided
         """
-        if not config.jenkins_enabled:
-            raise ValueError("Jenkins is not enabled in configuration")
+        if config:
+            # Initialize from config object
+            if not config.jenkins_enabled:
+                raise ValueError("Jenkins is not enabled in configuration")
 
-        self.config = config
-        self.jenkins_url = config.jenkins_url
-        self.auth = HTTPBasicAuth(config.jenkins_user, config.jenkins_api_token)
+            self.jenkins_url = config.jenkins_url
+            self.auth = HTTPBasicAuth(config.jenkins_user, config.jenkins_api_token)
+            retry_attempts = config.retry_attempts
+            retry_delay = config.retry_delay
+        elif jenkins_url and jenkins_user and jenkins_api_token:
+            # Initialize from explicit credentials
+            self.jenkins_url = jenkins_url.rstrip('/')
+            self.auth = HTTPBasicAuth(jenkins_user, jenkins_api_token)
+        else:
+            raise ValueError("Must provide either config or explicit Jenkins credentials")
 
         # Initialize error handler for retries
         self.error_handler = ErrorHandler(
-            max_retries=config.retry_attempts,
-            base_delay=config.retry_delay
+            max_retries=retry_attempts,
+            base_delay=retry_delay
         )
 
         logger.info("Jenkins Log Fetcher initialized for: %s", self.jenkins_url)

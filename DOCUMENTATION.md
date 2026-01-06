@@ -789,7 +789,8 @@ http://your-server:8000/webhook/gitlab
 2025-12-30 10:30:15.125 | INFO  | src.webhook_listener    | c4d5e6f7 | Pipeline queued for processing | pipeline_id=123456
 ```
 
-### Webhook Payload Example
+<details>
+<summary><b>Webhook Payload Example</b></summary>
 
 GitLab sends a JSON payload like this:
 ```json
@@ -809,6 +810,8 @@ GitLab sends a JSON payload like this:
   "builds": [...]
 }
 ```
+
+</details>
 
 <details>
 <summary><b>Troubleshooting</b></summary>
@@ -884,19 +887,22 @@ pipeline {
                 def buildUrl = env.BUILD_URL
                 def jobName = env.JOB_NAME
                 def buildNumber = env.BUILD_NUMBER
+                def jenkinsUrl = env.JENKINS_URL  // Required for multi-instance support
 
                 // Webhook server will fetch logs via Jenkins API
                 sh """
                 curl -X POST http://your-server:8000/webhook/jenkins \
                     -H "Content-Type: application/json" \
                     -H "X-Jenkins-Token: ${JENKINS_WEBHOOK_SECRET}" \
-                    -d '{"job_name":"${jobName}","build_number":${buildNumber},"build_url":"${buildUrl}"}'
+                    -d '{"job_name":"${jobName}","build_number":${buildNumber},"build_url":"${buildUrl}","jenkins_url":"${jenkinsUrl}"}'
                 """
             }
         }
     }
 }
 ```
+
+**Note:** The `jenkins_url` field is required when using multiple Jenkins instances. The system will automatically use the appropriate credentials based on this URL.
 
 ### Example: Jenkins Logs with Parallel Stages
 
@@ -1124,7 +1130,8 @@ LOG_SAVE_METADATA_ALWAYS=true
 
 ## 3.6 Configuration Examples & Scenarios
 
-### Scenario 1: Production - Failed Logs Only
+<details>
+<summary><b>Scenario 1: Production - Failed Logs Only</b></summary>
 
 **Goal:** Save storage by storing only failed pipeline logs.
 
@@ -1140,7 +1147,10 @@ LOG_SAVE_METADATA_ALWAYS=true
 # Storage reduced by ~90%
 ```
 
-### Scenario 2: Development - Specific Projects Only
+</details>
+
+<details>
+<summary><b>Scenario 2: Development - Specific Projects Only</b></summary>
 
 **Goal:** Track only development projects.
 
@@ -1155,7 +1165,10 @@ LOG_SAVE_PROJECTS=123,456,789  # Dev project IDs
 # All other projects ignored
 ```
 
-### Scenario 3: CI/CD Monitoring - All Pipelines, Failed Jobs
+</details>
+
+<details>
+<summary><b>Scenario 3: CI/CD Monitoring - All Pipelines, Failed Jobs</b></summary>
 
 **Goal:** Track all pipeline activity, save logs for failed jobs only.
 
@@ -1172,7 +1185,10 @@ LOG_SAVE_METADATA_ALWAYS=true
 # Metadata for all pipelines, logs for failed jobs only
 ```
 
-### Scenario 4: API Posting with File Fallback
+</details>
+
+<details>
+<summary><b>Scenario 4: API Posting with File Fallback</b></summary>
 
 **Goal:** Post logs to API, fall back to files if API fails.
 
@@ -1191,7 +1207,10 @@ API_POST_SAVE_TO_FILE=false  # API only, fallback to file on error
 API_POST_RETRY_ENABLED=true
 ```
 
-### Scenario 5: Dual Mode - Maximum Reliability
+</details>
+
+<details>
+<summary><b>Scenario 5: Dual Mode - Maximum Reliability</b></summary>
 
 **Goal:** Save logs to both API and files for redundancy.
 
@@ -1212,7 +1231,10 @@ API_POST_RETRY_ENABLED=true
 # Higher storage usage but maximum reliability
 ```
 
-### Scenario 6: Multi-Platform - GitLab + Jenkins
+</details>
+
+<details>
+<summary><b>Scenario 6: Multi-Platform - GitLab + Jenkins</b></summary>
 
 **Goal:** Extract logs from both GitLab and Jenkins.
 
@@ -1229,6 +1251,10 @@ JENKINS_API_TOKEN=your_jenkins_token
 
 # Both platforms supported simultaneously
 ```
+
+**Note:** When using multiple Jenkins instances, create a `jenkins_instances.json` file to configure credentials for each instance. See [Jenkins Multi-Instance Support](#jenkins-multi-instance-support) for details.
+
+</details>
 
 ---
 

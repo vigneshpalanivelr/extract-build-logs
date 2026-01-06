@@ -42,6 +42,7 @@ from .monitoring import PipelineMonitor, RequestStatus
 from .api_poster import ApiPoster
 from .jenkins_extractor import JenkinsExtractor
 from .jenkins_log_fetcher import JenkinsLogFetcher
+from .jenkins_instance_manager import JenkinsInstanceManager
 from .token_manager import TokenManager
 from .logging_config import (
     setup_logging,
@@ -107,6 +108,7 @@ monitor: Optional[PipelineMonitor] = None
 api_poster: Optional[ApiPoster] = None
 jenkins_extractor: Optional[JenkinsExtractor] = None
 jenkins_log_fetcher: Optional[JenkinsLogFetcher] = None
+jenkins_instance_manager: Optional[JenkinsInstanceManager] = None
 token_manager: Optional[TokenManager] = None
 
 
@@ -208,14 +210,28 @@ def init_app():
             logger.info("6. API posting is DISABLED (file storage only)")
             api_poster = None
 
-        # Initialize Jenkins components if enabled
+        # Initialize Jenkins instance manager (supports multiple Jenkins instances)
+        try:
+            jenkins_instance_manager = JenkinsInstanceManager()
+            if jenkins_instance_manager.has_instances():
+                logger.info("7. Jenkins instance manager loaded: %d instances configured",
+                           len(jenkins_instance_manager.instances))
+                for url in jenkins_instance_manager.get_all_urls():
+                    logger.debug("7. Jenkins instance: %s", url)
+            else:
+                logger.debug("7. No jenkins_instances.json found - will use .env configuration")
+        except ValueError as e:
+            logger.error("7. Failed to load Jenkins instance manager: %s", e)
+            jenkins_instance_manager = None
+
+        # Initialize Jenkins components if enabled (fallback to .env config)
         if config.jenkins_enabled:
-            logger.info("7. Jenkins integration: ENABLED")
+            logger.info("7. Jenkins integration: ENABLED (fallback mode)")
             logger.debug("7. Jenkins URL: %s", config.jenkins_url)
             logger.debug("7. Jenkins User: %s", config.jenkins_user)
             jenkins_extractor = JenkinsExtractor()
             jenkins_log_fetcher = JenkinsLogFetcher(config)
-            logger.debug("7. Jenkins components initialized")
+            logger.debug("7. Jenkins components initialized from .env")
         else:
             logger.info("7. Jenkins integration: DISABLED")
             jenkins_extractor = None
@@ -847,13 +863,14 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
     Process a Jenkins build: fetch logs and post to API.
 
     This function:
-    1. Fetches console log from Jenkins
-    2. Fetches Blue Ocean stage information (if available)
-    3. Parses logs to extract parallel blocks
-    4. Posts structured data to API
+    1. Determines Jenkins instance credentials from webhook payload
+    2. Fetches console log from Jenkins
+    3. Fetches Blue Ocean stage information (if available)
+    4. Parses logs to extract parallel blocks
+    5. Posts structured data to API
 
     Args:
-        build_info (Dict[str, Any]): Extracted build information
+        build_info (Dict[str, Any]): Extracted build information (must include jenkins_url)
         db_request_id (int): Monitoring database request ID
         req_id (str): Request correlation ID
     """
@@ -862,10 +879,12 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
     job_name = build_info['job_name']
     build_number = build_info['build_number']
     status = build_info['status']
+    jenkins_url = build_info.get('jenkins_url')
 
-    logger.info("Processing Jenkins build: %s #%s", job_name, build_number, extra={
+    logger.info("Processing Jenkins build: %s #%s from %s", job_name, build_number, jenkins_url, extra={
         'job_name': job_name,
         'build_number': build_number,
+        'jenkins_url': jenkins_url,
         'status': status,
         'db_request_id': db_request_id
     })
@@ -873,11 +892,37 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
     start_time = time.time()
     monitor.update_request(db_request_id, RequestStatus.PROCESSING)
 
+    # Get Jenkins instance credentials
+    fetcher = None
+    if jenkins_url and jenkins_instance_manager:
+        # Try to get credentials from jenkins_instances.json
+        instance = jenkins_instance_manager.get_instance(jenkins_url)
+        if instance:
+            logger.info("Using credentials for Jenkins instance: %s", jenkins_url)
+            fetcher = JenkinsLogFetcher(
+                jenkins_url=instance.jenkins_url,
+                jenkins_user=instance.jenkins_user,
+                jenkins_api_token=instance.jenkins_api_token,
+                retry_attempts=config.retry_attempts,
+                retry_delay=config.retry_delay
+            )
+        else:
+            logger.warning("No configuration found for Jenkins URL: %s", jenkins_url)
+
+    # Fall back to global jenkins_log_fetcher if no specific instance found
+    if not fetcher and jenkins_log_fetcher:
+        logger.debug("Using default Jenkins configuration from .env")
+        fetcher = jenkins_log_fetcher
+    elif not fetcher:
+        logger.error("No Jenkins configuration available for %s", jenkins_url)
+        monitor.update_request(db_request_id, RequestStatus.FAILED)
+        return
+
     try:
         # Fetch build metadata
         logger.debug("Fetching build metadata from Jenkins")
         try:
-            metadata = jenkins_log_fetcher.fetch_build_info(job_name, build_number)
+            metadata = fetcher.fetch_build_info(job_name, build_number)
             build_info['duration_ms'] = metadata.get('duration', 0)
             build_info['timestamp'] = metadata.get('timestamp')
             build_info['result'] = metadata.get('result', status)
@@ -886,12 +931,12 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
 
         # Fetch console log
         logger.info("Fetching console log from Jenkins")
-        console_log = jenkins_log_fetcher.fetch_console_log(job_name, build_number)
+        console_log = fetcher.fetch_console_log(job_name, build_number)
         logger.info("Console log fetched: %s bytes", len(console_log))
 
         # Fetch Blue Ocean stages (if available)
         logger.debug("Fetching Blue Ocean stage information")
-        blue_ocean_stages = jenkins_log_fetcher.fetch_stages(job_name, build_number)
+        blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)
 
         if blue_ocean_stages:
             logger.info("Blue Ocean API available: %s stages", len(blue_ocean_stages))
