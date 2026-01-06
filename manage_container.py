@@ -737,13 +737,23 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             return True
 
         console.print(f"[bold blue]Starting new container: {CONTAINER_NAME} (port {port})[/bold blue]")
+
+        # Build volumes dictionary
+        volumes = {
+            str(Path.cwd() / LOGS_DIR): {'bind': '/app/logs', 'mode': 'rw'},
+            str(Path.cwd() / ENV_FILE): {'bind': '/app/.env', 'mode': 'ro'}
+        }
+
+        # Add jenkins_instances.json if it exists (for multi-instance Jenkins support)
+        jenkins_instances_file = Path.cwd() / 'jenkins_instances.json'
+        if jenkins_instances_file.exists():
+            volumes[str(jenkins_instances_file)] = {'bind': '/app/jenkins_instances.json', 'mode': 'ro'}
+            console.print("[dim]  → Found jenkins_instances.json, mounting for multi-instance Jenkins support[/dim]")
+
         client.containers.run(
             IMAGE_NAME, name=CONTAINER_NAME, detach=True,
             ports={f'{port}/tcp': port},
-            volumes={
-                str(Path.cwd() / LOGS_DIR): {'bind': '/app/logs', 'mode': 'rw'},
-                str(Path.cwd() / ENV_FILE): {'bind': '/app/.env', 'mode': 'ro'}
-            },
+            volumes=volumes,
             restart_policy={"Name": "unless-stopped"}
         )
         console.print("[bold green]✓ Container started successfully![/bold green]")
@@ -756,6 +766,10 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             f"-p {port}:{port} "
             f"-v {logs_path}:/app/logs:rw "
             f"-v {env_path}:/app/.env:ro "
+        )
+        if jenkins_instances_file.exists():
+            shell_cmd += f"-v {jenkins_instances_file}:/app/jenkins_instances.json:ro "
+        shell_cmd += (
             f"--restart unless-stopped "
             f"{IMAGE_NAME}"
         )
