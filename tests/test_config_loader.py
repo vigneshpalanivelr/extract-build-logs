@@ -480,6 +480,65 @@ class TestConfigLoader(unittest.TestCase):
 
         self.assertFalse(config.api_post_save_to_file)
 
+    def test_jenkins_enabled_with_instances_file_no_env_credentials(self):
+        """Test that Jenkins can be enabled with jenkins_instances.json without .env credentials."""
+        import json
+        import tempfile
+
+        # Create a temporary jenkins_instances.json
+        instances_data = {
+            "instances": [
+                {
+                    "jenkins_url": "https://jenkins1.example.com",
+                    "jenkins_user": "user1",
+                    "jenkins_api_token": "token1"
+                }
+            ]
+        }
+
+        # Create jenkins_instances.json in current directory
+        with open('jenkins_instances.json', 'w', encoding='utf-8') as f:
+            json.dump(instances_data, f)
+
+        try:
+            os.environ['GITLAB_URL'] = 'https://gitlab.com'
+            os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
+            os.environ['JENKINS_ENABLED'] = 'true'
+            # Note: NOT setting JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
+
+            # Should not raise error because jenkins_instances.json exists
+            config = ConfigLoader.load()
+
+            self.assertTrue(config.jenkins_enabled)
+            # .env credentials should be None/empty
+            self.assertIsNone(config.jenkins_url)
+            self.assertIsNone(config.jenkins_user)
+            self.assertIsNone(config.jenkins_api_token)
+
+        finally:
+            # Clean up
+            if os.path.exists('jenkins_instances.json'):
+                os.remove('jenkins_instances.json')
+
+    def test_jenkins_enabled_without_instances_file_requires_env_credentials(self):
+        """Test that Jenkins requires .env credentials when jenkins_instances.json doesn't exist."""
+        # Ensure jenkins_instances.json doesn't exist
+        if os.path.exists('jenkins_instances.json'):
+            os.remove('jenkins_instances.json')
+
+        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
+        os.environ['JENKINS_ENABLED'] = 'true'
+        # Not setting JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
+
+        with self.assertRaises(ValueError) as context:
+            ConfigLoader.load()
+
+        # Error message should mention both .env and jenkins_instances.json
+        error_msg = str(context.exception)
+        self.assertIn('JENKINS_URL', error_msg)
+        self.assertIn('jenkins_instances.json', error_msg)
+
 
 if __name__ == '__main__':
     unittest.main()

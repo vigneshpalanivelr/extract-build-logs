@@ -208,15 +208,36 @@ class ConfigLoader:
                 raise ValueError(f"Invalid API_POST_TIMEOUT: {api_post_timeout}. Must be between 1 and 300 seconds")
 
         # Validate Jenkins configuration
+        # Note: When JENKINS_ENABLED=true, credentials can come from either:
+        #   1. .env file (jenkins_url, jenkins_user, jenkins_api_token) - for single instance
+        #   2. jenkins_instances.json file - for multiple instances
+        # If jenkins_instances.json exists, .env credentials are optional (checked at runtime)
         if jenkins_enabled:
-            if not jenkins_url:
-                raise ValueError("JENKINS_URL is required when JENKINS_ENABLED is true")
-            if not jenkins_url.startswith(('http://', 'https://')):
+            # Check if jenkins_instances.json exists
+            jenkins_instances_file = "jenkins_instances.json"
+            has_instances_file = os.path.isfile(jenkins_instances_file)
+
+            # If no jenkins_instances.json, require .env credentials
+            if not has_instances_file:
+                if not jenkins_url:
+                    raise ValueError(
+                        "JENKINS_URL is required when JENKINS_ENABLED is true. "
+                        "Either set JENKINS_URL in .env or create jenkins_instances.json for multi-instance support."
+                    )
+                if not jenkins_user:
+                    raise ValueError(
+                        "JENKINS_USER is required when JENKINS_ENABLED is true. "
+                        "Either set JENKINS_USER in .env or create jenkins_instances.json for multi-instance support."
+                    )
+                if not jenkins_api_token:
+                    raise ValueError(
+                        "JENKINS_API_TOKEN is required when JENKINS_ENABLED is true. "
+                        "Either set JENKINS_API_TOKEN in .env or create jenkins_instances.json for multi-instance support."
+                    )
+
+            # Validate jenkins_url format if provided (optional with jenkins_instances.json)
+            if jenkins_url and not jenkins_url.startswith(('http://', 'https://')):
                 raise ValueError(f"Invalid JENKINS_URL: {jenkins_url}. Must start with http:// or https://")
-            if not jenkins_user:
-                raise ValueError("JENKINS_USER is required when JENKINS_ENABLED is true")
-            if not jenkins_api_token:
-                raise ValueError("JENKINS_API_TOKEN is required when JENKINS_ENABLED is true")
 
         return Config(
             gitlab_url=gitlab_url,
