@@ -91,6 +91,50 @@ class TestJenkinsLogFetcher(unittest.TestCase):
 
         self.assertIn("Jenkins is not enabled", str(context.exception))
 
+    def test_initialization_with_explicit_credentials(self):
+        """Test initialization with explicit Jenkins credentials."""
+        fetcher = JenkinsLogFetcher(
+            jenkins_url="https://jenkins.example.com",
+            jenkins_user="test_user",
+            jenkins_api_token="test_token",
+            retry_attempts=3,
+            retry_delay=2
+        )
+
+        self.assertEqual(fetcher.jenkins_url, "https://jenkins.example.com")
+        self.assertEqual(fetcher.auth.username, "test_user")
+        self.assertEqual(fetcher.auth.password, "test_token")
+        self.assertIsNotNone(fetcher.error_handler)
+
+    def test_initialization_with_explicit_credentials_trailing_slash(self):
+        """Test initialization with explicit credentials removes trailing slash."""
+        fetcher = JenkinsLogFetcher(
+            jenkins_url="https://jenkins.example.com/",
+            jenkins_user="test_user",
+            jenkins_api_token="test_token"
+        )
+
+        # Trailing slash should be removed
+        self.assertEqual(fetcher.jenkins_url, "https://jenkins.example.com")
+
+    def test_initialization_without_config_or_credentials(self):
+        """Test initialization fails when neither config nor credentials provided."""
+        with self.assertRaises(ValueError) as context:
+            JenkinsLogFetcher()
+
+        self.assertIn("Must provide either config or explicit Jenkins credentials", str(context.exception))
+
+    def test_initialization_with_partial_credentials(self):
+        """Test initialization fails with incomplete explicit credentials."""
+        # Missing jenkins_api_token
+        with self.assertRaises(ValueError) as context:
+            JenkinsLogFetcher(
+                jenkins_url="https://jenkins.example.com",
+                jenkins_user="test_user"
+            )
+
+        self.assertIn("Must provide either config or explicit Jenkins credentials", str(context.exception))
+
     @patch('src.jenkins_log_fetcher.JenkinsLogFetcher._make_request')
     def test_fetch_build_info_success(self, mock_make_request):
         """Test successful build info fetch."""
