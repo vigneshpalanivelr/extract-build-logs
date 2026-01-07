@@ -129,7 +129,7 @@ def init_app():
     # Global state is necessary for FastAPI application components
     # These are initialized once at startup and accessed by request handlers
     global config, log_fetcher, storage_manager, pipeline_extractor, monitor, api_poster  # pylint: disable=global-statement
-    global jenkins_extractor, jenkins_log_fetcher, token_manager  # pylint: disable=global-statement
+    global jenkins_extractor, jenkins_log_fetcher, jenkins_instance_manager, token_manager  # pylint: disable=global-statement
 
     try:
         # Load configuration first
