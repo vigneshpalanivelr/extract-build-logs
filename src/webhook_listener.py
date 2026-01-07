@@ -893,12 +893,20 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
     monitor.update_request(db_request_id, RequestStatus.PROCESSING)
 
     # Get Jenkins instance credentials
+    logger.debug("=== Jenkins Credentials Lookup ===")
+    logger.debug("jenkins_url from payload: '%s'", jenkins_url)
+    logger.debug("jenkins_instance_manager exists: %s", jenkins_instance_manager is not None)
+    if jenkins_instance_manager:
+        logger.debug("jenkins_instance_manager has instances: %s", jenkins_instance_manager.has_instances())
+
     fetcher = None
     if jenkins_url and jenkins_instance_manager:
         # Try to get credentials from jenkins_instances.json
+        logger.debug("Attempting to lookup Jenkins instance for URL: %s", jenkins_url)
         instance = jenkins_instance_manager.get_instance(jenkins_url)
         if instance:
             logger.info("Using credentials for Jenkins instance: %s", jenkins_url)
+            logger.debug("Using user: %s", instance.jenkins_user)
             fetcher = JenkinsLogFetcher(
                 jenkins_url=instance.jenkins_url,
                 jenkins_user=instance.jenkins_user,
@@ -908,15 +916,23 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             )
         else:
             logger.warning("No configuration found for Jenkins URL: %s", jenkins_url)
+    elif not jenkins_url:
+        logger.warning("No jenkins_url provided in webhook payload")
+    elif not jenkins_instance_manager:
+        logger.debug("jenkins_instance_manager is not initialized")
 
     # Fall back to global jenkins_log_fetcher if no specific instance found
     if not fetcher and jenkins_log_fetcher:
         logger.debug("Using default Jenkins configuration from .env")
+        logger.debug("Default Jenkins URL: %s", config.jenkins_url if config else 'N/A')
+        logger.debug("Default Jenkins user: %s", config.jenkins_user if config else 'N/A')
         fetcher = jenkins_log_fetcher
     elif not fetcher:
         logger.error("No Jenkins configuration available for %s", jenkins_url)
         monitor.update_request(db_request_id, RequestStatus.FAILED)
         return
+
+    logger.debug("=== End Jenkins Credentials Lookup ===")
 
     try:
         # Fetch build metadata
