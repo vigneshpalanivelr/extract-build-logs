@@ -43,6 +43,7 @@ from .api_poster import ApiPoster
 from .jenkins_extractor import JenkinsExtractor
 from .jenkins_log_fetcher import JenkinsLogFetcher
 from .jenkins_instance_manager import JenkinsInstanceManager
+from .log_error_extractor import LogErrorExtractor
 from .token_manager import TokenManager
 from .logging_config import (
     setup_logging,
@@ -893,20 +894,12 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
     monitor.update_request(db_request_id, RequestStatus.PROCESSING)
 
     # Get Jenkins instance credentials
-    logger.debug("=== Jenkins Credentials Lookup ===")
-    logger.debug("jenkins_url from payload: '%s'", jenkins_url)
-    logger.debug("jenkins_instance_manager exists: %s", jenkins_instance_manager is not None)
-    if jenkins_instance_manager:
-        logger.debug("jenkins_instance_manager has instances: %s", jenkins_instance_manager.has_instances())
-
     fetcher = None
     if jenkins_url and jenkins_instance_manager:
         # Try to get credentials from jenkins_instances.json
-        logger.debug("Attempting to lookup Jenkins instance for URL: %s", jenkins_url)
         instance = jenkins_instance_manager.get_instance(jenkins_url)
         if instance:
             logger.info("Using credentials for Jenkins instance: %s", jenkins_url)
-            logger.debug("Using user: %s", instance.jenkins_user)
             fetcher = JenkinsLogFetcher(
                 jenkins_url=instance.jenkins_url,
                 jenkins_user=instance.jenkins_user,
@@ -916,65 +909,108 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             )
         else:
             logger.warning("No configuration found for Jenkins URL: %s", jenkins_url)
-    elif not jenkins_url:
-        logger.warning("No jenkins_url provided in webhook payload")
-    elif not jenkins_instance_manager:
-        logger.debug("jenkins_instance_manager is not initialized")
 
     # Fall back to global jenkins_log_fetcher if no specific instance found
     if not fetcher and jenkins_log_fetcher:
         logger.debug("Using default Jenkins configuration from .env")
-        logger.debug("Default Jenkins URL: %s", config.jenkins_url if config else 'N/A')
-        logger.debug("Default Jenkins user: %s", config.jenkins_user if config else 'N/A')
         fetcher = jenkins_log_fetcher
     elif not fetcher:
         logger.error("No Jenkins configuration available for %s", jenkins_url)
         monitor.update_request(db_request_id, RequestStatus.FAILED)
         return
 
-    logger.debug("=== End Jenkins Credentials Lookup ===")
-
     try:
         # Fetch build metadata
-        logger.debug("Fetching build metadata from Jenkins")
         try:
             metadata = fetcher.fetch_build_info(job_name, build_number)
             build_info['duration_ms'] = metadata.get('duration', 0)
             build_info['timestamp'] = metadata.get('timestamp')
             build_info['result'] = metadata.get('result', status)
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning("Failed to fetch build metadata (non-critical): %s", e)
+            logger.warning("Failed to fetch build metadata: %s", e)
 
         # Fetch console log
-        logger.info("Fetching console log from Jenkins")
         console_log = fetcher.fetch_console_log(job_name, build_number)
         logger.info("Console log fetched: %s bytes", len(console_log))
 
         # Fetch Blue Ocean stages (if available)
-        logger.debug("Fetching Blue Ocean stage information")
         blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)
 
-        if blue_ocean_stages:
-            logger.info("Blue Ocean API available: %s stages", len(blue_ocean_stages))
-        else:
-            logger.info("Blue Ocean API not available, will parse console log only")
-
-        # Parse console log to extract stages and parallel blocks
-        logger.info("Parsing console log for stages and parallel blocks")
+        # Parse console log to extract stages
         stages = jenkins_extractor.parse_console_log(console_log, blue_ocean_stages)
-        logger.info("Parsed %s stages from console log", len(stages))
+        logger.info("Parsed %s stages from build", len(stages))
 
-        # Count parallel blocks
-        parallel_count = sum(1 for s in stages if s.get('is_parallel'))
-        logger.info("Found %s parallel stages", parallel_count)
+        # Filter to only failed stages
+        failed_stages = [s for s in stages if s.get('status') in ['FAILED', 'FAILURE']]
+        logger.info("Found %s failed stage(s)", len(failed_stages))
+
+        if not failed_stages:
+            logger.info("No failed stages to process")
+            monitor.update_request(db_request_id, RequestStatus.COMPLETED)
+            return
+
+        # Extract error context from failed stages
+        error_extractor = LogErrorExtractor(
+            lines_before=config.error_context_lines_before,
+            lines_after=config.error_context_lines_after
+        )
+
+        for stage in failed_stages:
+            stage_name = stage.get('stage_name')
+            stage_id = stage.get('stage_id')
+
+            # Try to fetch individual stage log from Blue Ocean API
+            stage_log = ''
+            if stage_id:
+                try:
+                    stage_log = fetcher.fetch_stage_log(job_name, build_number, stage_id)
+                    if stage_log:
+                        logger.debug("Fetched log for stage '%s' from Blue Ocean API", stage_name)
+                except Exception as e:  # pylint: disable=broad-exception-caught
+                    logger.debug("Could not fetch stage log from Blue Ocean: %s", e)
+
+            # Fallback: use log_content from parsed console log if available
+            if not stage_log:
+                stage_log = stage.get('log_content', '')
+
+            # If stage has parallel blocks, combine their logs
+            if not stage_log and stage.get('is_parallel'):
+                parallel_blocks = stage.get('parallel_blocks', [])
+                stage_log = '\n'.join([
+                    f"=== {block.get('block_name', 'Unknown')} ===\n{block.get('log_content', '')}"
+                    for block in parallel_blocks
+                ])
+
+            # Extract error sections with context
+            if stage_log:
+                error_sections = error_extractor.extract_error_sections(stage_log)
+                if error_sections:
+                    # Replace full log with error-only context
+                    stage['log_content'] = error_sections[0]
+                    logger.info(
+                        "Extracted error context for stage '%s': %s bytes",
+                        stage_name,
+                        len(error_sections[0])
+                    )
+                else:
+                    # No errors found, send full log
+                    stage['log_content'] = stage_log
+                    logger.warning(
+                        "No error patterns found in failed stage '%s', sending full log",
+                        stage_name
+                    )
+            else:
+                logger.warning(
+                    "Stage '%s' marked as FAILED but has no log content",
+                    stage_name
+                )
 
         # Post to API if enabled
         if config.api_post_enabled and api_poster:
-            logger.info("Posting Jenkins build logs to API")
             api_start = time.time()
 
             try:
-                # Format Jenkins-specific payload
+                # Format Jenkins-specific payload with only failed stages
                 jenkins_payload = {
                     'source': 'jenkins',
                     'job_name': job_name,
@@ -983,7 +1019,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                     'status': status,
                     'duration_ms': build_info.get('duration_ms', 0),
                     'timestamp': build_info.get('timestamp', ''),
-                    'stages': stages
+                    'stages': failed_stages  # Only send failed stages with error context
                 }
 
                 api_success = api_poster.post_jenkins_logs(jenkins_payload)
@@ -994,7 +1030,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                         'job_name': job_name,
                         'build_number': build_number,
                         'api_duration_ms': api_duration_ms,
-                        'stage_count': len(stages)
+                        'failed_stages': len(failed_stages)
                     })
                 else:
                     logger.warning("Failed to post Jenkins build to API", extra={
@@ -1010,15 +1046,16 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             request_id=db_request_id,
             status=RequestStatus.COMPLETED,
             processing_time=processing_time,
-            success_count=len(stages),
+            success_count=len(failed_stages),
             error_count=0
         )
 
-        logger.info("Jenkins build processing completed: %s #%s", job_name, build_number, extra={
+        logger.info("Jenkins build processing completed: %s #%s | %s failed stages",
+                   job_name, build_number, len(failed_stages), extra={
             'job_name': job_name,
             'build_number': build_number,
             'processing_time_ms': int(processing_time * 1000),
-            'stage_count': len(stages)
+            'failed_stages': len(failed_stages)
         })
 
     except Exception as e:  # pylint: disable=broad-exception-caught
