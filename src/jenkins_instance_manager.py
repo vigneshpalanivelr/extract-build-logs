@@ -14,8 +14,11 @@ Invokes: None
 
 import json
 import os
+import logging
 from typing import Dict, List, Optional
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -76,15 +79,33 @@ class JenkinsInstanceManager:
         """
         if not os.path.exists(self.config_file):
             # No configuration file - this is okay, will fall back to env vars
+            logger.debug("Jenkins instances file not found: %s", self.config_file)
             return
+
+        logger.info("Loading Jenkins instances from: %s", self.config_file)
 
         try:
             with open(self.config_file, 'r', encoding='utf-8') as f:
                 config = json.load(f)
 
-            for instance_data in config.get('instances', []):
+            instances_list = config.get('instances', [])
+            logger.debug("Found %d Jenkins instance(s) in config file", len(instances_list))
+
+            for idx, instance_data in enumerate(instances_list):
+                original_url = instance_data['jenkins_url']
+                normalized_url = self._normalize_url(original_url)
+
+                logger.debug(
+                    "Loading instance #%d: original_url='%s', normalized='%s', user='%s', description='%s'",
+                    idx + 1,
+                    original_url,
+                    normalized_url,
+                    instance_data['jenkins_user'],
+                    instance_data.get('description', 'N/A')
+                )
+
                 instance = JenkinsInstance(
-                    jenkins_url=self._normalize_url(instance_data['jenkins_url']),
+                    jenkins_url=normalized_url,
                     jenkins_user=instance_data['jenkins_user'],
                     jenkins_api_token=instance_data['jenkins_api_token'],
                     jenkins_webhook_secret=instance_data.get('jenkins_webhook_secret'),
@@ -93,8 +114,13 @@ class JenkinsInstanceManager:
 
                 # Store instance keyed by normalized URL
                 self.instances[instance.jenkins_url] = instance
+                logger.debug("Stored instance with key: '%s'", instance.jenkins_url)
+
+            logger.info("Successfully loaded %d Jenkins instance(s)", len(self.instances))
+            logger.debug("Available instance URLs: %s", list(self.instances.keys()))
 
         except (json.JSONDecodeError, KeyError) as e:
+            logger.error("Failed to load Jenkins instances: %s", e)
             raise ValueError(f"Invalid Jenkins instances configuration file: {e}") from e
 
     def _normalize_url(self, url: str) -> str:
@@ -121,8 +147,28 @@ class JenkinsInstanceManager:
         Returns:
             JenkinsInstance if found, None otherwise
         """
+        logger.debug("Looking up Jenkins instance for URL: '%s'", jenkins_url)
         normalized_url = self._normalize_url(jenkins_url)
-        return self.instances.get(normalized_url)
+        logger.debug("Normalized URL for lookup: '%s'", normalized_url)
+        logger.debug("Available instance keys: %s", list(self.instances.keys()))
+
+        instance = self.instances.get(normalized_url)
+
+        if instance:
+            logger.info(
+                "Found Jenkins instance: url='%s', user='%s', description='%s'",
+                instance.jenkins_url,
+                instance.jenkins_user,
+                instance.description
+            )
+        else:
+            logger.warning(
+                "No Jenkins instance found for URL '%s' (normalized: '%s')",
+                jenkins_url,
+                normalized_url
+            )
+
+        return instance
 
     def has_instances(self) -> bool:
         """
