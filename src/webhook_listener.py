@@ -974,12 +974,18 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             if stage_id:
                 try:
                     stage_log = fetcher.fetch_stage_log(job_name, build_number, stage_id)
+                    if stage_log:
+                        logger.debug("Fetched stage log from Blue Ocean for '%s': %d bytes", stage_name, len(stage_log))
                 except Exception as e:  # pylint: disable=broad-exception-caught
                     logger.debug("Could not fetch stage log from Blue Ocean: %s", e)
 
             # Fallback: use log_content from parsed console log if available
             if not stage_log:
                 stage_log = stage.get('log_content', '')
+                if stage_log:
+                    logger.debug("Using parsed console log for stage '%s': %d bytes", stage_name, len(stage_log))
+                else:
+                    logger.debug("Stage '%s' has no log_content in parsed data", stage_name)
 
             # If stage has parallel blocks, combine their logs
             if not stage_log and stage.get('is_parallel'):
