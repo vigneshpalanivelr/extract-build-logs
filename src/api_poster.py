@@ -165,6 +165,7 @@ class ApiPoster:
 
         # Build complete payload
         payload = {
+            "source": "gitlab",                        # Identify as GitLab source
             "repo": repo,
             "branch": branch,
             "commit": commit,
@@ -269,8 +270,8 @@ class ApiPoster:
             })
 
         # Build transformed payload matching GitLab format
-        # Note: 'source' key removed as requested
         payload = {
+            "source": "jenkins",                       # Identify as Jenkins source
             "repo": repo,                              # From parameters or job_name
             "branch": branch,                          # From parameters or "unknown"
             "commit": commit,                          # From parameters or "unknown"
@@ -359,9 +360,7 @@ class ApiPoster:
         # Extract info for subject/authentication
         repo = payload.get('repo', 'unknown')
         pipeline_id = payload.get('pipeline_id', '0')
-        # Determine source from triggered_by field (jenkins vs gitlab)
-        triggered_by = payload.get('triggered_by', 'unknown')
-        source = 'jenkins' if triggered_by == 'jenkins' else 'gitlab'
+        source = payload.get('source', 'gitlab')  # Get source from payload, default to 'gitlab'
         subject = f"{source}_{repo}_{pipeline_id}"
 
         # Authentication Strategy:
