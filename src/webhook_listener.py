@@ -940,8 +940,16 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             logger.warning("Failed to fetch build metadata: %s", e)
             build_info['parameters'] = {}
 
-        # Fetch console log
-        console_log = fetcher.fetch_console_log(job_name, build_number)
+        # Fetch console log using hybrid method (tail + streaming with limits)
+        # This is memory-efficient and handles large logs gracefully
+        log_result = fetcher.fetch_console_log_hybrid(job_name, build_number)
+        console_log = log_result['log_content']
+        log_method = log_result['method']
+        truncated = log_result['truncated']
+        total_lines = log_result['total_lines']
+
+        logger.info("Fetched console log using '%s' method: %d lines, truncated=%s",
+                   log_method, total_lines, truncated)
 
         # Fetch Blue Ocean stages (if available)
         blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)

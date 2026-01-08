@@ -652,8 +652,8 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
         mock_config.api_post_enabled = False
         mock_time.time.return_value = 1000.0
 
-        # Log fetcher raises exception
-        mock_log_fetcher.fetch_console_log.side_effect = RuntimeError("Fetch failed")
+        # Log fetcher raises exception (now using hybrid method)
+        mock_log_fetcher.fetch_console_log_hybrid.side_effect = RuntimeError("Fetch failed")
 
         build_info = {
             'job_name': 'test-job',
