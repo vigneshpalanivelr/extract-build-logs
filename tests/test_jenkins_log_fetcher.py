@@ -227,6 +227,8 @@ class TestJenkinsLogFetcher(unittest.TestCase):
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = "Stage log output"
+        # Mock .json() to raise ValueError so it falls back to plain text
+        mock_response.json.side_effect = ValueError("Not JSON")
         mock_make_request.return_value = mock_response
 
         result = self.fetcher.fetch_stage_log("test-job", 123, "stage-1")

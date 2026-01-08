@@ -189,8 +189,8 @@ class TestSensitiveDataFilter(unittest.TestCase):
         result = self.filter.filter(record)
 
         self.assertTrue(result)
-        # Args should be masked
-        self.assertIn("****", str(record.args))
+        # Args should be masked with [REDACTED***] format
+        self.assertIn("[REDACTED***]", str(record.args))
         self.assertNotIn("1234567890", str(record.args))
 
     def test_masks_bearer_token(self):

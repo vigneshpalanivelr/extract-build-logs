@@ -165,6 +165,7 @@ class ApiPoster:
 
         # Build complete payload
         payload = {
+            "source": "gitlab",                        # Identify as GitLab source
             "repo": repo,
             "branch": branch,
             "commit": commit,
@@ -173,6 +174,98 @@ class ApiPoster:
             "triggered_by": triggered_by,
             "failed_steps": failed_steps
         }
+
+        return payload
+
+    def format_jenkins_payload(self, jenkins_payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Transform Jenkins payload to match GitLab API format.
+
+        Args:
+            jenkins_payload: Raw Jenkins webhook payload with structure:
+                {
+                    "source": "jenkins",
+                    "job_name": str,
+                    "build_number": int,
+                    "build_url": str,
+                    "status": str,
+                    "stages": [
+                        {
+                            "stage_name": str,
+                            "status": str,
+                            "log_content": str
+                        }
+                    ]
+                }
+
+        Returns:
+            Dict[str, Any]: Transformed payload matching GitLab format:
+                {
+                    "repo": str,              # job_name
+                    "branch": str,            # "unknown" (not available in Jenkins)
+                    "commit": str,            # "unknown" (not available in Jenkins)
+                    "job_name": str,          # job_name
+                    "pipeline_id": str,       # build_number as string
+                    "triggered_by": str,      # "jenkins"
+                    "failed_steps": [
+                        {
+                            "step_name": str,
+                            "error_lines": [str]  # List with single element containing formatted lines
+                        }
+                    ]
+                }
+        """
+        job_name = jenkins_payload.get('job_name', 'unknown')
+        build_number = jenkins_payload.get('build_number', 0)
+        stages = jenkins_payload.get('stages', [])
+
+        # Filter to only failed stages
+        failed_stages = [s for s in stages if s.get('status') in ['FAILED', 'FAILURE']]
+
+        logger.debug(
+            "Transforming Jenkins payload: job=%s, build=%s, total_stages=%d, failed_stages=%d",
+            job_name, build_number, len(stages), len(failed_stages)
+        )
+
+        # Build failed_steps from failed stages
+        failed_steps = []
+        for stage in failed_stages:
+            stage_name = stage.get('stage_name', 'unknown')
+            log_content = stage.get('log_content', '')
+
+            # Transform log_content to error_lines format
+            # log_content is already formatted with "Line N:" prefixes from log_error_extractor
+            if log_content:
+                # error_lines should be a list with single element (matching GitLab format)
+                error_lines = [log_content]
+
+                line_count = log_content.count('\n') + 1
+                logger.debug(
+                    "Transformed stage '%s': %d error lines",
+                    stage_name, line_count
+                )
+
+                failed_steps.append({
+                    "step_name": stage_name,
+                    "error_lines": error_lines
+                })
+
+        # Build transformed payload matching GitLab format
+        payload = {
+            "source": "jenkins",                       # Identify as Jenkins source
+            "repo": job_name,                          # Use job_name as repo
+            "branch": "unknown",                       # Not available in Jenkins
+            "commit": "unknown",                       # Not available in Jenkins
+            "job_name": job_name,                      # Job name
+            "pipeline_id": str(build_number),          # Build number as string
+            "triggered_by": "jenkins",                 # Source
+            "failed_steps": failed_steps               # Only failed stages
+        }
+
+        logger.debug(
+            "Transformed Jenkins payload: repo=%s, pipeline_id=%s, failed_steps=%d",
+            payload['repo'], payload['pipeline_id'], len(failed_steps)
+        )
 
         return payload
 
@@ -248,7 +341,7 @@ class ApiPoster:
         # Extract info for subject/authentication
         repo = payload.get('repo', 'unknown')
         pipeline_id = payload.get('pipeline_id', '0')
-        source = 'gitlab'  # Default source
+        source = payload.get('source', 'gitlab')  # Get source from payload, default to 'gitlab'
         subject = f"{source}_{repo}_{pipeline_id}"
 
         # Authentication Strategy:
@@ -610,8 +703,8 @@ class ApiPoster:
         )
 
         try:
-            # Jenkins payload is already in the correct format
-            payload = jenkins_payload
+            # Transform Jenkins payload to match GitLab API format
+            payload = self.format_jenkins_payload(jenkins_payload)
 
             # Use retry logic if enabled
             if self.config.api_post_retry_enabled:
