@@ -931,7 +931,6 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
 
         # Fetch console log
         console_log = fetcher.fetch_console_log(job_name, build_number)
-        logger.info("Console log fetched: %s bytes", len(console_log))
 
         # Fetch Blue Ocean stages (if available)
         blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)
@@ -964,8 +963,6 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             if stage_id:
                 try:
                     stage_log = fetcher.fetch_stage_log(job_name, build_number, stage_id)
-                    if stage_log:
-                        logger.debug("Fetched log for stage '%s' from Blue Ocean API", stage_name)
                 except Exception as e:  # pylint: disable=broad-exception-caught
                     logger.debug("Could not fetch stage log from Blue Ocean: %s", e)
 

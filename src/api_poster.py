@@ -345,76 +345,27 @@ class ApiPoster:
                 return response.status_code, response_body, duration_ms
 
             # Failure - status is not "ok"
-            logger.error(
-                "API returned failure status",
-                extra={
-                    'response_status': response_status,
-                    'http_status': response.status_code,
-                    'duration_ms': duration_ms,
-                    'response_body': response_body[:1000]
-                }
+            # Just log basic info (retry handler will log payload on final failure)
+            logger.debug(
+                "API returned status '%s' (expected 'ok') | http_status=%s duration_ms=%s",
+                response_status, response.status_code, duration_ms
             )
             raise RequestException(
                 f"API returned status '{response_status}' (expected 'ok') after {duration_ms}ms"
             )
 
         except requests.exceptions.HTTPError as e:
-            # HTTP error (4xx, 5xx) - log payload for debugging
+            # HTTP error (4xx, 5xx)
             duration_ms = int((time.time() - start_time) * 1000)
             status_code = e.response.status_code if e.response else None
-            response_body = e.response.text if e.response and e.response.text else "No response"
-
-            # Log the error with full exception details
-            logger.error(
-                "API returned %d error",
-                status_code,
-                extra={
-                    'status_code': status_code,
-                    'duration_ms': duration_ms,
-                    'response': response_body[:1000],
-                    'error_type': type(e).__name__
-                },
-                exc_info=True
-            )
-
-            # Log complete exception details
-            logger.error("Exception type: %s", type(e).__name__)
-            logger.error("Exception message: %s", str(e))
-            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
-
-            # Log server response
-            logger.error("Server response status: %s", status_code)
-            logger.error("Server response body (full):\n%s", response_body)
-
-            # Log the payload that caused the error
-            logger.error("Payload that caused %s error:\n%s", status_code, json.dumps(payload, indent=2))
-
             error_msg = str(e)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
             ) from e
 
         except RequestException as e:
-            # Other request errors (timeout, connection, etc.)
+            # Other request errors (timeout, connection, etc.) - just re-raise
             duration_ms = int((time.time() - start_time) * 1000)
-            logger.error(
-                "API request failed (timeout/connection): %s", str(e),
-                extra={
-                    'duration_ms': duration_ms,
-                    'error_type': type(e).__name__,
-                    'error_message': str(e)
-                },
-                exc_info=True
-            )
-
-            # Log complete exception details
-            logger.error("Exception type: %s", type(e).__name__)
-            logger.error("Exception message: %s", str(e))
-            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
-
-            # Log payload for debugging
-            logger.error("Payload that caused error:\n%s", json.dumps(payload, indent=2))
-
             error_msg = str(e)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"

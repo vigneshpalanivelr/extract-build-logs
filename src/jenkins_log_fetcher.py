@@ -11,6 +11,7 @@ Invoked by: webhook_listener
 Invokes: config_loader, error_handler
 """
 
+import json
 import logging
 from typing import Dict, Any, Optional, List
 
@@ -208,7 +209,24 @@ class JenkinsLogFetcher:
                 logger.debug("Stage log not available for stage %s", stage_id)
                 return None
 
-            return response.text
+            # Blue Ocean wfapi/log can return either:
+            # 1. JSON metadata: {"nodeId":"X","nodeStatus":"Y","length":0,"hasMore":false}
+            # 2. Plain text log content
+            try:
+                log_data = response.json()
+                # If it's JSON with length=0, no log content available
+                if isinstance(log_data, dict) and log_data.get('length', 0) == 0:
+                    logger.debug("Stage log empty (length=0) for stage %s", stage_id)
+                    return None
+                # If JSON has text field, return that
+                if isinstance(log_data, dict) and 'text' in log_data:
+                    return log_data['text']
+                # Otherwise, JSON response without useful log data
+                logger.debug("Stage log API returned metadata without log text for stage %s", stage_id)
+                return None
+            except (ValueError, json.JSONDecodeError):
+                # Not JSON, treat as plain text log
+                return response.text
 
         except requests.exceptions.RequestException as e:
             logger.warning("Failed to fetch stage log (non-critical): %s", e)
