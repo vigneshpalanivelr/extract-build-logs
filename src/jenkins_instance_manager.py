@@ -89,20 +89,9 @@ class JenkinsInstanceManager:
                 config = json.load(f)
 
             instances_list = config.get('instances', [])
-            logger.debug("Found %d Jenkins instance(s) in config file", len(instances_list))
 
-            for idx, instance_data in enumerate(instances_list):
-                original_url = instance_data['jenkins_url']
-                normalized_url = self._normalize_url(original_url)
-
-                logger.debug(
-                    "Loading instance #%d: original_url='%s', normalized='%s', user='%s', description='%s'",
-                    idx + 1,
-                    original_url,
-                    normalized_url,
-                    instance_data['jenkins_user'],
-                    instance_data.get('description', 'N/A')
-                )
+            for instance_data in instances_list:
+                normalized_url = self._normalize_url(instance_data['jenkins_url'])
 
                 instance = JenkinsInstance(
                     jenkins_url=normalized_url,
@@ -114,10 +103,8 @@ class JenkinsInstanceManager:
 
                 # Store instance keyed by normalized URL
                 self.instances[instance.jenkins_url] = instance
-                logger.debug("Stored instance with key: '%s'", instance.jenkins_url)
 
             logger.info("Successfully loaded %d Jenkins instance(s)", len(self.instances))
-            logger.debug("Available instance URLs: %s", list(self.instances.keys()))
 
         except (json.JSONDecodeError, KeyError) as e:
             logger.error("Failed to load Jenkins instances: %s", e)
@@ -147,21 +134,10 @@ class JenkinsInstanceManager:
         Returns:
             JenkinsInstance if found, None otherwise
         """
-        logger.debug("Looking up Jenkins instance for URL: '%s'", jenkins_url)
         normalized_url = self._normalize_url(jenkins_url)
-        logger.debug("Normalized URL for lookup: '%s'", normalized_url)
-        logger.debug("Available instance keys: %s", list(self.instances.keys()))
-
         instance = self.instances.get(normalized_url)
 
-        if instance:
-            logger.info(
-                "Found Jenkins instance: url='%s', user='%s', description='%s'",
-                instance.jenkins_url,
-                instance.jenkins_user,
-                instance.description
-            )
-        else:
+        if not instance:
             logger.warning(
                 "No Jenkins instance found for URL '%s' (normalized: '%s')",
                 jenkins_url,
