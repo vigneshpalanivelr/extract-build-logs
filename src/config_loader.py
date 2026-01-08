@@ -53,6 +53,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
         bfa_secret_key              -> (Optional[str]) -> BFA JWT secret key
         error_context_lines_before  -> (int)           -> Error context lines before
         error_context_lines_after   -> (int)           -> Error context lines after
+        max_log_lines               -> (int)           -> Max lines to process per log
+        tail_log_lines              -> (int)           -> Lines to fetch from tail first
+        stream_chunk_size           -> (int)           -> Bytes per chunk when streaming
     """
     gitlab_url: str
     gitlab_token: str
@@ -81,6 +84,9 @@ class Config:  # pylint: disable=too-many-instance-attributes
     bfa_secret_key: Optional[str]
     error_context_lines_before: int
     error_context_lines_after: int
+    max_log_lines: int
+    tail_log_lines: int
+    stream_chunk_size: int
 
 
 class ConfigLoader:
@@ -191,6 +197,11 @@ class ConfigLoader:
         error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
         error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
 
+        # Log handling limits (for memory management with large logs)
+        max_log_lines = int(os.getenv('MAX_LOG_LINES', '100000'))  # Max lines to process
+        tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))  # Tail lines to try first
+        stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))  # Streaming chunk size
+
         # Validate port number
         if not 1 <= webhook_port <= 65535:
             raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
@@ -266,7 +277,10 @@ class ConfigLoader:
             bfa_host=bfa_host,
             bfa_secret_key=bfa_secret_key,
             error_context_lines_before=error_context_lines_before,
-            error_context_lines_after=error_context_lines_after
+            error_context_lines_after=error_context_lines_after,
+            max_log_lines=max_log_lines,
+            tail_log_lines=tail_log_lines,
+            stream_chunk_size=stream_chunk_size
         )
 
     @staticmethod

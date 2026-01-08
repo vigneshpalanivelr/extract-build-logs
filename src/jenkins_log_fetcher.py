@@ -59,6 +59,9 @@ class JenkinsLogFetcher:
         Raises:
             ValueError: If neither config nor explicit credentials are provided
         """
+        # Store config for log limits
+        self.config = config
+
         if config:
             # Initialize from config object
             if not config.jenkins_enabled:
@@ -72,6 +75,7 @@ class JenkinsLogFetcher:
             # Initialize from explicit credentials
             self.jenkins_url = jenkins_url.rstrip('/')
             self.auth = HTTPBasicAuth(jenkins_user, jenkins_api_token)
+            self.config = None  # No config available
         else:
             raise ValueError("Must provide either config or explicit Jenkins credentials")
 
@@ -153,6 +157,170 @@ class JenkinsLogFetcher:
             logger.error("Failed to fetch console log for job %s #%s after retries: %s",
                         job_name, build_number, e)
             raise
+
+    def fetch_console_log_tail(self, job_name: str, build_number: int, tail_lines: Optional[int] = None) -> str:
+        """
+        Fetch only the last N lines of console log (memory efficient).
+        Errors usually appear at the end of failed builds.
+
+        Args:
+            job_name (str): Name of the Jenkins job
+            build_number (int): Build number
+            tail_lines (Optional[int]): Number of lines from tail (uses config.tail_log_lines if None)
+
+        Returns:
+            str: Tail portion of console log
+
+        Raises:
+            requests.exceptions.RequestException: If API request fails
+        """
+        if tail_lines is None:
+            tail_lines = self.config.tail_log_lines if self.config else 5000
+
+        url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
+        logger.info("Fetching console log tail (last %d lines) for job %s #%s", tail_lines, job_name, build_number)
+
+        try:
+            # First, get total log size
+            head_response = requests.head(url, auth=self.auth, timeout=10)
+            total_size = int(head_response.headers.get('Content-Length', 0))
+
+            if total_size == 0:
+                logger.warning("Console log is empty for job %s #%s", job_name, build_number)
+                return ""
+
+            # Calculate start position (approximate bytes per line = 150)
+            estimated_bytes = tail_lines * 150
+            start_pos = max(0, total_size - estimated_bytes)
+
+            logger.debug("Total log size: %d bytes, fetching from byte %d", total_size, start_pos)
+
+            # Fetch from start position
+            headers = {'Range': f'bytes={start_pos}-'} if start_pos > 0 else {}
+            response = requests.get(url, auth=self.auth, headers=headers, timeout=60)
+            response.raise_for_status()
+
+            tail_log = response.text
+            actual_lines = len(tail_log.split('\n'))
+
+            logger.info("Successfully fetched console log tail for job %s #%s (%d bytes, ~%d lines)",
+                       job_name, build_number, len(tail_log), actual_lines)
+
+            return tail_log
+
+        except requests.exceptions.RequestException as e:
+            logger.error("Failed to fetch console log tail for job %s #%s: %s",
+                        job_name, build_number, e)
+            raise
+
+    def fetch_console_log_streaming(self, job_name: str, build_number: int,
+                                    max_lines: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Stream console log and extract only error sections (memory efficient).
+        Prevents loading massive logs entirely into memory.
+
+        Args:
+            job_name (str): Name of the Jenkins job
+            build_number (int): Build number
+            max_lines (Optional[int]): Maximum lines to process (uses config.max_log_lines if None)
+
+        Returns:
+            Dict with 'log_content', 'truncated' (bool), and 'total_lines' (int)
+
+        Raises:
+            requests.exceptions.RequestException: If API request fails
+        """
+        if max_lines is None:
+            max_lines = self.config.max_log_lines if self.config else 100000
+
+        url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
+        logger.info("Streaming console log for job %s #%s (max %d lines)", job_name, build_number, max_lines)
+
+        try:
+            # Stream the response
+            response = requests.get(url, auth=self.auth, stream=True, timeout=120)
+            response.raise_for_status()
+
+            collected_lines = []
+            line_count = 0
+            truncated = False
+
+            # Process line by line
+            for line in response.iter_lines(decode_unicode=True):
+                line_count += 1
+                collected_lines.append(line)
+
+                # Safety limit
+                if line_count >= max_lines:
+                    logger.warning("Hit max line limit %d for job %s #%s, truncating",
+                                 max_lines, job_name, build_number)
+                    truncated = True
+                    break
+
+            log_content = '\n'.join(collected_lines)
+
+            logger.info("Streamed console log for job %s #%s: %d lines, %d bytes (truncated=%s)",
+                       job_name, build_number, line_count, len(log_content), truncated)
+
+            return {
+                'log_content': log_content,
+                'truncated': truncated,
+                'total_lines': line_count
+            }
+
+        except requests.exceptions.RequestException as e:
+            logger.error("Failed to stream console log for job %s #%s: %s",
+                        job_name, build_number, e)
+            raise
+
+    def fetch_console_log_hybrid(self, job_name: str, build_number: int) -> Dict[str, Any]:
+        """
+        Hybrid approach: Try tail first (fast), fall back to streaming if needed.
+        This is the RECOMMENDED method for memory-efficient log fetching.
+
+        Strategy:
+        1. Fetch tail (last 5000 lines) - fast, low memory
+        2. Check if errors exist in tail
+        3. If yes, return tail (works for 99% of failed builds)
+        4. If no, stream full log with safety limits
+
+        Args:
+            job_name (str): Name of the Jenkins job
+            build_number (int): Build number
+
+        Returns:
+            Dict with 'log_content', 'method' ('tail' or 'streaming'), 'truncated', 'total_lines'
+        """
+        from .log_error_extractor import LogErrorExtractor
+
+        logger.info("Fetching console log (hybrid) for job %s #%s", job_name, build_number)
+
+        # Try tail first
+        try:
+            tail_log = self.fetch_console_log_tail(job_name, build_number)
+            tail_lines = len(tail_log.split('\n')) if tail_log else 0
+
+            # Quick check: does tail have error patterns?
+            extractor = LogErrorExtractor(lines_before=10, lines_after=5)
+            if extractor._find_error_lines(tail_log.split('\n')):
+                logger.info("Found errors in tail for job %s #%s, using tail only", job_name, build_number)
+                return {
+                    'log_content': tail_log,
+                    'method': 'tail',
+                    'truncated': False,
+                    'total_lines': tail_lines
+                }
+
+            logger.info("No errors in tail for job %s #%s, streaming full log", job_name, build_number)
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("Tail fetch failed for job %s #%s: %s, falling back to streaming",
+                         job_name, build_number, e)
+
+        # Fall back to streaming full log
+        result = self.fetch_console_log_streaming(job_name, build_number)
+        result['method'] = 'streaming'
+        return result
 
     def fetch_stages(self, job_name: str, build_number: int) -> Optional[List[Dict[str, Any]]]:
         """

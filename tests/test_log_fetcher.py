@@ -42,7 +42,10 @@ class TestLogFetcher(unittest.TestCase):
             bfa_host=None,
             bfa_secret_key=None,
             error_context_lines_before=50,
-            error_context_lines_after=10
+            error_context_lines_after=10,
+        max_log_lines=100000,
+        tail_log_lines=5000,
+        stream_chunk_size=8192
         )
 
         self.fetcher = LogFetcher(self.config)
