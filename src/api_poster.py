@@ -488,15 +488,9 @@ class ApiPoster:
                 exc_info=True
             )
 
-            # Log complete exception details
-            logger.error("Exception type: %s", type(e).__name__)
-            logger.error("Exception message: %s", str(e))
-            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
-
             # Log pipeline_info to understand what data failed
             logger.error("Pipeline info that caused formatting error: %s",
                          json.dumps(pipeline_info, indent=2, default=str))
-            logger.error("Number of jobs in all_logs: %s", len(all_logs))
 
             self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Payload formatting failed: {str(e)}")
             return False
@@ -553,11 +547,6 @@ class ApiPoster:
                 exc_info=True
             )
 
-            # Log complete exception details
-            logger.error("Exception type: %s", type(e).__name__)
-            logger.error("Exception message: %s", str(e))
-            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
-
             # Log the payload that failed after all retries
             logger.error("Payload that failed after all retries:\n%s", json.dumps(payload, indent=2))
 
@@ -578,11 +567,6 @@ class ApiPoster:
                 },
                 exc_info=True
             )
-
-            # Log complete exception details
-            logger.error("Exception type: %s", type(e).__name__)
-            logger.error("Exception message: %s", str(e))
-            logger.error("Full traceback:\n%s", ''.join(traceback.format_exception(type(e), e, e.__traceback__)))
 
             # Log the payload that caused the unexpected error
             logger.error("Payload that caused unexpected error:\n%s", json.dumps(payload, indent=2))
@@ -645,6 +629,10 @@ class ApiPoster:
                     )
                 except RetryExhaustedError as e:
                     logger.error("Retry exhausted posting Jenkins logs to API: %s", e)
+
+                    # Log the payload that failed after all retries
+                    logger.error("Payload that failed after all retries:\n%s", json.dumps(payload, indent=2))
+
                     # Extract pipeline_id and project_id from payload
                     pipeline_id = payload.get('build_number', 0)
                     project_id = 0  # Jenkins doesn't have project_id concept
@@ -712,6 +700,10 @@ class ApiPoster:
                 },
                 exc_info=True
             )
+
+            # Log the payload that caused the unexpected error
+            logger.error("Payload that caused unexpected error:\n%s", json.dumps(jenkins_payload, indent=2))
+
             # Extract pipeline_id and project_id from payload
             pipeline_id = jenkins_payload.get('build_number', 0)
             project_id = 0  # Jenkins doesn't have project_id concept
