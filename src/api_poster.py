@@ -787,6 +787,10 @@ class ApiPoster:
                         'duration_ms': duration_ms
                     }
                 )
+
+                # Log successful payload for debugging
+                logger.debug("Payload posted successfully:\n%s", json.dumps(payload, indent=2))
+
                 return True
 
             logger.warning(
