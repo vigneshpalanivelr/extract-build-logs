@@ -926,8 +926,19 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             build_info['duration_ms'] = metadata.get('duration', 0)
             build_info['timestamp'] = metadata.get('timestamp')
             build_info['result'] = metadata.get('result', status)
+
+            # Extract pipeline parameters from metadata
+            parameters = {}
+            for action in metadata.get('actions', []):
+                if action.get('_class') == 'hudson.model.ParametersAction':
+                    for param in action.get('parameters', []):
+                        parameters[param.get('name')] = param.get('value')
+
+            build_info['parameters'] = parameters
+            logger.debug("Extracted %d parameters from build metadata", len(parameters))
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Failed to fetch build metadata: %s", e)
+            build_info['parameters'] = {}
 
         # Fetch console log
         console_log = fetcher.fetch_console_log(job_name, build_number)
@@ -1016,6 +1027,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                     'status': status,
                     'duration_ms': build_info.get('duration_ms', 0),
                     'timestamp': build_info.get('timestamp', ''),
+                    'parameters': build_info.get('parameters', {}),  # Pipeline parameters
                     'stages': failed_stages  # Only send failed stages with error context
                 }
 

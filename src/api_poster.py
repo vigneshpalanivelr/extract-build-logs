@@ -165,7 +165,6 @@ class ApiPoster:
 
         # Build complete payload
         payload = {
-            "source": "gitlab",                        # Identify as GitLab source
             "repo": repo,
             "branch": branch,
             "commit": commit,
@@ -189,6 +188,11 @@ class ApiPoster:
                     "build_number": int,
                     "build_url": str,
                     "status": str,
+                    "parameters": {
+                        "gitlabSourceRepoName": str,
+                        "gitlabSourceBranch": str,
+                        "gitlabMergeRequestLastCommit": str (optional)
+                    },
                     "stages": [
                         {
                             "stage_name": str,
@@ -201,9 +205,9 @@ class ApiPoster:
         Returns:
             Dict[str, Any]: Transformed payload matching GitLab format:
                 {
-                    "repo": str,              # job_name
-                    "branch": str,            # "unknown" (not available in Jenkins)
-                    "commit": str,            # "unknown" (not available in Jenkins)
+                    "repo": str,              # From parameters or job_name
+                    "branch": str,            # From parameters or "unknown"
+                    "commit": str,            # From parameters or "unknown"
                     "job_name": str,          # job_name
                     "pipeline_id": str,       # build_number as string
                     "triggered_by": str,      # "jenkins"
@@ -217,14 +221,20 @@ class ApiPoster:
         """
         job_name = jenkins_payload.get('job_name', 'unknown')
         build_number = jenkins_payload.get('build_number', 0)
+        parameters = jenkins_payload.get('parameters', {})
         stages = jenkins_payload.get('stages', [])
+
+        # Extract repo, branch, commit from pipeline parameters
+        repo = parameters.get('gitlabSourceRepoName', job_name)
+        branch = parameters.get('gitlabSourceBranch', 'unknown')
+        commit = parameters.get('gitlabMergeRequestLastCommit', 'unknown')
 
         # Filter to only failed stages
         failed_stages = [s for s in stages if s.get('status') in ['FAILED', 'FAILURE']]
 
         logger.debug(
-            "Transforming Jenkins payload: job=%s, build=%s, total_stages=%d, failed_stages=%d",
-            job_name, build_number, len(stages), len(failed_stages)
+            "Transforming Jenkins payload: job=%s, build=%s, repo=%s, branch=%s, total_stages=%d, failed_stages=%d",
+            job_name, build_number, repo, branch, len(stages), len(failed_stages)
         )
 
         # Build failed_steps from failed stages
@@ -235,6 +245,7 @@ class ApiPoster:
 
             # Transform log_content to error_lines format
             # log_content is already formatted with "Line N:" prefixes from log_error_extractor
+            # Include the stage even if log_content is empty (better than dropping it completely)
             if log_content:
                 # error_lines should be a list with single element (matching GitLab format)
                 error_lines = [log_content]
@@ -244,27 +255,34 @@ class ApiPoster:
                     "Transformed stage '%s': %d error lines",
                     stage_name, line_count
                 )
+            else:
+                # Stage failed but has no log content - include it with placeholder
+                error_lines = [f"Stage '{stage_name}' failed but no log content available"]
+                logger.warning(
+                    "Stage '%s' has no log content, using placeholder",
+                    stage_name
+                )
 
-                failed_steps.append({
-                    "step_name": stage_name,
-                    "error_lines": error_lines
-                })
+            failed_steps.append({
+                "step_name": stage_name,
+                "error_lines": error_lines
+            })
 
         # Build transformed payload matching GitLab format
+        # Note: 'source' key removed as requested
         payload = {
-            "source": "jenkins",                       # Identify as Jenkins source
-            "repo": job_name,                          # Use job_name as repo
-            "branch": "unknown",                       # Not available in Jenkins
-            "commit": "unknown",                       # Not available in Jenkins
+            "repo": repo,                              # From parameters or job_name
+            "branch": branch,                          # From parameters or "unknown"
+            "commit": commit,                          # From parameters or "unknown"
             "job_name": job_name,                      # Job name
             "pipeline_id": str(build_number),          # Build number as string
             "triggered_by": "jenkins",                 # Source
-            "failed_steps": failed_steps               # Only failed stages
+            "failed_steps": failed_steps               # Failed stages with error context
         }
 
         logger.debug(
-            "Transformed Jenkins payload: repo=%s, pipeline_id=%s, failed_steps=%d",
-            payload['repo'], payload['pipeline_id'], len(failed_steps)
+            "Transformed Jenkins payload: repo=%s, branch=%s, pipeline_id=%s, failed_steps=%d",
+            payload['repo'], payload['branch'], payload['pipeline_id'], len(failed_steps)
         )
 
         return payload
@@ -341,7 +359,9 @@ class ApiPoster:
         # Extract info for subject/authentication
         repo = payload.get('repo', 'unknown')
         pipeline_id = payload.get('pipeline_id', '0')
-        source = payload.get('source', 'gitlab')  # Get source from payload, default to 'gitlab'
+        # Determine source from triggered_by field (jenkins vs gitlab)
+        triggered_by = payload.get('triggered_by', 'unknown')
+        source = 'jenkins' if triggered_by == 'jenkins' else 'gitlab'
         subject = f"{source}_{repo}_{pipeline_id}"
 
         # Authentication Strategy:
