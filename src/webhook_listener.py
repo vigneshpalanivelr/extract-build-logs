@@ -1022,10 +1022,31 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                         stage_name
                     )
             else:
+                # Fallback: use full console log when stage extraction fails
                 logger.warning(
-                    "Stage '%s' marked as FAILED but has no log content",
+                    "Stage '%s' marked as FAILED but has no log content, using full console log as fallback",
                     stage_name
                 )
+                if console_log:
+                    # Extract errors from full console log
+                    error_sections = error_extractor.extract_error_sections(console_log)
+                    if error_sections:
+                        stage['log_content'] = error_sections[0]
+                        logger.info(
+                            "Extracted error context from full console log for stage '%s': %s bytes",
+                            stage_name,
+                            len(error_sections[0])
+                        )
+                    else:
+                        # No error patterns found, use full console log
+                        stage['log_content'] = console_log
+                        logger.warning(
+                            "No error patterns in full console log for stage '%s', sending entire log: %s bytes",
+                            stage_name,
+                            len(console_log)
+                        )
+                else:
+                    logger.error("No console log available for stage '%s'", stage_name)
 
         # Post to API if enabled
         if config.api_post_enabled and api_poster:
