@@ -951,102 +951,62 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
         logger.info("Fetched console log using '%s' method: %d lines, truncated=%s",
                    log_method, total_lines, truncated)
 
-        # Fetch Blue Ocean stages (if available)
+        # Fetch Blue Ocean stages metadata (single API call for all stage info)
         blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)
 
-        # Parse console log to extract stages
-        stages = jenkins_extractor.parse_console_log(console_log, blue_ocean_stages)
-        logger.info("Parsed %s stages from build", len(stages))
+        if not blue_ocean_stages:
+            logger.warning("No Blue Ocean stages available, cannot process build")
+            monitor.update_request(db_request_id, RequestStatus.COMPLETED)
+            return
 
-        # Filter to only failed stages
-        failed_stages = [s for s in stages if s.get('status') in ['FAILED', 'FAILURE']]
-        logger.info("Found %s failed stage(s)", len(failed_stages))
+        # Build list of failed stages from Blue Ocean metadata
+        failed_stages = []
+        for stage in blue_ocean_stages:
+            if stage.get('status') in ['FAILED', 'FAILURE']:
+                failed_stages.append({
+                    'stage_name': stage.get('name', 'Unknown'),
+                    'stage_id': stage.get('id', ''),
+                    'status': stage.get('status', 'UNKNOWN'),
+                    'duration_ms': stage.get('durationMillis', 0)
+                })
+
+        logger.info("Found %s total stages, %s failed", len(blue_ocean_stages), len(failed_stages))
 
         if not failed_stages:
             logger.info("No failed stages to process")
             monitor.update_request(db_request_id, RequestStatus.COMPLETED)
             return
 
-        # Extract error context from failed stages
+        # Extract error context from console log for each failed stage
         error_extractor = LogErrorExtractor(
             lines_before=config.error_context_lines_before,
             lines_after=config.error_context_lines_after
         )
 
+        # For each failed stage, use full console log with error extraction
+        # This is simple, fast, and works reliably without per-stage API calls
         for stage in failed_stages:
             stage_name = stage.get('stage_name')
-            stage_id = stage.get('stage_id')
 
-            # Try to fetch individual stage log from Blue Ocean API
-            stage_log = ''
-            if stage_id:
-                try:
-                    stage_log = fetcher.fetch_stage_log(job_name, build_number, stage_id)
-                    if stage_log:
-                        logger.debug("Fetched stage log from Blue Ocean for '%s': %d bytes", stage_name, len(stage_log))
-                except Exception as e:  # pylint: disable=broad-exception-caught
-                    logger.debug("Could not fetch stage log from Blue Ocean: %s", e)
+            # Extract errors from full console log
+            error_sections = error_extractor.extract_error_sections(console_log)
 
-            # Fallback: use log_content from parsed console log if available
-            if not stage_log:
-                stage_log = stage.get('log_content', '')
-                if stage_log:
-                    logger.debug("Using parsed console log for stage '%s': %d bytes", stage_name, len(stage_log))
-                else:
-                    logger.debug("Stage '%s' has no log_content in parsed data", stage_name)
-
-            # If stage has parallel blocks, combine their logs
-            if not stage_log and stage.get('is_parallel'):
-                parallel_blocks = stage.get('parallel_blocks', [])
-                stage_log = '\n'.join([
-                    f"=== {block.get('block_name', 'Unknown')} ===\n{block.get('log_content', '')}"
-                    for block in parallel_blocks
-                ])
-
-            # Extract error sections with context
-            if stage_log:
-                error_sections = error_extractor.extract_error_sections(stage_log)
-                if error_sections:
-                    # Replace full log with error-only context
-                    stage['log_content'] = error_sections[0]
-                    logger.info(
-                        "Extracted error context for stage '%s': %s bytes",
-                        stage_name,
-                        len(error_sections[0])
-                    )
-                else:
-                    # No errors found, send full log
-                    stage['log_content'] = stage_log
-                    logger.warning(
-                        "No error patterns found in failed stage '%s', sending full log",
-                        stage_name
-                    )
-            else:
-                # Fallback: use full console log when stage extraction fails
-                logger.warning(
-                    "Stage '%s' marked as FAILED but has no log content, using full console log as fallback",
-                    stage_name
+            if error_sections:
+                # Found error patterns, use extracted context
+                stage['log_content'] = error_sections[0]
+                logger.info(
+                    "Extracted error context for stage '%s': %s bytes",
+                    stage_name,
+                    len(error_sections[0])
                 )
-                if console_log:
-                    # Extract errors from full console log
-                    error_sections = error_extractor.extract_error_sections(console_log)
-                    if error_sections:
-                        stage['log_content'] = error_sections[0]
-                        logger.info(
-                            "Extracted error context from full console log for stage '%s': %s bytes",
-                            stage_name,
-                            len(error_sections[0])
-                        )
-                    else:
-                        # No error patterns found, use full console log
-                        stage['log_content'] = console_log
-                        logger.warning(
-                            "No error patterns in full console log for stage '%s', sending entire log: %s bytes",
-                            stage_name,
-                            len(console_log)
-                        )
-                else:
-                    logger.error("No console log available for stage '%s'", stage_name)
+            else:
+                # No error patterns found, use full console log
+                stage['log_content'] = console_log
+                logger.info(
+                    "No error patterns found for stage '%s', using full console log: %s bytes",
+                    stage_name,
+                    len(console_log)
+                )
 
         # Post to API if enabled
         if config.api_post_enabled and api_poster:
