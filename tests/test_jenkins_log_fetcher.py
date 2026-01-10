@@ -298,6 +298,181 @@ class TestJenkinsLogFetcher(unittest.TestCase):
             result = self.fetcher._make_request('GET', 'https://jenkins.example.com/api/json')
             result.raise_for_status()
 
+    @patch('requests.head')
+    @patch('requests.get')
+    def test_fetch_console_log_tail_success(self, mock_get, mock_head):
+        """Test fetch_console_log_tail with successful response."""
+        # Mock HEAD request to get content length
+        mock_head_response = Mock()
+        mock_head_response.headers = {'Content-Length': '100000'}
+        mock_head.return_value = mock_head_response
+
+        # Mock GET request for tail
+        mock_get_response = Mock()
+        mock_get_response.text = "Line 1\nLine 2\nError occurred\n"
+        mock_get_response.raise_for_status = Mock()
+        mock_get.return_value = mock_get_response
+
+        result = self.fetcher.fetch_console_log_tail("test-job", 123)
+
+        self.assertIsInstance(result, str)
+        self.assertIn("Error occurred", result)
+        mock_head.assert_called_once()
+        mock_get.assert_called_once()
+
+    @patch('requests.head')
+    def test_fetch_console_log_tail_empty_log(self, mock_head):
+        """Test fetch_console_log_tail when log is empty."""
+        mock_head_response = Mock()
+        mock_head_response.headers = {'Content-Length': '0'}
+        mock_head.return_value = mock_head_response
+
+        result = self.fetcher.fetch_console_log_tail("test-job", 123)
+
+        self.assertEqual(result, "")
+
+    @patch('requests.head')
+    def test_fetch_console_log_tail_failure(self, mock_head):
+        """Test fetch_console_log_tail when request fails."""
+        mock_head.side_effect = requests.exceptions.RequestException("Connection error")
+
+        with self.assertRaises(requests.exceptions.RequestException):
+            self.fetcher.fetch_console_log_tail("test-job", 123)
+
+    @patch('requests.get')
+    def test_fetch_console_log_streaming_success(self, mock_get):
+        """Test fetch_console_log_streaming with successful response."""
+        # Mock streaming response
+        mock_response = Mock()
+        mock_response.iter_lines.return_value = iter([
+            "Line 1",
+            "Line 2",
+            "Error: Something failed",
+            "Line 4"
+        ])
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        result = self.fetcher.fetch_console_log_streaming("test-job", 123, max_lines=10)
+
+        self.assertIsInstance(result, dict)
+        self.assertIn('log_content', result)
+        self.assertIn('truncated', result)
+        self.assertIn('total_lines', result)
+        self.assertEqual(result['total_lines'], 4)
+        self.assertFalse(result['truncated'])
+        self.assertIn("Error: Something failed", result['log_content'])
+
+    @patch('requests.get')
+    def test_fetch_console_log_streaming_truncated(self, mock_get):
+        """Test fetch_console_log_streaming with truncation at max_lines."""
+        # Mock streaming response with many lines
+        mock_response = Mock()
+        lines = [f"Line {i}" for i in range(1000)]
+        mock_response.iter_lines.return_value = iter(lines)
+        mock_response.raise_for_status = Mock()
+        mock_get.return_value = mock_response
+
+        result = self.fetcher.fetch_console_log_streaming("test-job", 123, max_lines=100)
+
+        self.assertTrue(result['truncated'])
+        self.assertEqual(result['total_lines'], 100)
+
+    @patch('requests.get')
+    def test_fetch_console_log_streaming_failure(self, mock_get):
+        """Test fetch_console_log_streaming when request fails."""
+        mock_get.side_effect = requests.exceptions.RequestException("Connection error")
+
+        with self.assertRaises(requests.exceptions.RequestException):
+            self.fetcher.fetch_console_log_streaming("test-job", 123)
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_console_log_tail')
+    @patch('src.log_error_extractor.LogErrorExtractor._find_error_lines')
+    def test_fetch_console_log_hybrid_tail_with_errors(self, mock_find_errors, mock_tail):
+        """Test fetch_console_log_hybrid when tail has errors."""
+        mock_tail.return_value = "Line 1\nError: Failed\nLine 3"
+        mock_find_errors.return_value = True  # Errors found in tail
+
+        result = self.fetcher.fetch_console_log_hybrid("test-job", 123)
+
+        self.assertEqual(result['method'], 'tail')
+        self.assertIn('log_content', result)
+        self.assertFalse(result['truncated'])
+        mock_tail.assert_called_once()
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_console_log_tail')
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_console_log_streaming')
+    @patch('src.log_error_extractor.LogErrorExtractor._find_error_lines')
+    def test_fetch_console_log_hybrid_fallback_to_streaming(self, mock_find_errors, mock_streaming, mock_tail):
+        """Test fetch_console_log_hybrid falls back to streaming when no errors in tail."""
+        mock_tail.return_value = "Line 1\nLine 2\nLine 3"
+        mock_find_errors.return_value = False  # No errors in tail
+        mock_streaming.return_value = {
+            'log_content': "Full log content",
+            'truncated': False,
+            'total_lines': 100
+        }
+
+        result = self.fetcher.fetch_console_log_hybrid("test-job", 123)
+
+        self.assertEqual(result['method'], 'streaming')
+        self.assertIn('log_content', result)
+        mock_tail.assert_called_once()
+        mock_streaming.assert_called_once()
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_console_log_tail')
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_console_log_streaming')
+    def test_fetch_console_log_hybrid_tail_exception(self, mock_streaming, mock_tail):
+        """Test fetch_console_log_hybrid when tail fetch fails."""
+        mock_tail.side_effect = Exception("Tail fetch failed")
+        mock_streaming.return_value = {
+            'log_content': "Full log content",
+            'truncated': False,
+            'total_lines': 100
+        }
+
+        result = self.fetcher.fetch_console_log_hybrid("test-job", 123)
+
+        self.assertEqual(result['method'], 'streaming')
+        mock_streaming.assert_called_once()
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher._make_request')
+    def test_fetch_stage_log_with_text_content(self, mock_make_request):
+        """Test fetch_stage_log when it returns plain text (not JSON)."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("Not JSON")  # Not JSON
+        mock_response.text = "Stage log content here"
+        mock_make_request.return_value = mock_response
+
+        result = self.fetcher.fetch_stage_log("test-job", 123, "stage-1")
+
+        self.assertEqual(result, "Stage log content here")
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher._make_request')
+    def test_fetch_stage_log_json_with_text_field(self, mock_make_request):
+        """Test fetch_stage_log when JSON has 'text' field."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'text': 'Stage log from JSON text field', 'length': 30}
+        mock_make_request.return_value = mock_response
+
+        result = self.fetcher.fetch_stage_log("test-job", 123, "stage-1")
+
+        self.assertEqual(result, "Stage log from JSON text field")
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher._make_request')
+    def test_fetch_stage_log_json_without_useful_data(self, mock_make_request):
+        """Test fetch_stage_log when JSON has no useful log data."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {'nodeId': 'xyz', 'nodeStatus': 'SUCCESS'}  # No text or length
+        mock_make_request.return_value = mock_response
+
+        result = self.fetcher.fetch_stage_log("test-job", 123, "stage-1")
+
+        self.assertIsNone(result)
+
 
 if __name__ == '__main__':
     unittest.main()
