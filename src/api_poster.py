@@ -15,7 +15,6 @@ Invokes: log_error_extractor, config_loader, error_handler, token_manager
 import json
 import logging
 import time
-import traceback
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
@@ -469,7 +468,6 @@ class ApiPoster:
         except requests.exceptions.HTTPError as e:
             # HTTP error (4xx, 5xx)
             duration_ms = int((time.time() - start_time) * 1000)
-            status_code = e.response.status_code if e.response else None
             error_msg = str(e)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"

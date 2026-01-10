@@ -316,8 +316,10 @@ class JenkinsExtractor:
         stage_start_marker = f'stage ({stage_name})'
         stage_end_marker = '// stage'
 
-        logger.debug("Extracting logs for stage '%s', looking for start marker: '%s'",
-                    stage_name, stage_start_marker)
+        logger.debug(
+            "Extracting logs for stage '%s', looking for start marker: '%s'",
+            stage_name, stage_start_marker
+        )
 
         for line in log_lines:
             if stage_start_marker.lower() in line.lower():
@@ -333,8 +335,10 @@ class JenkinsExtractor:
                 stage_log.append(line)
 
         if not stage_log:
-            logger.warning("No console log content extracted for stage '%s' (start marker not found or no content between markers)",
-                          stage_name)
+            logger.warning(
+                "No console log content extracted for stage '%s' (start marker not found or no content)",
+                stage_name
+            )
         else:
             logger.debug("Successfully extracted %d log lines for stage '%s'", len(stage_log), stage_name)
 
