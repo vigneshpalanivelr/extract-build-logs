@@ -960,26 +960,6 @@ STREAM_CHUNK_SIZE=8192      # Streaming chunk size in bytes
 2. **Direct error extraction** from full console log for each failed stage
 3. **Simplified processing**: 68% code reduction (112 → 36 lines)
 
-**Performance Impact:**
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| API calls per build | 8+ | 1 | 7x reduction |
-| Processing complexity | 3-layer fallback | Single approach | 68% less code |
-| Latency per build | ~2-3 seconds | ~500ms | 4-6x faster |
-| Memory usage (large logs) | Unbounded | Capped at 10MB | OOM-safe |
-
-**What Changed Internally:**
-```diff
-- Fetch Blue Ocean stages metadata ✓
-- For each failed stage:
--   1. Try Blue Ocean stage log API ✗ (7+ failing HTTP calls)
--   2. Try console log marker extraction ✗ (markers don't match)
--   3. Fall back to full console log ✓
-+ Fetch Blue Ocean stages metadata ✓
-+ For each failed stage:
-+   1. Extract errors from full console log ✓
-```
-
 ## 3.4 API Posting Setup
 
 ### Overview

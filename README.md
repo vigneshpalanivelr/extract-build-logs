@@ -51,14 +51,6 @@ This system provides a complete solution for:
 - **68% code reduction**: From 112 lines to 36 lines in core processing logic
 - **Faster processing**: Removed failed marker extraction and complex fallback chains
 
-**What Changed:**
-| Before | After | Benefit |
-|--------|-------|---------|
-| Load entire log into memory | Stream with safety limits | No OOM on large logs |
-| 7+ API calls per build | 1 API call for metadata | 7x fewer requests |
-| Complex marker extraction | Direct error extraction | Simpler, more reliable |
-| Multi-layer fallbacks | Single approach | Faster execution |
-
 **Configuration Example:**
 ```bash
 # Memory-efficient log handling (optional, has sensible defaults)
