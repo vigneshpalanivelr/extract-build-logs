@@ -215,8 +215,10 @@ def init_app():
         try:
             jenkins_instance_manager = JenkinsInstanceManager()
             if jenkins_instance_manager.has_instances():
-                logger.info("7. Jenkins instance manager loaded: %d instances configured",
-                           len(jenkins_instance_manager.instances))
+                logger.info(
+                    "7. Jenkins instance manager loaded: %d instances configured",
+                    len(jenkins_instance_manager.instances)
+                )
                 for url in jenkins_instance_manager.get_all_urls():
                     logger.debug("7. Jenkins instance: %s", url)
             else:
@@ -948,8 +950,10 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
         truncated = log_result['truncated']
         total_lines = log_result['total_lines']
 
-        logger.info("Fetched console log using '%s' method: %d lines, truncated=%s",
-                   log_method, total_lines, truncated)
+        logger.info(
+            "Fetched console log using '%s' method: %d lines, truncated=%s",
+            log_method, total_lines, truncated
+        )
 
         # Fetch Blue Ocean stages metadata (single API call for all stage info)
         blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)
@@ -1054,13 +1058,15 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
             error_count=0
         )
 
-        logger.info("Jenkins build processing completed: %s #%s | %s failed stages",
-                   job_name, build_number, len(failed_stages), extra={
-            'job_name': job_name,
-            'build_number': build_number,
-            'processing_time_ms': int(processing_time * 1000),
-            'failed_stages': len(failed_stages)
-        })
+        logger.info(
+            "Jenkins build processing completed: %s #%s | %s failed stages",
+            job_name, build_number, len(failed_stages), extra={
+                'job_name': job_name,
+                'build_number': build_number,
+                'processing_time_ms': int(processing_time * 1000),
+                'failed_stages': len(failed_stages)
+            }
+        )
 
     except Exception as e:  # pylint: disable=broad-exception-caught
         processing_time = time.time() - start_time

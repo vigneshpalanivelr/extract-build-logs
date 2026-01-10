@@ -113,13 +113,17 @@ class JenkinsLogFetcher:
             )
 
             build_info = response.json()
-            logger.debug("Successfully fetched build info for job %s #%s: %s",
-                        job_name, build_number, build_info.get('result', 'UNKNOWN'))
+            logger.debug(
+                "Successfully fetched build info for job %s #%s: %s",
+                job_name, build_number, build_info.get('result', 'UNKNOWN')
+            )
             return build_info
 
         except RetryExhaustedError as e:
-            logger.error("Failed to fetch build info for job %s #%s after retries: %s",
-                        job_name, build_number, e)
+            logger.error(
+                "Failed to fetch build info for job %s #%s after retries: %s",
+                job_name, build_number, e
+            )
             raise
 
     def fetch_console_log(self, job_name: str, build_number: int) -> str:
@@ -149,13 +153,17 @@ class JenkinsLogFetcher:
 
             console_log = response.text
             log_size = len(console_log)
-            logger.info("Successfully fetched console log for job %s #%s (%s bytes)",
-                       job_name, build_number, log_size)
+            logger.info(
+                "Successfully fetched console log for job %s #%s (%s bytes)",
+                job_name, build_number, log_size
+            )
             return console_log
 
         except RetryExhaustedError as e:
-            logger.error("Failed to fetch console log for job %s #%s after retries: %s",
-                        job_name, build_number, e)
+            logger.error(
+                "Failed to fetch console log for job %s #%s after retries: %s",
+                job_name, build_number, e
+            )
             raise
 
     def fetch_console_log_tail(self, job_name: str, build_number: int, tail_lines: Optional[int] = None) -> str:
@@ -203,14 +211,18 @@ class JenkinsLogFetcher:
             tail_log = response.text
             actual_lines = len(tail_log.split('\n'))
 
-            logger.info("Successfully fetched console log tail for job %s #%s (%d bytes, ~%d lines)",
-                       job_name, build_number, len(tail_log), actual_lines)
+            logger.info(
+                "Successfully fetched console log tail for job %s #%s (%d bytes, ~%d lines)",
+                job_name, build_number, len(tail_log), actual_lines
+            )
 
             return tail_log
 
         except requests.exceptions.RequestException as e:
-            logger.error("Failed to fetch console log tail for job %s #%s: %s",
-                        job_name, build_number, e)
+            logger.error(
+                "Failed to fetch console log tail for job %s #%s: %s",
+                job_name, build_number, e
+            )
             raise
 
     def fetch_console_log_streaming(self, job_name: str, build_number: int,
@@ -252,15 +264,19 @@ class JenkinsLogFetcher:
 
                 # Safety limit
                 if line_count >= max_lines:
-                    logger.warning("Hit max line limit %d for job %s #%s, truncating",
-                                 max_lines, job_name, build_number)
+                    logger.warning(
+                        "Hit max line limit %d for job %s #%s, truncating",
+                        max_lines, job_name, build_number
+                    )
                     truncated = True
                     break
 
             log_content = '\n'.join(collected_lines)
 
-            logger.info("Streamed console log for job %s #%s: %d lines, %d bytes (truncated=%s)",
-                       job_name, build_number, line_count, len(log_content), truncated)
+            logger.info(
+                "Streamed console log for job %s #%s: %d lines, %d bytes (truncated=%s)",
+                job_name, build_number, line_count, len(log_content), truncated
+            )
 
             return {
                 'log_content': log_content,
@@ -269,8 +285,10 @@ class JenkinsLogFetcher:
             }
 
         except requests.exceptions.RequestException as e:
-            logger.error("Failed to stream console log for job %s #%s: %s",
-                        job_name, build_number, e)
+            logger.error(
+                "Failed to stream console log for job %s #%s: %s",
+                job_name, build_number, e
+            )
             raise
 
     def fetch_console_log_hybrid(self, job_name: str, build_number: int) -> Dict[str, Any]:
@@ -314,8 +332,10 @@ class JenkinsLogFetcher:
             logger.info("No errors in tail for job %s #%s, streaming full log", job_name, build_number)
 
         except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning("Tail fetch failed for job %s #%s: %s, falling back to streaming",
-                         job_name, build_number, e)
+            logger.warning(
+                "Tail fetch failed for job %s #%s: %s, falling back to streaming",
+                job_name, build_number, e
+            )
 
         # Fall back to streaming full log
         result = self.fetch_console_log_streaming(job_name, build_number)
@@ -352,13 +372,17 @@ class JenkinsLogFetcher:
 
             stage_info = response.json()
             stages = stage_info.get('stages', [])
-            logger.info("Successfully fetched %s stages from Blue Ocean API for job %s #%s",
-                       len(stages), job_name, build_number)
+            logger.info(
+                "Successfully fetched %s stages from Blue Ocean API for job %s #%s",
+                len(stages), job_name, build_number
+            )
             return stages
 
         except requests.exceptions.RequestException as e:
-            logger.debug("Failed to fetch Blue Ocean stages for job %s #%s (non-critical): %s",
-                        job_name, build_number, e)
+            logger.debug(
+                "Failed to fetch Blue Ocean stages for job %s #%s (non-critical): %s",
+                job_name, build_number, e
+            )
             return None
 
     def fetch_stage_log(self, job_name: str, build_number: int, stage_id: str) -> Optional[str]:

@@ -243,7 +243,8 @@ class ConfigLoader:
                 if not jenkins_api_token:
                     raise ValueError(
                         "JENKINS_API_TOKEN is required when JENKINS_ENABLED is true. "
-                        "Either set JENKINS_API_TOKEN in .env or create jenkins_instances.json for multi-instance support."
+                        "Either set JENKINS_API_TOKEN in .env or create jenkins_instances.json "
+                        "for multi-instance support."
                     )
 
             # Validate jenkins_url format if provided (optional with jenkins_instances.json)

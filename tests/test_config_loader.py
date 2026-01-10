@@ -483,7 +483,6 @@ class TestConfigLoader(unittest.TestCase):
     def test_jenkins_enabled_with_instances_file_no_env_credentials(self):
         """Test that Jenkins can be enabled with jenkins_instances.json without .env credentials."""
         import json
-        import tempfile
 
         # Create a temporary jenkins_instances.json
         instances_data = {
