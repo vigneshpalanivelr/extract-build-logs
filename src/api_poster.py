@@ -73,6 +73,20 @@ class ApiPoster:
         else:
             logger.warning("6. Neither BFA_SECRET_KEY nor BFA_HOST configured - API authentication may fail")
 
+        # Initialize GitLab API session for Jenkins user lookups
+        self.gitlab_session = None
+        self.gitlab_base_url = None
+        if config.gitlab_url and config.gitlab_token:
+            self.gitlab_session = requests.Session()
+            self.gitlab_session.headers.update({
+                'PRIVATE-TOKEN': config.gitlab_token,
+                'Content-Type': 'application/json'
+            })
+            self.gitlab_base_url = f"{config.gitlab_url}/api/v4"
+            logger.debug("6. GitLab API session initialized for Jenkins user lookups")
+        else:
+            logger.debug("6. GitLab API session not available - Jenkins user lookups will be limited")
+
         logger.info("6. API Poster log file: %s", self.api_log_file)
         logger.debug("6. API Poster initialized")
 
@@ -176,7 +190,11 @@ class ApiPoster:
 
         return payload
 
-    def format_jenkins_payload(self, jenkins_payload: Dict[str, Any]) -> Dict[str, Any]:
+    def format_jenkins_payload(
+        self,
+        jenkins_payload: Dict[str, Any],
+        build_metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         Transform Jenkins payload to match GitLab API format.
 
@@ -201,6 +219,7 @@ class ApiPoster:
                         }
                     ]
                 }
+            build_metadata: Optional Jenkins build metadata from API (for user extraction)
 
         Returns:
             Dict[str, Any]: Transformed payload matching GitLab format:
@@ -228,6 +247,14 @@ class ApiPoster:
         repo = parameters.get('gitlabSourceRepoName', job_name)
         branch = parameters.get('gitlabSourceBranch', 'unknown')
         commit = parameters.get('gitlabMergeRequestLastCommit', 'unknown')
+
+        # Determine who triggered the build (Jenkins user or GitLab user)
+        if build_metadata:
+            triggered_by = self._determine_jenkins_triggered_by(parameters, build_metadata)
+        else:
+            # Fallback if metadata not available
+            triggered_by = "jenkins@internal.com"
+            logger.warning("Build metadata not available, using fallback triggered_by")
 
         # Filter to only failed stages
         failed_stages = [s for s in stages if s.get('status') in ['FAILED', 'FAILURE']]
@@ -276,7 +303,7 @@ class ApiPoster:
             "commit": commit,                          # From parameters or "unknown"
             "job_name": job_name,                      # Job name
             "pipeline_id": str(build_number),          # Build number as string
-            "triggered_by": "jenkins",                 # Source
+            "triggered_by": triggered_by,              # Jenkins or GitLab user
             "failed_steps": failed_steps               # Failed stages with error context
         }
 
@@ -286,6 +313,297 @@ class ApiPoster:
         )
 
         return payload
+
+    def _get_gitlab_project_id(self, namespace: str, repo_name: str) -> Optional[int]:
+        """
+        Get GitLab project ID from namespace and repo name.
+
+        Args:
+            namespace: GitLab namespace/group (e.g., "sandvine-platform")
+            repo_name: Repository name (e.g., "ci_build")
+
+        Returns:
+            Project ID or None if not found
+
+        API: GET /api/v4/projects/:namespace%2F:repo_name
+        """
+        if not self.gitlab_session:
+            logger.debug("GitLab API session not available")
+            return None
+
+        try:
+            project_path = f"{namespace}/{repo_name}"
+            encoded_path = requests.utils.quote(project_path, safe='')
+            url = f"{self.gitlab_base_url}/projects/{encoded_path}"
+
+            logger.debug("Fetching GitLab project ID for: %s", project_path)
+            response = self.gitlab_session.get(url, timeout=10)
+            response.raise_for_status()
+
+            project_data = response.json()
+            project_id = project_data.get('id')
+            logger.debug("Found project ID %d for %s", project_id, project_path)
+            return project_id
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Failed to fetch GitLab project ID for %s/%s: %s",
+                namespace, repo_name, e
+            )
+            return None
+
+    def _get_user_from_merge_request(self, project_id: int, mr_iid: int) -> Optional[str]:
+        """
+        Get username from GitLab merge request.
+
+        Args:
+            project_id: GitLab project ID
+            mr_iid: Merge request IID (project-specific)
+
+        Returns:
+            Username or None if not found
+
+        API: GET /api/v4/projects/:id/merge_requests/:merge_request_iid
+        """
+        if not self.gitlab_session:
+            return None
+
+        try:
+            url = f"{self.gitlab_base_url}/projects/{project_id}/merge_requests/{mr_iid}"
+
+            logger.debug("Fetching MR !%d from project %d", mr_iid, project_id)
+            response = self.gitlab_session.get(url, timeout=10)
+            response.raise_for_status()
+
+            mr_data = response.json()
+            author = mr_data.get('author', {})
+            username = author.get('username')
+
+            if username:
+                logger.info("Found MR author: %s for MR !%d", username, mr_iid)
+                return username
+
+            return None
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Failed to fetch MR !%d from project %d: %s",
+                mr_iid, project_id, e
+            )
+            return None
+
+    def _get_user_from_commit(self, project_id: int, commit_sha: str) -> Optional[str]:
+        """
+        Get username from GitLab commit.
+
+        Args:
+            project_id: GitLab project ID
+            commit_sha: Commit SHA
+
+        Returns:
+            Username or None if not found
+
+        API: GET /api/v4/projects/:id/repository/commits/:sha
+        """
+        if not self.gitlab_session:
+            return None
+
+        try:
+            url = f"{self.gitlab_base_url}/projects/{project_id}/repository/commits/{commit_sha}"
+
+            logger.debug("Fetching commit %s from project %d", commit_sha[:8], project_id)
+            response = self.gitlab_session.get(url, timeout=10)
+            response.raise_for_status()
+
+            commit_data = response.json()
+
+            # GitLab returns author_name and author_email, but not username directly
+            # Extract username from email if it matches pattern (e.g., "john.doe@internal.com" -> "john.doe")
+            author_email = commit_data.get('author_email', '')
+
+            if '@' in author_email:
+                username = author_email.split('@')[0]
+                logger.info("Extracted username '%s' from commit %s", username, commit_sha[:8])
+                return username
+
+            # Fallback: use author_name
+            author_name = commit_data.get('author_name')
+            if author_name:
+                logger.info("Using author name '%s' for commit %s", author_name, commit_sha[:8])
+                return author_name
+
+            return None
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Failed to fetch commit %s from project %d: %s",
+                commit_sha[:8], project_id, e
+            )
+            return None
+
+    def _get_user_from_branch(self, project_id: int, branch_name: str) -> Optional[str]:
+        """
+        Get username from latest commit on GitLab branch.
+
+        Args:
+            project_id: GitLab project ID
+            branch_name: Branch name
+
+        Returns:
+            Username or None if not found
+
+        API: GET /api/v4/projects/:id/repository/branches/:branch
+        """
+        if not self.gitlab_session:
+            return None
+
+        try:
+            encoded_branch = requests.utils.quote(branch_name, safe='')
+            url = f"{self.gitlab_base_url}/projects/{project_id}/repository/branches/{encoded_branch}"
+
+            logger.debug("Fetching branch '%s' from project %d", branch_name, project_id)
+            response = self.gitlab_session.get(url, timeout=10)
+            response.raise_for_status()
+
+            branch_data = response.json()
+            commit_data = branch_data.get('commit', {})
+            commit_sha = commit_data.get('id')
+
+            if commit_sha:
+                # Get user from the latest commit
+                return self._get_user_from_commit(project_id, commit_sha)
+
+            return None
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning(
+                "Failed to fetch branch '%s' from project %d: %s",
+                branch_name, project_id, e
+            )
+            return None
+
+    def _extract_jenkins_user_from_metadata(self, build_metadata: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract Jenkins user who triggered the build from metadata.
+
+        Args:
+            build_metadata: Jenkins build metadata from API
+
+        Returns:
+            Username (e.g., "john.doe") or None if not found
+
+        Looks for hudson.model.Cause$UserIdCause in actions[].causes[]
+        """
+        try:
+            actions = build_metadata.get('actions', [])
+            for action in actions:
+                if action.get('_class') == 'hudson.model.CauseAction':
+                    causes = action.get('causes', [])
+                    for cause in causes:
+                        if cause.get('_class') == 'hudson.model.Cause$UserIdCause':
+                            user_id = cause.get('userId')
+                            if user_id:
+                                logger.debug("Found Jenkins userId from metadata: %s", user_id)
+                                return user_id
+
+            logger.debug("No UserIdCause found in Jenkins metadata")
+            return None
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to extract Jenkins user from metadata: %s", e)
+            return None
+
+    def _determine_jenkins_triggered_by(
+        self,
+        parameters: Dict[str, Any],
+        build_metadata: Dict[str, Any]
+    ) -> str:
+        """
+        Determine who triggered the Jenkins pipeline.
+
+        Strategy:
+        1. Extract Jenkins user from build metadata
+        2. If user is "jenkins" → GitLab webhook triggered it → Look up actual GitLab user
+        3. If user is not "jenkins" → Manual trigger → Use Jenkins user directly
+        4. Always append @internal.com
+
+        Args:
+            parameters: Jenkins pipeline parameters
+            build_metadata: Jenkins build metadata
+
+        Returns:
+            Username formatted as "username@internal.com"
+        """
+        # Step 1: Extract Jenkins user from metadata
+        jenkins_user = self._extract_jenkins_user_from_metadata(build_metadata)
+
+        # Step 2: Check if it's the "jenkins" system user (GitLab webhook trigger)
+        if jenkins_user and jenkins_user.lower() != "jenkins":
+            # Manual Jenkins trigger - use Jenkins username directly
+            result = f"{jenkins_user}@internal.com"
+            logger.info("Jenkins build triggered manually by Jenkins user: %s", result)
+            return result
+
+        # Step 3: GitLab webhook trigger - look up actual GitLab user
+        logger.debug("Jenkins build triggered by GitLab webhook (user='jenkins'), looking up actual user")
+
+        namespace = parameters.get('gitlabSourceNamespace') or parameters.get('sourceNamespace')
+        repo_name = parameters.get('gitlabSourceRepoName')
+
+        if not namespace or not repo_name:
+            logger.warning(
+                "Missing namespace or repo name in Jenkins parameters, cannot determine GitLab user"
+            )
+            return "jenkins@internal.com"
+
+        # Get GitLab project ID
+        project_id = self._get_gitlab_project_id(namespace, repo_name)
+        if not project_id:
+            logger.warning("Could not find GitLab project ID, falling back to 'jenkins@internal.com'")
+            return "jenkins@internal.com"
+
+        gitlab_username = None
+
+        # Strategy 1: Pre-merge pipeline (has MR IID)
+        mr_iid = parameters.get('gitlabMergeRequestIid')
+        if mr_iid:
+            try:
+                mr_iid_int = int(mr_iid)
+                gitlab_username = self._get_user_from_merge_request(project_id, mr_iid_int)
+                if gitlab_username:
+                    logger.info("Determined Jenkins pipeline triggered by MR author: %s", gitlab_username)
+            except (ValueError, TypeError) as e:
+                logger.warning("Invalid MR IID '%s': %s", mr_iid, e)
+
+        # Strategy 2: Build pipeline with commit SHA
+        if not gitlab_username:
+            commit_sha = parameters.get('gitlabMergeRequestLastCommit')
+            if commit_sha and commit_sha != 'unknown':
+                gitlab_username = self._get_user_from_commit(project_id, commit_sha)
+                if gitlab_username:
+                    logger.info(
+                        "Determined Jenkins pipeline triggered by commit author: %s",
+                        gitlab_username
+                    )
+
+        # Strategy 3: Build pipeline with branch only
+        if not gitlab_username:
+            branch = parameters.get('gitlabSourceBranch')
+            if branch and branch != 'unknown':
+                gitlab_username = self._get_user_from_branch(project_id, branch)
+                if gitlab_username:
+                    logger.info(
+                        "Determined Jenkins pipeline triggered by branch's last committer: %s",
+                        gitlab_username
+                    )
+
+        # Format username
+        if gitlab_username:
+            return f"{gitlab_username}@internal.com"
+
+        # Fallback
+        logger.warning("Could not determine Jenkins pipeline trigger user, using 'jenkins@internal.com'")
+        return "jenkins@internal.com"
 
     def _fetch_token_from_bfa_server(self, subject: str) -> Optional[str]:
         """
@@ -685,7 +1003,11 @@ class ApiPoster:
 
             return False
 
-    def post_jenkins_logs(self, jenkins_payload: Dict[str, Any]) -> bool:
+    def post_jenkins_logs(
+        self,
+        jenkins_payload: Dict[str, Any],
+        build_metadata: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
         Post Jenkins build logs to the API endpoint.
         Formats and sends Jenkins build data including stages and parallel blocks.
@@ -702,6 +1024,7 @@ class ApiPoster:
                     'timestamp': str,
                     'stages': List[Dict]
                 }
+            build_metadata: Optional Jenkins build metadata from API (for user extraction)
 
         Returns:
             bool: True if successfully posted, False otherwise
@@ -721,7 +1044,7 @@ class ApiPoster:
 
         try:
             # Transform Jenkins payload to match GitLab API format
-            payload = self.format_jenkins_payload(jenkins_payload)
+            payload = self.format_jenkins_payload(jenkins_payload, build_metadata)
 
             # Use retry logic if enabled
             if self.config.api_post_retry_enabled:
