@@ -107,7 +107,7 @@ class ApiPoster:
                 "branch": str,            # Branch/ref name
                 "commit": str,            # Short commit SHA (7 chars)
                 "job_name": [str],        # List of all job names
-                "pipeline_id": str,       # Pipeline ID as string
+                "pipeline_id": str,       # Full pipeline URL
                 "triggered_by": str,      # Username or source
                 "failed_steps": [         # Only jobs with status="failed"
                     {
@@ -172,9 +172,8 @@ class ApiPoster:
 
                 failed_steps.append({"step_name": step_name, "error_lines": error_lines})
 
-        # Extract pipeline_id (convert to string if present)
-        pipeline_id = pipeline_info.get('pipeline_id')
-        pipeline_id_str = str(pipeline_id) if pipeline_id is not None else None
+        # Extract pipeline URL (provided by GitLab in webhook)
+        pipeline_url = pipeline_info.get('pipeline_url', '')
 
         # Build complete payload
         payload = {
@@ -183,7 +182,7 @@ class ApiPoster:
             "branch": branch,
             "commit": commit,
             "job_name": job_names,
-            "pipeline_id": pipeline_id_str,
+            "pipeline_id": pipeline_url,               # Full pipeline URL from GitLab
             "triggered_by": triggered_by,
             "failed_steps": failed_steps
         }
@@ -228,8 +227,8 @@ class ApiPoster:
                     "branch": str,            # From parameters or "unknown"
                     "commit": str,            # From parameters or "unknown"
                     "job_name": str,          # job_name
-                    "pipeline_id": str,       # build_number as string
-                    "triggered_by": str,      # "jenkins"
+                    "pipeline_id": str,       # Full build URL
+                    "triggered_by": str,      # Username@internal.com
                     "failed_steps": [
                         {
                             "step_name": str,
@@ -240,6 +239,7 @@ class ApiPoster:
         """
         job_name = jenkins_payload.get('job_name', 'unknown')
         build_number = jenkins_payload.get('build_number', 0)
+        build_url = jenkins_payload.get('build_url', '')
         parameters = jenkins_payload.get('parameters', {})
         stages = jenkins_payload.get('stages', [])
 
@@ -302,7 +302,7 @@ class ApiPoster:
             "branch": branch,                          # From parameters or "unknown"
             "commit": commit,                          # From parameters or "unknown"
             "job_name": job_name,                      # Job name
-            "pipeline_id": str(build_number),          # Build number as string
+            "pipeline_id": build_url,                  # Full build URL
             "triggered_by": triggered_by,              # Jenkins or GitLab user
             "failed_steps": failed_steps               # Failed stages with error context
         }
