@@ -923,6 +923,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
 
     try:
         # Fetch build metadata
+        metadata = None  # Initialize to None for later use
         try:
             metadata = fetcher.fetch_build_info(job_name, build_number)
             build_info['duration_ms'] = metadata.get('duration', 0)
@@ -941,6 +942,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
         except Exception as e:  # pylint: disable=broad-exception-caught
             logger.warning("Failed to fetch build metadata: %s", e)
             build_info['parameters'] = {}
+            metadata = None  # Ensure it's None on failure
 
         # Fetch console log using hybrid method (tail + streaming with limits)
         # This is memory-efficient and handles large logs gracefully
@@ -1030,7 +1032,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                     'stages': failed_stages  # Only send failed stages with error context
                 }
 
-                api_success = api_poster.post_jenkins_logs(jenkins_payload)
+                api_success = api_poster.post_jenkins_logs(jenkins_payload, metadata)
                 api_duration_ms = int((time.time() - api_start) * 1000)
 
                 if api_success:
