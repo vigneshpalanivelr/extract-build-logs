@@ -79,6 +79,7 @@ class TestApiPoster(unittest.TestCase):
 
         self.pipeline_info = {
             "pipeline_id": 12345,
+            "pipeline_url": "https://gitlab.example.com/test-project/-/pipelines/12345",
             "project_id": 123,
             "project_name": "test-project",
             "status": "success",
@@ -146,7 +147,10 @@ class TestApiPoster(unittest.TestCase):
         payload = poster.format_payload(self.pipeline_info, self.all_logs)
 
         # Verify structure - new simplified format
-        self.assertEqual(payload["pipeline_id"], "12345")  # String now
+        self.assertEqual(
+            payload["pipeline_id"],
+            "https://gitlab.example.com/test-project/-/pipelines/12345"
+        )  # Full URL now
         self.assertEqual(payload["repo"], "test-project")
         self.assertEqual(payload["branch"], "main")
         self.assertEqual(payload["commit"], "abc123d")  # First 7 chars of sha
@@ -164,7 +168,10 @@ class TestApiPoster(unittest.TestCase):
         poster = ApiPoster(self.config)
         payload = poster.format_payload(self.pipeline_info, {})
 
-        self.assertEqual(payload["pipeline_id"], "12345")  # String now
+        self.assertEqual(
+            payload["pipeline_id"],
+            "https://gitlab.example.com/test-project/-/pipelines/12345"
+        )  # Full URL
         self.assertEqual(payload["job_name"], "")  # Empty string when no jobs
         self.assertEqual(len(payload["failed_steps"]), 0)
 
@@ -467,6 +474,7 @@ class TestApiPoster(unittest.TestCase):
         # Pipeline info with minimal fields
         minimal_pipeline_info = {
             "pipeline_id": 12345,
+            "pipeline_url": "https://gitlab.example.com/project/-/pipelines/12345",
             "project_id": 123,
             "status": "success"
         }
@@ -485,7 +493,7 @@ class TestApiPoster(unittest.TestCase):
         payload = poster.format_payload(minimal_pipeline_info, minimal_logs)
 
         # Verify required fields are present
-        self.assertEqual(payload["pipeline_id"], "12345")  # String now
+        self.assertEqual(payload["pipeline_id"], "https://gitlab.example.com/project/-/pipelines/12345")
         self.assertEqual(payload["repo"], "unknown")  # Default when project_name missing
         self.assertEqual(payload["branch"], "unknown")  # Default when ref missing
         self.assertEqual(payload["commit"], "unknown")  # Default when sha missing
