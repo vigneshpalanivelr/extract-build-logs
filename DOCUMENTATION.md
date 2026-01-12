@@ -884,18 +884,22 @@ pipeline {
         always {
             script {
                 // Extract build logs and send to webhook server
-                def buildUrl = env.BUILD_URL
-                def jobName = env.JOB_NAME
-                def buildNumber = env.BUILD_NUMBER
-                def jenkinsUrl = env.JENKINS_URL  // Required for multi-instance support
+                def webhookUrl = "http://your-server:8000/webhook/jenkins"
+                def curlCommand = """curl -X POST ${webhookUrl} \\
+                    -H "Content-Type: application/json" \\
+                    -H "X-Jenkins-Token: ${JENKINS_WEBHOOK_SECRET}" \\
+                    -d '{"job_name":"${env.JOB_NAME}","build_number":${env.BUILD_NUMBER},"build_url":"${env.BUILD_URL}","jenkins_url":"${env.JENKINS_URL}"}'"""
 
-                // Webhook server will fetch logs via Jenkins API
-                sh """
-                curl -X POST http://your-server:8000/webhook/jenkins \
-                    -H "Content-Type: application/json" \
-                    -H "X-Jenkins-Token: ${JENKINS_WEBHOOK_SECRET}" \
-                    -d '{"job_name":"${jobName}","build_number":${buildNumber},"build_url":"${buildUrl}","jenkins_url":"${jenkinsUrl}"}'
-                """
+                try {
+                    // Webhook server will fetch logs via Jenkins API
+                    sh curlCommand
+                    echo "✓ Webhook sent successfully"
+                } catch (Exception e) {
+                    echo "✗ ERROR: Failed to send webhook"
+                    echo "Error: ${e.message}"
+                    echo "Command attempted:"
+                    echo curlCommand
+                }
             }
         }
     }
@@ -2614,20 +2618,28 @@ pipeline {
                 def webhookUrl = "http://your-log-extractor:8000/webhook/jenkins"
                 def webhookSecret = "your_secret_token"
 
-                sh """
-                    curl -X POST ${webhookUrl} \\
-                        -H 'Content-Type: application/json' \\
-                        -H 'X-Jenkins-Token: ${webhookSecret}' \\
-                        -d '{
-                            "job_name": "${env.JOB_NAME}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "${currentBuild.result}",
-                            "duration_ms": ${currentBuild.duration},
-                            "timestamp": "${new Date().format('yyyy-MM-dd HH:mm:ss')}",
-                            "jenkins_url": "${env.JENKINS_URL}"
-                        }' || true
-                """
+                def curlCommand = """curl -X POST ${webhookUrl} \\
+                    -H 'Content-Type: application/json' \\
+                    -H 'X-Jenkins-Token: ${webhookSecret}' \\
+                    -d '{
+                        "job_name": "${env.JOB_NAME}",
+                        "build_number": ${env.BUILD_NUMBER},
+                        "build_url": "${env.BUILD_URL}",
+                        "status": "${currentBuild.result}",
+                        "duration_ms": ${currentBuild.duration},
+                        "timestamp": "${new Date().format('yyyy-MM-dd HH:mm:ss')}",
+                        "jenkins_url": "${env.JENKINS_URL}"
+                    }'"""
+
+                try {
+                    sh curlCommand
+                    echo "✓ Webhook sent successfully"
+                } catch (Exception e) {
+                    echo "✗ ERROR: Failed to send webhook"
+                    echo "Error: ${e.message}"
+                    echo "Command attempted:"
+                    echo curlCommand
+                }
             }
         }
     }
@@ -2678,18 +2690,29 @@ pipeline {
         failure {
             script {
                 // Only send webhook on FAILURES
-                sh """
-                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                        -H 'Content-Type: application/json' \\
-                        -H 'X-Jenkins-Token: your_secret_token' \\
-                        -d '{
-                            "job_name": "${env.JOB_NAME}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "FAILURE",
-                            "jenkins_url": "${env.JENKINS_URL}"
-                        }' || true
-                """
+                def webhookUrl = "http://your-log-extractor:8000/webhook/jenkins"
+                def webhookSecret = "your_secret_token"
+
+                def curlCommand = """curl -X POST ${webhookUrl} \\
+                    -H 'Content-Type: application/json' \\
+                    -H 'X-Jenkins-Token: ${webhookSecret}' \\
+                    -d '{
+                        "job_name": "${env.JOB_NAME}",
+                        "build_number": ${env.BUILD_NUMBER},
+                        "build_url": "${env.BUILD_URL}",
+                        "status": "FAILURE",
+                        "jenkins_url": "${env.JENKINS_URL}"
+                    }'"""
+
+                try {
+                    sh curlCommand
+                    echo "✓ Webhook sent successfully"
+                } catch (Exception e) {
+                    echo "✗ ERROR: Failed to send webhook"
+                    echo "Error: ${e.message}"
+                    echo "Command attempted:"
+                    echo curlCommand
+                }
             }
         }
     }
@@ -2726,23 +2749,34 @@ pipeline {
                 }
                 """
 
-                def response = sh(
-                    script: """
-                        curl -X POST ${webhookUrl} \\
-                            -H 'Content-Type: application/json' \\
-                            -H 'X-Jenkins-Token: ${webhookSecret}' \\
-                            -d '${payload}' \\
-                            -w '%{http_code}' \\
-                            -o /dev/null \\
-                            -s
-                    """,
-                    returnStdout: true
-                ).trim()
+                // Construct the curl command
+                def curlCommand = """curl -X POST ${webhookUrl} \\
+                    -H 'Content-Type: application/json' \\
+                    -H 'X-Jenkins-Token: ${webhookSecret}' \\
+                    -d '${payload}' \\
+                    -w '%{http_code}' \\
+                    -o /dev/null \\
+                    -s"""
 
-                if (response == "200") {
-                    echo "✓ Successfully sent webhook to log extractor"
-                } else {
-                    echo "✗ WARNING: Webhook failed with HTTP ${response}"
+                try {
+                    def response = sh(
+                        script: curlCommand,
+                        returnStdout: true
+                    ).trim()
+
+                    if (response == "200") {
+                        echo "✓ Successfully sent webhook to log extractor"
+                    } else {
+                        echo "✗ WARNING: Webhook failed with HTTP ${response}"
+                        echo "Command executed:"
+                        echo curlCommand
+                        echo "This does not affect your build status"
+                    }
+                } catch (Exception e) {
+                    echo "✗ ERROR: Failed to send webhook to log extractor"
+                    echo "Error: ${e.message}"
+                    echo "Command attempted:"
+                    echo curlCommand
                     echo "This does not affect your build status"
                 }
             }
@@ -2956,19 +2990,25 @@ post {
             // Add echo for debugging
             echo "Sending webhook to log extractor..."
 
-            sh """
-                curl -v -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                    -H 'Content-Type: application/json' \\
-                    -H 'X-Jenkins-Token: your_secret' \\
-                    -d '{
-                        "job_name": "${env.JOB_NAME}",
-                        "build_number": ${env.BUILD_NUMBER},
-                        "build_url": "${env.BUILD_URL}",
-                        "status": "${currentBuild.result}"
-                    }'
-            """
+            def curlCommand = """curl -v -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                -H 'Content-Type: application/json' \\
+                -H 'X-Jenkins-Token: your_secret' \\
+                -d '{
+                    "job_name": "${env.JOB_NAME}",
+                    "build_number": ${env.BUILD_NUMBER},
+                    "build_url": "${env.BUILD_URL}",
+                    "status": "${currentBuild.result}"
+                }'"""
 
-            echo "Webhook sent!"
+            try {
+                sh curlCommand
+                echo "✓ Webhook sent successfully!"
+            } catch (Exception e) {
+                echo "✗ ERROR: Failed to send webhook"
+                echo "Error: ${e.message}"
+                echo "Command attempted:"
+                echo curlCommand
+            }
         }
     }
 }
@@ -3138,17 +3178,25 @@ pipeline {
     post {
         failure {
             script {
-                sh """
-                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "job_name": "${env.JOB_NAME}",
-                            "branch_name": "${env.BRANCH_NAME}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "FAILURE"
-                        }' || true
-                """
+                def curlCommand = """curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                    -H 'Content-Type: application/json' \\
+                    -d '{
+                        "job_name": "${env.JOB_NAME}",
+                        "branch_name": "${env.BRANCH_NAME}",
+                        "build_number": ${env.BUILD_NUMBER},
+                        "build_url": "${env.BUILD_URL}",
+                        "status": "FAILURE"
+                    }'"""
+
+                try {
+                    sh curlCommand
+                    echo "✓ Webhook sent successfully"
+                } catch (Exception e) {
+                    echo "✗ ERROR: Failed to send webhook"
+                    echo "Error: ${e.message}"
+                    echo "Command attempted:"
+                    echo curlCommand
+                }
             }
         }
     }
@@ -3177,20 +3225,28 @@ pipeline {
     post {
         always {
             script {
-                sh """
-                    curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "job_name": "${env.JOB_NAME}",
-                            "build_number": ${env.BUILD_NUMBER},
-                            "build_url": "${env.BUILD_URL}",
-                            "status": "${currentBuild.result}",
-                            "parameters": {
-                                "DEPLOY_ENV": "${params.DEPLOY_ENV}",
-                                "RUN_TESTS": ${params.RUN_TESTS}
-                            }
-                        }' || true
-                """
+                def curlCommand = """curl -X POST http://your-log-extractor:8000/webhook/jenkins \\
+                    -H 'Content-Type: application/json' \\
+                    -d '{
+                        "job_name": "${env.JOB_NAME}",
+                        "build_number": ${env.BUILD_NUMBER},
+                        "build_url": "${env.BUILD_URL}",
+                        "status": "${currentBuild.result}",
+                        "parameters": {
+                            "DEPLOY_ENV": "${params.DEPLOY_ENV}",
+                            "RUN_TESTS": ${params.RUN_TESTS}
+                        }
+                    }'"""
+
+                try {
+                    sh curlCommand
+                    echo "✓ Webhook sent successfully"
+                } catch (Exception e) {
+                    echo "✗ ERROR: Failed to send webhook"
+                    echo "Error: ${e.message}"
+                    echo "Command attempted:"
+                    echo curlCommand
+                }
             }
         }
     }
