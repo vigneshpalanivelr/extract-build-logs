@@ -25,9 +25,10 @@
 - [3.1 Environment Variables Reference](#31-environment-variables-reference)
 - [3.2 GitLab Webhook Setup](#32-gitlab-webhook-setup)
 - [3.3 Jenkins Integration](#33-jenkins-integration)
-- [3.4 API Posting Setup](#34-api-posting-setup)
-- [3.5 Log Filtering Configuration](#35-log-filtering-configuration)
-- [3.6 Configuration Examples & Scenarios](#36-configuration-examples--scenarios)
+- [3.4 Jenkins Log File Storage](#34-jenkins-log-file-storage)
+- [3.5 API Posting Setup](#35-api-posting-setup)
+- [3.6 Log Filtering Configuration](#36-log-filtering-configuration)
+- [3.7 Configuration Examples & Scenarios](#37-configuration-examples--scenarios)
 
 ### 4. Usage & Operations
 - [4.1 Running the Application](#41-running-the-application)
@@ -667,8 +668,8 @@ ls -la logs/
 ### Next Steps
 
 1. **Configure GitLab Webhook** → See [Section 3.2](#32-gitlab-webhook-setup)
-2. **Configure Log Filtering** (optional) → See [Section 3.5](#35-log-filtering-configuration)
-3. **Enable API Posting** (optional) → See [Section 3.4](#34-api-posting-setup)
+2. **Configure Log Filtering** (optional) → See [Section 3.6](#36-log-filtering-configuration)
+3. **Enable API Posting** (optional) → See [Section 3.5](#35-api-posting-setup)
 4. **Set up Monitoring** → See [Section 4.4](#44-monitoring--tracking)
 
 ---
@@ -964,7 +965,197 @@ STREAM_CHUNK_SIZE=8192      # Streaming chunk size in bytes
 2. **Direct error extraction** from full console log for each failed stage
 3. **Simplified processing**: 68% code reduction (112 → 36 lines)
 
-## 3.4 API Posting Setup
+## 3.4 Jenkins Log File Storage
+
+### Overview
+
+Jenkins build logs are automatically saved to a structured directory hierarchy when Jenkins webhooks are processed. The system organizes logs by job name and build number, creating a consistent structure similar to GitLab pipeline logs.
+
+### Directory Structure
+
+**Base Structure:**
+```
+logs/
+├── jenkins-builds/
+│   ├── {job-name}/
+│   │   └── {build-number}/
+│   │       ├── metadata.json
+│   │       ├── console.log
+│   │       ├── stage_{stage-name}.log
+│   │       └── stage_{stage-name}.log
+│   └── another-job/
+│       └── 123/
+│           ├── metadata.json
+│           └── console.log
+├── application.log
+├── api-requests.log
+└── monitoring.db
+```
+
+**Example: Complete Jenkins Build with Multiple Stages**
+```
+logs/
+├── jenkins-builds/
+│   ├── ci_build/
+│   │   ├── 8320/
+│   │   │   ├── metadata.json
+│   │   │   ├── console.log
+│   │   │   ├── stage_checkout.log
+│   │   │   ├── stage_build.log
+│   │   │   ├── stage_test-unit.log
+│   │   │   ├── stage_test-integration.log
+│   │   │   └── stage_deploy.log
+│   │   └── 8321/
+│   │       ├── metadata.json
+│   │       ├── console.log
+│   │       └── stage_build.log
+│   ├── pre-merge-build/
+│   │   └── 456/
+│   │       ├── metadata.json
+│   │       ├── console.log
+│   │       ├── stage_pre-merge-test.log
+│   │       └── stage_code-review.log
+│   └── nightly-tests/
+│       └── 789/
+│           ├── metadata.json
+│           └── console.log
+├── application.log
+├── api-requests.log
+└── monitoring.db
+```
+
+### File Naming Conventions
+
+#### Directory Names
+- **Job directory**: Exact job name from Jenkins (e.g., `ci_build`, `pre-merge-build`)
+- **Build directory**: Build number as string (e.g., `8320`, `456`)
+
+#### Log Files
+- **`metadata.json`**: Complete build metadata including parameters, trigger info, and stage details
+- **`console.log`**: Full console output from the Jenkins build
+- **`stage_{stage-name}.log`**: Individual stage logs with extracted error context
+  - Stage names are sanitized (lowercase, spaces/special chars replaced with hyphens)
+  - Examples: `stage_build.log`, `stage_test-unit.log`, `stage_code-review.log`
+
+### Metadata File Format
+
+The `metadata.json` file contains comprehensive information about the Jenkins build:
+
+```json
+{
+  "source": "jenkins",
+  "job_name": "ci_build",
+  "build_number": 8320,
+  "build_url": "https://jenkins.example.com/job/ci_build/8320/",
+  "jenkins_url": "https://jenkins.example.com",
+  "triggered_by": "john.doe@internal.com",
+  "timestamp": "2026-01-13T10:30:45.123Z",
+  "status": "FAILED",
+  "duration_ms": 245000,
+  "parameters": {
+    "gitlabSourceNamespace": "sandvine-platform",
+    "gitlabSourceRepoName": "ci_build",
+    "gitlabSourceBranch": "feature/new-feature",
+    "gitlabMergeRequestIid": "123",
+    "gitlabMergeRequestLastCommit": "abc123def456"
+  },
+  "stages": [
+    {
+      "name": "checkout",
+      "status": "SUCCESS",
+      "duration_ms": 5000
+    },
+    {
+      "name": "build",
+      "status": "SUCCESS",
+      "duration_ms": 120000
+    },
+    {
+      "name": "test-unit",
+      "status": "FAILED",
+      "duration_ms": 45000,
+      "error_summary": "AssertionError: Expected 42 but got 41"
+    },
+    {
+      "name": "test-integration",
+      "status": "ABORTED",
+      "duration_ms": 0
+    }
+  ],
+  "repo": "ci_build",
+  "branch": "feature/new-feature",
+  "commit": "abc123def456"
+}
+```
+
+### Comparison with GitLab Structure
+
+Both Jenkins and GitLab logs follow similar organizational principles:
+
+| Aspect | GitLab | Jenkins |
+|--------|--------|---------|
+| **Base path** | `logs/{project}_{id}/pipeline_{id}/` | `logs/jenkins-builds/{job-name}/{build-number}/` |
+| **Metadata** | `metadata.json` | `metadata.json` |
+| **Main log** | N/A (job-specific only) | `console.log` (full build output) |
+| **Stage logs** | `job_{id}_{name}.log` | `stage_{name}.log` |
+| **Identifier** | Pipeline URL | Build URL |
+| **Trigger user** | `username@sandvine.com` | `username@internal.com` |
+
+### Storage Behavior
+
+**Automatic Creation:**
+- Directories are created automatically when webhooks are processed
+- No manual setup required
+- Failed builds still save logs for debugging
+
+**File Persistence:**
+- Logs are retained indefinitely (no automatic cleanup)
+- Implement custom retention policies using cron jobs if needed
+- Example: `find logs/jenkins-builds -mtime +90 -delete` (remove builds older than 90 days)
+
+**Disk Space Considerations:**
+- Console logs can be large (1MB-100MB+ per build)
+- Stage logs are typically smaller (errors + context only)
+- Monitor disk usage: `du -sh logs/jenkins-builds/`
+
+### Multi-Instance Support
+
+When using multiple Jenkins instances, logs are still organized by job name:
+
+```
+logs/
+├── jenkins-builds/
+│   ├── ci_build/                    # Could be from jenkins1.example.com
+│   │   └── 8320/
+│   │       ├── metadata.json        # Contains jenkins_url field
+│   │       └── console.log
+│   └── ci_build/                    # Or from jenkins2.example.com
+│       └── 8320/
+│           ├── metadata.json        # Different jenkins_url
+│           └── console.log
+```
+
+**Note:** If the same job name and build number exist on different Jenkins instances, the logs will be organized by job name. Check the `jenkins_url` field in `metadata.json` to identify the source instance.
+
+### Troubleshooting
+
+**Logs not being saved:**
+1. Check `JENKINS_ENABLED=true` in `.env`
+2. Verify webhook is reaching the server (check `application.log`)
+3. Ensure write permissions on `logs/` directory
+4. Check `JENKINS_SAVE_TO_FILE=true` (if API posting is enabled)
+
+**Missing stage logs:**
+- Stage logs are only created for failed stages by default
+- Check `metadata.json` to see which stages failed
+- Successful stages only appear in `console.log`
+
+**Large console.log files:**
+- Files over 100MB indicate verbose build output
+- Consider Jenkins-side log filtering
+- System automatically handles large logs with streaming (won't crash)
+
+## 3.5 API Posting Setup
 
 ### Overview
 
@@ -1090,7 +1281,7 @@ Automatic retry with exponential backoff:
 2025-12-30 10:25:34.789 | INFO  | src.api_poster          | b2c3d4e5 | API POST succeeded on retry | attempt=1
 ```
 
-## 3.5 Log Filtering Configuration
+## 3.6 Log Filtering Configuration
 
 ### Overview
 
@@ -1178,7 +1369,7 @@ LOG_SAVE_METADATA_ALWAYS=true
 2025-12-30 10:45:16.234 | INFO  | src.webhook_listener    | f7g8h9i0 | Job filtering: 5 jobs to fetch, 0 jobs skipped by filter
 ```
 
-## 3.6 Configuration Examples & Scenarios
+## 3.7 Configuration Examples & Scenarios
 
 <details>
 <summary><b>Scenario 1: Production - Failed Logs Only</b></summary>
