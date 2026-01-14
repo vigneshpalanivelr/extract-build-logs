@@ -2,8 +2,88 @@
 
 > **Comprehensive guide for setup, configuration, operations, and maintenance**
 
-**Last Updated:** 2025-12-30
-**Version:** 3.0
+**Last Updated:** 2026-01-14
+**Version:** 3.1
+
+---
+
+## System Deployment Flow
+
+### High-Level Deployment Diagram
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#a8d5ba','secondaryColor':'#b3d9ff','tertiaryColor':'#ffd699','primaryBorderColor':'#6b9e78','secondaryBorderColor':'#6ba8e6','tertiaryBorderColor':'#e6a84d'}}}%%
+flowchart TD
+    subgraph Sources["CI/CD Sources"]
+        JK[Jenkins Server<br/>Build Failures]
+        GL[GitLab Server<br/>Pipeline Events]
+    end
+
+    subgraph Endpoints["Webhook Endpoints :8000"]
+        JE["/webhook/jenkins<br/>Jenkins Endpoint"]
+        GE["/webhook/gitlab<br/>GitLab Endpoint"]
+    end
+
+    subgraph Listener["Log Extractor Listener"]
+        WH[Webhook Validator<br/>Secret Token Check]
+        BG[Background Task Queue<br/>Non-blocking]
+    end
+
+    subgraph Processing["Stage Processing"]
+        META[Get Build/Pipeline Metadata<br/>All Stages Info]
+        FILTER[Find Failed Stages<br/>Status Filtering]
+        EXTRACT[Extract Error Logs<br/>Context + Errors]
+    end
+
+    subgraph APIPost["API Integration"]
+        USER[Determine Triggered User<br/>Jenkins/GitLab API]
+        TOKEN[Generate JWT Token<br/>BFA Authentication]
+        POST[Call External API<br/>POST Logs + Metadata]
+    end
+
+    subgraph Storage["Optional Storage"]
+        SAVE[Save to File System<br/>logs/ directory]
+    end
+
+    JK -->|Build Failed<br/>POST webhook| JE
+    GL -->|Pipeline Complete<br/>POST webhook| GE
+    JE --> WH
+    GE --> WH
+    WH -->|Validated| BG
+    BG --> META
+    META -->|All Stages| FILTER
+    FILTER -->|Failed Stages| EXTRACT
+    EXTRACT -->|Logs Ready| USER
+    USER -->|User Identified| TOKEN
+    TOKEN -->|JWT Ready| POST
+    POST -->|Optional<br/>Dual Mode| SAVE
+
+    style JK fill:#ffe4b3,stroke:#e6c56b,stroke-width:2px
+    style GL fill:#e8f4ea,stroke:#9db5a0,stroke-width:2px
+    style JE fill:#ffd699,stroke:#e6a84d,stroke-width:3px
+    style GE fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
+    style WH fill:#b3d9ff,stroke:#6ba8e6,stroke-width:2px
+    style BG fill:#c1e1c1,stroke:#7eb07e,stroke-width:2px
+    style META fill:#d9b3ff,stroke:#a86be6,stroke-width:2px
+    style FILTER fill:#ffb3d9,stroke:#e66ba8,stroke-width:2px
+    style EXTRACT fill:#ffd699,stroke:#e6a84d,stroke-width:2px
+    style USER fill:#b3f0ff,stroke:#6baee6,stroke-width:2px
+    style TOKEN fill:#ffe4b3,stroke:#e6c56b,stroke-width:2px
+    style POST fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
+    style SAVE fill:#d9b3ff,stroke:#a86be6,stroke-width:2px
+```
+
+**Key Flow Steps:**
+
+1. **Webhook Trigger**: Jenkins (on build failure) or GitLab (on pipeline event) sends POST request to respective endpoint
+2. **Listener Processing**: Validates webhook secret and queues background processing task
+3. **Stage Collection**: Fetches complete build/pipeline metadata with all stages information
+4. **Failed Stage Identification**: Filters stages based on status (failed, canceled, etc.)
+5. **Log Extraction**: Extracts error context and relevant log sections from failed stages
+6. **User Determination**: Identifies who triggered the build using Jenkins metadata or GitLab API
+7. **Authentication**: Generates JWT token for external API authentication
+8. **API Posting**: Sends processed logs and metadata to external BFA API endpoint
+9. **Optional Storage**: Saves logs to file system if dual mode is enabled
 
 ---
 
@@ -181,58 +261,114 @@ logs/
 
 ```mermaid
 graph TB
-    subgraph "GitLab"
-        GL[GitLab Server]
-        PIPE[Pipeline Events]
+    subgraph "CI/CD Sources"
+        GL[GitLab Server<br/>Pipeline Events]
+        JK1[Jenkins Instance 1<br/>Build Events]
+        JK2[Jenkins Instance 2<br/>Build Events]
+        JK3[Jenkins Instance N<br/>Multi-Instance]
     end
 
     subgraph "Webhook Server (Port 8000)"
         WH[Webhook Listener<br/>FastAPI Server]
         VAL[Webhook Validator<br/>Secret Token Check]
-        PARSE[Pipeline Extractor<br/>Event Parser]
+        PARSE[Pipeline Extractor<br/>GitLab Parser]
+        JPARSE[Jenkins Extractor<br/>Build Parser]
     end
 
     subgraph "Processing Layer"
-        FETCH[Log Fetcher<br/>GitLab API Client]
+        GLFETCH[GitLab Log Fetcher<br/>Pipeline API]
+        JKFETCH[Jenkins Log Fetcher<br/>Blue Ocean API]
+        GLAPI[GitLab API Client<br/>User Lookup]
+        ERREXT[Error Extractor<br/>Pattern Matching]
         RETRY[Error Handler<br/>Retry Logic]
+    end
+
+    subgraph "API Integration Layer"
+        APIPOSTER[API Poster<br/>External API]
+        TOKENMGR[Token Manager<br/>JWT Generation]
+        USERDET[User Determination<br/>Jenkins/GitLab]
     end
 
     subgraph "Storage Layer"
         STORE[Storage Manager<br/>File System]
-        META[Metadata Files<br/>JSON]
-        LOGS[Log Files<br/>.log]
+        GLMETA[GitLab Metadata<br/>metadata.json]
+        JKMETA[Jenkins Metadata<br/>metadata.json]
+        LOGS[Log Files<br/>stage_*.log]
     end
 
-    subgraph "Configuration"
-        CONFIG[Config Loader<br/>Environment Variables]
+    subgraph "Monitoring & Config"
+        CONFIG[Config Loader<br/>Environment + JSON]
+        MONITOR[Monitor DB<br/>SQLite Tracking]
     end
 
     GL -->|POST /webhook/gitlab| WH
-    PIPE -.->|Pipeline Complete| GL
+    JK1 -->|POST /webhook/jenkins| WH
+    JK2 -->|POST /webhook/jenkins| WH
+    JK3 -->|POST /webhook/jenkins| WH
+
     WH --> VAL
-    VAL -->|Valid| PARSE
-    PARSE -->|Extract Info| FETCH
-    FETCH -->|API Call| GL
-    FETCH -.->|On Error| RETRY
-    RETRY -.->|Retry| FETCH
-    FETCH --> STORE
-    STORE --> META
+    VAL -->|GitLab Event| PARSE
+    VAL -->|Jenkins Event| JPARSE
+
+    PARSE -->|Pipeline Info| GLFETCH
+    JPARSE -->|Build Info| JKFETCH
+
+    GLFETCH -->|API Call| GL
+    JKFETCH -->|Blue Ocean API| JK1
+    JKFETCH -->|Blue Ocean API| JK2
+    JKFETCH -->|Blue Ocean API| JK3
+
+    GLFETCH -.->|On Error| RETRY
+    JKFETCH -.->|On Error| RETRY
+    RETRY -.->|Retry| GLFETCH
+    RETRY -.->|Retry| JKFETCH
+
+    GLFETCH --> ERREXT
+    JKFETCH --> ERREXT
+    ERREXT --> USERDET
+
+    USERDET -->|GitLab User Lookup| GLAPI
+    GLAPI -->|API Call| GL
+    USERDET --> APIPOSTER
+
+    APIPOSTER --> TOKENMGR
+    APIPOSTER -->|POST Logs| APIPOSTER
+    APIPOSTER -.->|Dual Mode| STORE
+
+    ERREXT -.->|File Mode| STORE
+    STORE --> GLMETA
+    STORE --> JKMETA
     STORE --> LOGS
+
+    WH --> MONITOR
+    APIPOSTER --> MONITOR
+
     CONFIG -.->|Configuration| WH
-    CONFIG -.->|Configuration| FETCH
-    CONFIG -.->|Configuration| STORE
+    CONFIG -.->|jenkins_instances.json| JKFETCH
+    CONFIG -.->|.env| APIPOSTER
 
     style WH fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
     style VAL fill:#c1e1c1,stroke:#7eb07e
     style PARSE fill:#b3d9ff,stroke:#6ba8e6
-    style FETCH fill:#ffd699,stroke:#e6a84d
+    style JPARSE fill:#ffd699,stroke:#e6a84d
+    style GLFETCH fill:#b3d9ff,stroke:#6ba8e6
+    style JKFETCH fill:#ffd699,stroke:#e6a84d
+    style GLAPI fill:#b3f0ff,stroke:#6baee6
+    style ERREXT fill:#ffb3d9,stroke:#e66ba8
     style RETRY fill:#ffb3b3,stroke:#e66b6b
+    style APIPOSTER fill:#a8d5ba,stroke:#6b9e78,stroke-width:2px
+    style TOKENMGR fill:#ffe4b3,stroke:#e6c56b
+    style USERDET fill:#b3f0ff,stroke:#6baee6
     style STORE fill:#d9b3ff,stroke:#a86be6
-    style META fill:#e6ccff,stroke:#b380e6
+    style GLMETA fill:#e6ccff,stroke:#b380e6
+    style JKMETA fill:#ffe4cc,stroke:#e6b380
     style LOGS fill:#f0d9ff,stroke:#c699e6
     style CONFIG fill:#c5ccd4,stroke:#8b95a1
+    style MONITOR fill:#d4f4dd,stroke:#9bcca8
     style GL fill:#e8f4ea,stroke:#9db5a0
-    style PIPE fill:#f0f7f2,stroke:#b0c5b3
+    style JK1 fill:#fff4e6,stroke:#e6c599
+    style JK2 fill:#fff4e6,stroke:#e6c599
+    style JK3 fill:#fff4e6,stroke:#e6c599
 ```
 
 The system consists of several key components working together:
@@ -241,39 +377,59 @@ The system consists of several key components working together:
 
 1. **Webhook Listener** (`webhook_listener.py`)
    - FastAPI async web server
-   - Receives webhook events from GitLab/Jenkins
-   - Validates webhook secrets
-   - Queues background processing
+   - Dual endpoints: `/webhook/gitlab` and `/webhook/jenkins`
+   - Validates webhook secrets for both sources
+   - Queues background processing tasks
 
 2. **Pipeline Extractor** (`pipeline_extractor.py`)
-   - Parses webhook payloads
+   - Parses GitLab webhook payloads
    - Identifies pipeline types (main/child/MR)
    - Filters jobs based on configuration
 
-3. **Log Fetcher** (`log_fetcher.py`)
-   - Communicates with GitLab/Jenkins API
-   - Fetches job logs with retry logic
-   - Handles authentication
+3. **Jenkins Extractor** (`jenkins_extractor.py`)
+   - Parses Jenkins webhook payloads
+   - Fetches build metadata via Blue Ocean API
+   - Extracts stage information and parameters
+   - Supports multi-instance configurations
 
-4. **Storage Manager** (`storage_manager.py`)
-   - Creates directory structures
-   - Saves log files and metadata
-   - Manages file organization
+4. **GitLab Log Fetcher** (`log_fetcher.py`)
+   - Communicates with GitLab API
+   - Fetches pipeline and job logs
+   - Handles authentication with private tokens
 
-5. **API Poster** (`api_poster.py`)
-   - Posts logs to external API endpoints
-   - Handles authentication and retries
-   - Logs all API requests/responses
+5. **Jenkins Log Fetcher** (`jenkins_log_fetcher.py`)
+   - Communicates with Jenkins API and Blue Ocean
+   - Memory-efficient log streaming (tail + streaming hybrid)
+   - Handles million+ line logs without OOM crashes
+   - Multi-instance support with credential management
 
-6. **Monitoring** (`monitoring.py`)
+6. **Log Error Extractor** (`log_error_extractor.py`)
+   - Pattern-based error detection
+   - Extracts error context from logs
+   - Supports Jenkins and GitLab log formats
+
+7. **Storage Manager** (`storage_manager.py`)
+   - Creates directory structures for both GitLab and Jenkins
+   - GitLab: `logs/{project}_{id}/pipeline_{id}/`
+   - Jenkins: `logs/jenkins-builds/{job-name}/{build-number}/`
+   - Saves log files and metadata.json
+
+8. **API Poster** (`api_poster.py`)
+   - Posts logs to external BFA API endpoint
+   - User determination: Jenkins metadata + GitLab API lookups
+   - JWT token generation for authentication
+   - Dual mode: API-only or API + file storage
+   - Retry logic with exponential backoff
+
+9. **Monitoring** (`monitoring.py`)
    - SQLite database for tracking
-   - Records all webhook requests
+   - Records all webhook requests (GitLab and Jenkins)
    - Provides statistics and reporting
 
-7. **Error Handler** (`error_handler.py`)
-   - Implements retry logic with exponential backoff
-   - Circuit breaker pattern
-   - Comprehensive error tracking
+10. **Error Handler** (`error_handler.py`)
+    - Implements retry logic with exponential backoff
+    - Circuit breaker pattern
+    - Comprehensive error tracking
 
 ## 1.3 Module Documentation
 
@@ -282,9 +438,12 @@ The system consists of several key components working together:
 ```mermaid
 graph LR
     subgraph "Core Modules"
-        WL[webhook_listener.py<br/>Main Server]
-        PE[pipeline_extractor.py<br/>Event Parser]
-        LF[log_fetcher.py<br/>API Client]
+        WL[webhook_listener.py<br/>Main Server<br/>FastAPI]
+        PE[pipeline_extractor.py<br/>GitLab Parser]
+        JE[jenkins_extractor.py<br/>Jenkins Parser]
+        GLF[log_fetcher.py<br/>GitLab API Client]
+        JLF[jenkins_log_fetcher.py<br/>Jenkins API Client]
+        LEE[log_error_extractor.py<br/>Error Pattern Matcher]
         SM[storage_manager.py<br/>File Storage]
         AP[api_poster.py<br/>API Integration]
         MON[monitoring.py<br/>Tracking DB]
@@ -297,43 +456,73 @@ graph LR
         LC[logging_config.py<br/>Logging Setup]
     end
 
+    subgraph "Configuration Files"
+        ENV[.env<br/>Environment]
+        JINS[jenkins_instances.json<br/>Multi-Instance Config]
+    end
+
     WL -->|extract_pipeline_info| PE
-    WL -->|fetch_logs| LF
+    WL -->|extract_jenkins_info| JE
+    WL -->|fetch_gitlab_logs| GLF
+    WL -->|fetch_jenkins_logs| JLF
+    WL -->|extract_errors| LEE
     WL -->|save_logs| SM
     WL -->|post_to_api| AP
     WL -->|record_request| MON
-    WL -->|load_config| CL
-    LF -->|load_config| CL
-    LF -->|with_retry| EH
-    SM -->|load_config| CL
+
+    JE -->|fetch_build_metadata| JLF
+    JLF -->|extract_errors| LEE
+
+    AP -->|gitlab_user_lookup| GLF
+    AP -->|determine_user| JE
     AP -->|generate_token| TM
     AP -->|with_retry| EH
+
+    GLF -->|with_retry| EH
+    JLF -->|with_retry| EH
+
+    WL -->|load_config| CL
+    GLF -->|load_config| CL
+    JLF -->|load_config| CL
+    SM -->|load_config| CL
+    AP -->|load_config| CL
     WL -->|setup_logging| LC
+
+    CL -->|read| ENV
+    JLF -->|read| JINS
 
     style WL fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
     style PE fill:#b3d9ff,stroke:#6ba8e6
-    style LF fill:#ffd699,stroke:#e6a84d
+    style JE fill:#ffd699,stroke:#e6a84d
+    style GLF fill:#b3d9ff,stroke:#6ba8e6
+    style JLF fill:#ffd699,stroke:#e6a84d
+    style LEE fill:#ffb3d9,stroke:#e66ba8
     style SM fill:#d9b3ff,stroke:#a86be6
-    style AP fill:#ffb3d9,stroke:#e66ba8
+    style AP fill:#a8d5ba,stroke:#6b9e78,stroke-width:2px
     style MON fill:#b3f0ff,stroke:#6baee6
     style CL fill:#c5ccd4,stroke:#8b95a1
     style EH fill:#ffb3b3,stroke:#e66b6b
     style TM fill:#ffe4b3,stroke:#e6c56b
     style LC fill:#d4bcb0,stroke:#a18578
+    style ENV fill:#e8e8e8,stroke:#a0a0a0
+    style JINS fill:#ffe8d6,stroke:#e6b380
 ```
 
 ### Core Application Files
 
 | File | Purpose | Key Responsibilities |
 |------|---------|---------------------|
-| `webhook_listener.py` | Main server | FastAPI server, webhook handling, background processing |
-| `pipeline_extractor.py` | Event parsing | Parse payloads, identify types, filter jobs |
-| `log_fetcher.py` | API client | Fetch logs from GitLab/Jenkins, handle authentication |
-| `storage_manager.py` | File storage | Create directories, save logs, manage metadata |
-| `api_poster.py` | API integration | POST logs to external APIs, handle retries |
-| `monitoring.py` | Tracking | SQLite database, statistics, reporting |
+| `webhook_listener.py` | Main server | FastAPI server, dual webhook endpoints, background processing |
+| `pipeline_extractor.py` | GitLab parsing | Parse GitLab payloads, identify pipeline types, filter jobs |
+| `jenkins_extractor.py` | Jenkins parsing | Parse Jenkins payloads, fetch Blue Ocean metadata, stage extraction |
+| `log_fetcher.py` | GitLab API client | Fetch GitLab pipeline logs, handle authentication |
+| `jenkins_log_fetcher.py` | Jenkins API client | Memory-efficient log streaming, multi-instance support |
+| `log_error_extractor.py` | Error extraction | Pattern matching, context extraction, error summarization |
+| `storage_manager.py` | File storage | Create directories for GitLab/Jenkins, save logs, manage metadata |
+| `api_poster.py` | API integration | User determination, JWT auth, POST logs to BFA API, dual mode |
+| `monitoring.py` | Tracking | SQLite database, webhook statistics, reporting |
 | `error_handler.py` | Error handling | Retry logic, circuit breaker, error tracking |
-| `config_loader.py` | Configuration | Load environment variables, validate settings |
+| `config_loader.py` | Configuration | Load .env + jenkins_instances.json, validate settings |
 | `logging_config.py` | Logging | Configure logging, format output, mask secrets |
 | `token_manager.py` | Authentication | JWT token generation and management |
 
@@ -383,16 +572,23 @@ extract-build-logs/
 │   └── crontab.example           # Example cron jobs
 │
 ├── logs/                         # Output directory (created automatically)
-│   ├── {project-name}_{id}/      # Organized by project
+│   ├── {project-name}_{id}/      # GitLab: Organized by project
 │   │   └── pipeline_{id}/        # Then by pipeline
 │   │       ├── metadata.json     # Pipeline metadata
 │   │       └── job_{id}_{name}.log  # Job logs
+│   ├── jenkins-builds/           # Jenkins: Organized by job
+│   │   └── {job-name}/           # Job name from Jenkins
+│   │       └── {build-number}/   # Build number
+│   │           ├── metadata.json # Build metadata
+│   │           ├── console.log   # Full console output
+│   │           └── stage_*.log   # Failed stage logs
 │   ├── application.log           # Application logs
 │   ├── api-requests.log          # API request logs
 │   └── monitoring.db             # SQLite tracking database
 │
 ├── .env                          # Environment configuration
 ├── .env.example                  # Configuration template
+├── jenkins_instances.json        # Jenkins multi-instance configuration
 ├── requirements.txt              # Python dependencies
 ├── Dockerfile                    # Docker image definition
 ├── log-extractor-entrypoint.sh   # Container entrypoint script
@@ -403,7 +599,7 @@ extract-build-logs/
 
 ## 1.5 Data Flow & Processing
 
-### Data Flow Sequence Diagram
+### GitLab Data Flow Sequence Diagram
 
 ```mermaid
 %%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#a8d5ba','secondaryColor':'#b3d9ff','tertiaryColor':'#ffd699','primaryBorderColor':'#6b9e78','secondaryBorderColor':'#6ba8e6','tertiaryBorderColor':'#e6a84d'}}}%%
@@ -518,6 +714,143 @@ sequenceDiagram
     MO-->>WH: Success
 
     Note over WH: Processing complete<br/>Request ID logged
+```
+
+### Jenkins Data Flow Sequence Diagram
+
+```mermaid
+%%{init: {'theme':'base', 'themeVariables': { 'primaryColor':'#ffd699','secondaryColor':'#b3d9ff','tertiaryColor':'#ffb3d9','primaryBorderColor':'#e6a84d','secondaryBorderColor':'#6ba8e6','tertiaryBorderColor':'#e66ba8'}}}%%
+sequenceDiagram
+    participant JK as Jenkins
+    participant WH as Webhook Listener
+    participant JE as Jenkins Extractor
+    participant JF as Jenkins Log Fetcher
+    participant GL as GitLab API
+    participant EE as Error Extractor
+    participant AP as API Poster
+    participant TM as Token Manager
+    participant MO as Monitor DB
+    participant ST as Storage Manager
+
+    JK->>WH: POST /webhook/jenkins<br/>(Build Event)
+
+    rect rgba(255, 214, 153, 0.2)
+        Note over WH: Authentication & Validation
+        WH->>WH: Validate X-Jenkins-Token
+        alt Invalid Token
+            WH-->>JK: 401 Unauthorized
+        end
+        WH->>WH: Generate Request ID
+    end
+
+    WH->>WH: Queue background task
+    WH->>MO: record_request(processing)
+    WH-->>JK: 200 OK (Acknowledged)
+
+    rect rgba(179, 217, 255, 0.2)
+        Note over WH,JE: Build Metadata Extraction
+        WH->>JE: extract_jenkins_info(webhook_data)
+        JE->>JF: fetch_build_info(job_name, build_number)
+        JF->>JK: GET /job/{name}/{number}/api/json
+        JK-->>JF: Build metadata + parameters
+
+        Note over JF: Extract jenkins_url from build metadata
+        JF->>JF: Load jenkins_instances.json<br/>Find credentials by jenkins_url
+
+        JF->>JK: GET /job/{name}/{number}/wfapi/describe<br/>(Blue Ocean API)
+        JK-->>JF: All stages metadata<br/>(names, statuses, durations)
+        JF-->>JE: Build info + stages
+        JE-->>WH: Jenkins payload
+    end
+
+    rect rgba(255, 179, 217, 0.2)
+        Note over WH,EE: Log Fetching & Error Extraction
+        loop For Each Failed Stage
+            WH->>JF: fetch_console_log(job, build)
+
+            alt Large Log (>1M lines)
+                JF->>JF: Use hybrid strategy:<br/>Tail (last 5000 lines) first
+                JF->>JK: GET with Range header<br/>(last N bytes)
+                JK-->>JF: Tail content
+
+                alt Errors found in tail
+                    Note over JF: Use tail content (fast path)
+                else No errors in tail
+                    JF->>JF: Fall back to streaming
+                    JF->>JK: GET with iter_lines()<br/>(max 100K lines)
+                    JK-->>JF: Streamed content
+                end
+            else Normal Log
+                JF->>JK: GET /job/{name}/{number}/consoleText
+                JK-->>JF: Full console log
+            end
+
+            JF-->>WH: Console log
+            WH->>EE: extract_errors(console_log, stage_name)
+            EE->>EE: Pattern matching for errors<br/>(ERROR, FAILED, Exception, etc.)
+            EE-->>WH: Error context + summary
+        end
+    end
+
+    rect rgba(179, 240, 255, 0.2)
+        Note over WH,AP: User Determination
+        WH->>AP: determine_triggered_by(parameters, metadata)
+        AP->>AP: Extract Jenkins userId<br/>from build metadata
+
+        alt userId == "jenkins"
+            Note over AP,GL: GitLab webhook trigger
+            AP->>AP: Extract GitLab parameters:<br/>namespace, repo, MR/commit/branch
+            AP->>GL: GET /api/v4/projects/{namespace}/{repo}
+            GL-->>AP: Project ID
+
+            alt Has gitlabMergeRequestIid
+                AP->>GL: GET /projects/{id}/merge_requests/{iid}
+                GL-->>AP: MR author username
+            else Has gitlabMergeRequestLastCommit
+                AP->>GL: GET /projects/{id}/repository/commits/{sha}
+                GL-->>AP: Commit author username
+            else Has gitlabSourceBranch
+                AP->>GL: GET /projects/{id}/repository/branches/{branch}
+                GL-->>AP: Latest commit author
+            end
+
+            AP->>AP: Format: {gitlab_user}@internal.com
+        else userId != "jenkins"
+            Note over AP: Manual Jenkins trigger
+            AP->>AP: Format: {jenkins_user}@internal.com
+        end
+
+        AP-->>WH: Triggered by user determined
+    end
+
+    rect rgba(168, 213, 186, 0.2)
+        Note over WH,AP: API Posting with Authentication
+        WH->>AP: post_jenkins_logs(payload, metadata)
+        AP->>AP: Build payload with:<br/>- pipeline_id: {build_url}<br/>- triggered_by: {user}@internal.com<br/>- stages with errors
+
+        AP->>TM: generate_token(BFA_SECRET_KEY)
+        TM-->>AP: JWT token
+
+        AP->>AP: POST to BFA API<br/>(with retry logic)
+
+        alt API Success
+            Note over AP: Logs posted successfully
+            AP->>MO: record_api_success()
+        else API Failure
+            Note over AP: Retry with backoff
+            AP->>MO: record_api_failure()
+        end
+
+        alt API_POST_SAVE_TO_FILE = true
+            Note over AP,ST: Dual mode enabled
+            AP->>ST: save_jenkins_logs(logs, metadata)
+            ST->>ST: Create directory:<br/>logs/jenkins-builds/{job}/{build}/
+            ST->>ST: Save console.log, stage_*.log,<br/>metadata.json
+        end
+    end
+
+    WH->>MO: update_request(completed)
+    Note over WH: Jenkins build processing complete
 ```
 
 ---
