@@ -430,6 +430,194 @@ class StorageManager:
 
         return stats
 
+    # ============================================================================
+    # Jenkins Storage Methods
+    # ============================================================================
+
+    def get_jenkins_build_directory(self, job_name: str, build_number: int) -> Path:
+        """
+        Get (and create if needed) the directory for a specific Jenkins build.
+
+        Args:
+            job_name (str): Jenkins job name
+            build_number (int): Jenkins build number
+
+        Returns:
+            Path: Path to build directory
+
+        Directory Structure:
+            {base_dir}/jenkins-builds/{job_name}/{build_number}/
+        """
+        # Create jenkins-builds subdirectory under base_dir
+        jenkins_base = self.base_dir / "jenkins-builds"
+
+        # Sanitize job name for filesystem safety
+        safe_job_name = self._sanitize_filename(job_name)
+
+        # Create full path: jenkins-builds/{job_name}/{build_number}/
+        build_dir = jenkins_base / safe_job_name / str(build_number)
+        self._ensure_directory(build_dir)
+
+        return build_dir
+
+    def save_jenkins_console_log(
+        self,
+        job_name: str,
+        build_number: int,
+        console_log: str
+    ) -> Path:
+        """
+        Save Jenkins console log to filesystem.
+
+        Args:
+            job_name (str): Jenkins job name
+            build_number (int): Jenkins build number
+            console_log (str): Full console log content
+
+        Returns:
+            Path: Path to saved console.log file
+
+        File Format:
+            {build_dir}/console.log
+        """
+        build_dir = self.get_jenkins_build_directory(job_name, build_number)
+        log_path = build_dir / "console.log"
+
+        try:
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write(console_log)
+
+            logger.info(
+                "Saved Jenkins console log for %s #%s to %s",
+                job_name,
+                build_number,
+                log_path
+            )
+            return log_path
+
+        except IOError as e:
+            logger.error(
+                "Failed to save Jenkins console log for %s #%s: %s",
+                job_name,
+                build_number,
+                str(e)
+            )
+            raise
+
+    def save_jenkins_stage_log(
+        self,
+        job_name: str,
+        build_number: int,
+        stage_name: str,
+        log_content: str
+    ) -> Path:
+        """
+        Save Jenkins stage log to filesystem.
+
+        Args:
+            job_name (str): Jenkins job name
+            build_number (int): Jenkins build number
+            stage_name (str): Stage name
+            log_content (str): Stage log content (usually error context)
+
+        Returns:
+            Path: Path to saved stage log file
+
+        File Format:
+            {build_dir}/stage_{sanitized_stage_name}.log
+        """
+        build_dir = self.get_jenkins_build_directory(job_name, build_number)
+
+        # Sanitize stage name and create filename
+        safe_stage_name = self._sanitize_filename(stage_name.lower())
+        log_filename = f"stage_{safe_stage_name}.log"
+        log_path = build_dir / log_filename
+
+        try:
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write(log_content)
+
+            logger.info(
+                "Saved Jenkins stage log for %s #%s stage '%s' to %s",
+                job_name,
+                build_number,
+                stage_name,
+                log_path
+            )
+            return log_path
+
+        except IOError as e:
+            logger.error(
+                "Failed to save Jenkins stage log for %s #%s stage '%s': %s",
+                job_name,
+                build_number,
+                stage_name,
+                str(e)
+            )
+            raise
+
+    def save_jenkins_metadata(
+        self,
+        job_name: str,
+        build_number: int,
+        build_data: Dict[str, Any]
+    ):
+        """
+        Save metadata for a Jenkins build.
+
+        Args:
+            job_name (str): Jenkins job name
+            build_number (int): Jenkins build number
+            build_data (Dict[str, Any]): Build metadata
+
+        Creates/updates:
+            {build_dir}/metadata.json
+
+        Metadata Structure:
+            {
+                "source": "jenkins",
+                "job_name": "ci_build",
+                "build_number": 8320,
+                "build_url": "https://jenkins.example.com/job/ci_build/8320/",
+                "jenkins_url": "https://jenkins.example.com",
+                "triggered_by": "user@internal.com",
+                "timestamp": "2026-01-13T10:30:45.123Z",
+                "status": "FAILED",
+                "duration_ms": 245000,
+                "parameters": {...},
+                "stages": [...]
+            }
+        """
+        build_dir = self.get_jenkins_build_directory(job_name, build_number)
+        metadata_path = build_dir / "metadata.json"
+
+        try:
+            # Add source identifier
+            build_data["source"] = "jenkins"
+            build_data["job_name"] = job_name
+            build_data["build_number"] = build_number
+            build_data["last_updated"] = datetime.utcnow().isoformat()
+
+            # Save metadata
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                json.dump(build_data, f, indent=2, ensure_ascii=False)
+
+            logger.info(
+                "Saved Jenkins build metadata for %s #%s to %s",
+                job_name,
+                build_number,
+                metadata_path
+            )
+
+        except IOError as e:
+            logger.error(
+                "Failed to save Jenkins build metadata for %s #%s: %s",
+                job_name,
+                build_number,
+                str(e)
+            )
+            raise
+
 
 if __name__ == "__main__":
     # Example usage
