@@ -65,58 +65,91 @@ STREAM_CHUNK_SIZE=8192      # Streaming chunk size in bytes
 
 ```mermaid
 graph TB
-    subgraph "GitLab"
-        GL[GitLab Server]
-        PIPE[Pipeline Events]
+    subgraph "CI/CD Sources"
+        GL[GitLab Server<br/>Pipeline Events]
+        JK[Jenkins Servers<br/>Build Events<br/>Multi-Instance]
     end
 
     subgraph "Webhook Server (Port 8000)"
         WH[Webhook Listener<br/>FastAPI Server]
         VAL[Webhook Validator<br/>Secret Token Check]
-        PARSE[Pipeline Extractor<br/>Event Parser]
+        GLPARSE[GitLab Extractor<br/>Pipeline Parser]
+        JKPARSE[Jenkins Extractor<br/>Build Parser]
     end
 
     subgraph "Processing Layer"
-        FETCH[Log Fetcher<br/>GitLab API Client]
+        GLFETCH[GitLab Log Fetcher<br/>Pipeline API]
+        JKFETCH[Jenkins Log Fetcher<br/>Blue Ocean API]
+        ERREXT[Error Extractor<br/>Pattern Matching]
         RETRY[Error Handler<br/>Retry Logic]
+    end
+
+    subgraph "API Integration"
+        APIPOSTER[API Poster<br/>User Determination]
+        TOKENMGR[Token Manager<br/>JWT Generation]
+        BFA[BFA API<br/>External Endpoint]
     end
 
     subgraph "Storage Layer"
         STORE[Storage Manager<br/>File System]
-        META[Metadata Files<br/>JSON]
-        LOGS[Log Files<br/>.log]
+        META[Metadata Files<br/>metadata.json]
+        LOGS[Log Files<br/>stage_*.log]
     end
 
     subgraph "Configuration"
-        CONFIG[Config Loader<br/>Environment Variables]
+        CONFIG[Config Loader<br/>.env + JSON]
     end
 
     GL -->|POST /webhook/gitlab| WH
-    PIPE -.->|Pipeline Complete| GL
+    JK -->|POST /webhook/jenkins| WH
+
     WH --> VAL
-    VAL -->|Valid| PARSE
-    PARSE -->|Extract Info| FETCH
-    FETCH -->|API Call| GL
-    FETCH -.->|On Error| RETRY
-    RETRY -.->|Retry| FETCH
-    FETCH --> STORE
+    VAL -->|GitLab Event| GLPARSE
+    VAL -->|Jenkins Event| JKPARSE
+
+    GLPARSE --> GLFETCH
+    JKPARSE --> JKFETCH
+
+    GLFETCH -->|API Call| GL
+    JKFETCH -->|API Call| JK
+
+    GLFETCH -.->|On Error| RETRY
+    JKFETCH -.->|On Error| RETRY
+    RETRY -.->|Retry| GLFETCH
+    RETRY -.->|Retry| JKFETCH
+
+    GLFETCH --> ERREXT
+    JKFETCH --> ERREXT
+
+    ERREXT --> APIPOSTER
+    APIPOSTER --> TOKENMGR
+    APIPOSTER -->|POST Logs| BFA
+
+    APIPOSTER -.->|Dual Mode| STORE
     STORE --> META
     STORE --> LOGS
-    CONFIG -.->|Configuration| WH
-    CONFIG -.->|Configuration| FETCH
-    CONFIG -.->|Configuration| STORE
 
+    CONFIG -.->|Configuration| WH
+    CONFIG -.->|jenkins_instances.json| JKFETCH
+    CONFIG -.->|.env| APIPOSTER
+
+    style GL fill:#e8f4ea,stroke:#9db5a0,stroke-width:2px
+    style JK fill:#fff4e6,stroke:#e6c599,stroke-width:2px
     style WH fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
     style VAL fill:#c1e1c1,stroke:#7eb07e
-    style PARSE fill:#b3d9ff,stroke:#6ba8e6
-    style FETCH fill:#ffd699,stroke:#e6a84d
+    style GLPARSE fill:#b3d9ff,stroke:#6ba8e6
+    style JKPARSE fill:#ffd699,stroke:#e6a84d
+    style GLFETCH fill:#b3d9ff,stroke:#6ba8e6
+    style JKFETCH fill:#ffd699,stroke:#e6a84d
+    style ERREXT fill:#ffb3d9,stroke:#e66ba8
     style RETRY fill:#ffb3b3,stroke:#e66b6b
+    style APIPOSTER fill:#a8d5ba,stroke:#6b9e78,stroke-width:2px
+    style TOKENMGR fill:#ffe4b3,stroke:#e6c56b
+    style BFA fill:#d4f4dd,stroke:#9bcca8,stroke-width:3px
     style STORE fill:#d9b3ff,stroke:#a86be6
     style META fill:#e6ccff,stroke:#b380e6
     style LOGS fill:#f0d9ff,stroke:#c699e6
     style CONFIG fill:#c5ccd4,stroke:#8b95a1
-    style GL fill:#e8f4ea,stroke:#9db5a0
-    style PIPE fill:#f0f7f2,stroke:#b0c5b3
 ```
 
 ### Data Flow Diagram
