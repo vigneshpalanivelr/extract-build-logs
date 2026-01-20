@@ -494,7 +494,7 @@ class ApiPoster:
 
         Looks for hudson.model.Cause$UserIdCause in actions[].causes[]
         """
-        try:
+        try:  # pylint: disable=too-many-nested-blocks
             actions = build_metadata.get('actions', [])
             for action in actions:
                 if action.get('_class') == 'hudson.model.CauseAction':

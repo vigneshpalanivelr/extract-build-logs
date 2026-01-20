@@ -669,6 +669,374 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
         final_call = calls[-1]
         self.assertEqual(final_call[1]['status'], RequestStatus.FAILED)
 
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_with_file_storage(self, mock_config, mock_monitor,
+                                                     mock_storage, mock_log_fetcher, mock_api_poster,
+                                                     mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build processing with API_POST_SAVE_TO_FILE enabled (covers lines 987-1092)."""
+        from src.webhook_listener import process_jenkins_build
+
+        # Enable both API posting and file storage
+        mock_config.api_post_enabled = True
+        mock_config.api_post_save_to_file = True
+        mock_config.error_context_lines_before = 10
+        mock_config.error_context_lines_after = 5
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        # Console log with error patterns
+        console_log = """Started by user admin
+[Pipeline] Start of Pipeline
+[Pipeline] stage
+[Pipeline] { (Build)
+Building the project...
+Build completed successfully
+[Pipeline] }
+[Pipeline] stage
+[Pipeline] { (Test)
+Running tests...
+ERROR: Test failed at line 42
+AssertionError: Expected 5, got 3
+FAILURE: Build failed
+[Pipeline] }
+[Pipeline] End of Pipeline
+Finished: FAILURE"""
+
+        # Return console log with error patterns
+        mock_log_fetcher.fetch_console_log_hybrid.return_value = {
+            'log_content': console_log,
+            'method': 'tail',
+            'truncated': False,
+            'total_lines': 15
+        }
+
+        # Blue Ocean stages (one failed)
+        mock_log_fetcher.fetch_stages.return_value = [
+            {'name': 'Build', 'status': 'SUCCESS', 'id': '1', 'durationMillis': 10000},
+            {'name': 'Test', 'status': 'FAILURE', 'id': '2', 'durationMillis': 5000}
+        ]
+
+        # API post succeeds
+        mock_api_poster.post_jenkins_logs.return_value = True
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 123,
+            'build_url': 'https://jenkins.example.com/job/test-job/123/',
+            'status': 'FAILURE',
+            'duration_ms': 45000,
+            'timestamp': '2024-01-01T12:00:00Z',
+            'parameters': {'branch': 'main'}
+        }
+
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Verify storage_manager methods were called for file storage
+        mock_storage.save_jenkins_console_log.assert_called_once_with(
+            job_name='test-job',
+            build_number=123,
+            console_log=console_log
+        )
+
+        # Should save stage logs for failed stage
+        assert mock_storage.save_jenkins_stage_log.called
+
+        # Should save metadata
+        mock_storage.save_jenkins_metadata.assert_called_once()
+        metadata_call = mock_storage.save_jenkins_metadata.call_args
+        self.assertEqual(metadata_call[1]['job_name'], 'test-job')
+        self.assertEqual(metadata_call[1]['build_number'], 123)
+
+        # Should still post to API
+        mock_api_poster.post_jenkins_logs.assert_called_once()
+
+        # Should complete successfully
+        mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_file_storage_error(self, mock_config, mock_monitor,
+                                                      mock_storage, mock_log_fetcher, mock_api_poster,
+                                                      mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins file storage handles errors gracefully (covers lines 1087-1092)."""
+        from src.webhook_listener import process_jenkins_build
+
+        # Enable both API posting and file storage
+        mock_config.api_post_enabled = True
+        mock_config.api_post_save_to_file = True
+        mock_config.error_context_lines_before = 10
+        mock_config.error_context_lines_after = 5
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        console_log = "Build failed with error"
+
+        mock_log_fetcher.fetch_console_log_hybrid.return_value = {
+            'log_content': console_log,
+            'method': 'tail',
+            'truncated': False,
+            'total_lines': 1
+        }
+
+        mock_log_fetcher.fetch_stages.return_value = [
+            {'name': 'Test', 'status': 'FAILURE', 'id': '1', 'durationMillis': 5000}
+        ]
+
+        mock_api_poster.post_jenkins_logs.return_value = True
+
+        # Storage raises exception
+        mock_storage.save_jenkins_console_log.side_effect = IOError("Disk full")
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 456,
+            'status': 'FAILURE'
+        }
+
+        # Should not raise exception
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should still complete (file storage error is non-fatal)
+        mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_no_error_patterns(self, mock_config, mock_monitor,
+                                                     mock_storage, mock_log_fetcher, mock_api_poster,
+                                                     mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build when no error patterns found in log (covers lines 1010-1011)."""
+        from src.webhook_listener import process_jenkins_build
+
+        mock_config.api_post_enabled = True
+        mock_config.api_post_save_to_file = False
+        mock_config.error_context_lines_before = 10
+        mock_config.error_context_lines_after = 5
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        # Console log with NO error patterns (just info messages, no ERROR/FAILURE keywords)
+        console_log = """Started by user admin
+[Pipeline] Start of Pipeline
+[Pipeline] stage
+[Pipeline] { (Build)
+Building the project...
+Build completed successfully
+[Pipeline] }
+[Pipeline] stage
+[Pipeline] { (Test)
+Running tests...
+All tests passed
+[Pipeline] }
+[Pipeline] End of Pipeline
+Build finished"""
+
+        mock_log_fetcher.fetch_console_log_hybrid.return_value = {
+            'log_content': console_log,
+            'method': 'tail',
+            'truncated': False,
+            'total_lines': 12
+        }
+
+        # Failed stage but no error keywords in log
+        mock_log_fetcher.fetch_stages.return_value = [
+            {'name': 'Test', 'status': 'FAILURE', 'id': '1', 'durationMillis': 5000}
+        ]
+
+        mock_api_poster.post_jenkins_logs.return_value = True
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 789,
+            'status': 'FAILURE'
+        }
+
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should still post to API with full console log as fallback
+        mock_api_poster.post_jenkins_logs.assert_called_once()
+        payload = mock_api_poster.post_jenkins_logs.call_args[0][0]
+
+        # Verify stage has log_content (full console log when no errors found)
+        self.assertEqual(len(payload['stages']), 1)
+        self.assertIn('log_content', payload['stages'][0])
+        self.assertEqual(payload['stages'][0]['log_content'], console_log)
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_instance_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_multi_instance(self, mock_config, mock_monitor,
+                                                  mock_instance_manager, mock_log_fetcher,
+                                                  mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build with multi-instance configuration (covers lines 902-913)."""
+        from src.webhook_listener import process_jenkins_build
+
+        mock_config.api_post_enabled = False
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        # Mock instance manager returns instance
+        mock_instance = Mock()
+        mock_instance.jenkins_url = "https://jenkins2.example.com"
+        mock_instance.jenkins_user = "jenkins2_user"
+        mock_instance.jenkins_api_token = "token2"
+        mock_instance_manager.get_instance.return_value = mock_instance
+
+        # Mock a fetcher for the specific instance
+        mock_specific_fetcher = Mock()
+        mock_specific_fetcher.fetch_console_log_hybrid.return_value = {
+            'log_content': 'Build log',
+            'method': 'tail',
+            'truncated': False,
+            'total_lines': 1
+        }
+        mock_specific_fetcher.fetch_stages.return_value = []
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 123,
+            'status': 'SUCCESS',
+            'jenkins_url': 'https://jenkins2.example.com'
+        }
+
+        # Mock JenkinsLogFetcher creation
+        with patch('src.webhook_listener.JenkinsLogFetcher', return_value=mock_specific_fetcher):
+            process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should get instance from manager
+        mock_instance_manager.get_instance.assert_called_once_with('https://jenkins2.example.com')
+        mock_monitor.update_request.assert_called()
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.jenkins_instance_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_no_config(self, mock_config, mock_monitor,
+                                             mock_instance_manager, mock_log_fetcher,
+                                             mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build with no configuration available (covers lines 919-922)."""
+        from src.monitoring import RequestStatus
+        from src.webhook_listener import process_jenkins_build
+
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        # No instance found and no default fetcher
+        mock_instance_manager.get_instance.return_value = None
+
+        build_info = {
+            'job_name': 'test-job',
+            'build_number': 123,
+            'status': 'FAILURE',
+            'jenkins_url': 'https://unknown.jenkins.com'
+        }
+
+        # Patch jenkins_log_fetcher to None
+        with patch('src.webhook_listener.jenkins_log_fetcher', None):
+            process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Should mark as failed
+        calls = mock_monitor.update_request.call_args_list
+        final_call = calls[-1]
+        self.assertEqual(final_call[0][1], RequestStatus.FAILED)
+
+    @patch('src.webhook_listener.time')
+    @patch('src.webhook_listener.clear_request_id')
+    @patch('src.webhook_listener.set_request_id')
+    @patch('src.webhook_listener.api_poster')
+    @patch('src.webhook_listener.jenkins_log_fetcher')
+    @patch('src.webhook_listener.storage_manager')
+    @patch('src.webhook_listener.monitor')
+    @patch('src.webhook_listener.config')
+    def test_process_jenkins_build_with_parameters(self, mock_config, mock_monitor,
+                                                   mock_storage, mock_log_fetcher, mock_api_poster,
+                                                   mock_set_req, mock_clear_req, mock_time):
+        """Test Jenkins build parameter extraction from metadata (covers lines 936-938)."""
+        from src.webhook_listener import process_jenkins_build
+
+        mock_config.api_post_enabled = True
+        mock_config.api_post_save_to_file = False
+        mock_config.error_context_lines_before = 10
+        mock_config.error_context_lines_after = 5
+        mock_config.log_save_metadata_always = False
+        mock_time.time.return_value = 1000.0
+
+        # Mock build metadata with parameters
+        metadata_with_params = {
+            'duration': 45000,
+            'timestamp': 1640000000000,
+            'result': 'FAILURE',
+            'actions': [
+                {
+                    '_class': 'hudson.model.ParametersAction',
+                    'parameters': [
+                        {'name': 'BRANCH', 'value': 'main'},
+                        {'name': 'DEPLOY_ENV', 'value': 'production'},
+                        {'name': 'RUN_TESTS', 'value': True}
+                    ]
+                },
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': []
+                }
+            ]
+        }
+
+        mock_log_fetcher.fetch_build_info.return_value = metadata_with_params
+        mock_log_fetcher.fetch_console_log_hybrid.return_value = {
+            'log_content': 'ERROR: Build failed',
+            'method': 'tail',
+            'truncated': False,
+            'total_lines': 1
+        }
+        mock_log_fetcher.fetch_stages.return_value = [
+            {'name': 'Deploy', 'status': 'FAILURE', 'id': '1', 'durationMillis': 5000}
+        ]
+
+        mock_api_poster.post_jenkins_logs.return_value = True
+
+        build_info = {
+            'job_name': 'deploy-job',
+            'build_number': 456,
+            'status': 'FAILURE'
+        }
+
+        process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
+
+        # Verify parameters were extracted and included in API payload
+        mock_api_poster.post_jenkins_logs.assert_called_once()
+        payload = mock_api_poster.post_jenkins_logs.call_args[0][0]
+
+        self.assertIn('parameters', payload)
+        self.assertEqual(payload['parameters']['BRANCH'], 'main')
+        self.assertEqual(payload['parameters']['DEPLOY_ENV'], 'production')
+        self.assertEqual(payload['parameters']['RUN_TESTS'], True)
+
 
 class TestProcessPipelineEdgeCases(unittest.TestCase):
     """Test edge cases for pipeline processing."""

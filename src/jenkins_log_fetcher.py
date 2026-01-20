@@ -309,7 +309,7 @@ class JenkinsLogFetcher:
         Returns:
             Dict with 'log_content', 'method' ('tail' or 'streaming'), 'truncated', 'total_lines'
         """
-        from .log_error_extractor import LogErrorExtractor
+        from .log_error_extractor import LogErrorExtractor  # pylint: disable=import-outside-toplevel
 
         logger.info("Fetching console log (hybrid) for job %s #%s", job_name, build_number)
 
