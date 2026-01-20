@@ -254,13 +254,49 @@ API_POST_ENABLED=true
 API_POST_SAVE_TO_FILE=false  # API only, no file storage
 ```
 
-**3. Jenkins integration:**
+**3. Jenkins integration (single instance):**
 ```bash
 JENKINS_ENABLED=true
 JENKINS_URL=https://jenkins.example.com
 JENKINS_USER=your_username
 JENKINS_API_TOKEN=your_jenkins_token
+JENKINS_WEBHOOK_SECRET=your_jenkins_webhook_secret
 ```
+
+**4. Jenkins integration (multiple instances):**
+
+Create `jenkins_instances.json` in the project root:
+```json
+{
+  "instances": [
+    {
+      "jenkins_url": "https://jenkins1.example.com",
+      "username": "jenkins_user1",
+      "api_token": "token_for_jenkins1"
+    },
+    {
+      "jenkins_url": "https://jenkins2.example.com",
+      "username": "jenkins_user2",
+      "api_token": "token_for_jenkins2"
+    },
+    {
+      "jenkins_url": "https://jenkins3.example.com",
+      "username": "jenkins_user3",
+      "api_token": "token_for_jenkins3"
+    }
+  ]
+}
+```
+
+Then in `.env`:
+```bash
+JENKINS_ENABLED=true
+JENKINS_WEBHOOK_SECRET=your_jenkins_webhook_secret
+# No need for JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
+# Credentials are loaded from jenkins_instances.json
+```
+
+**Note:** The system automatically detects which Jenkins instance to use based on the `jenkins_url` field in the webhook payload.
 
 ## Complete Documentation
 
