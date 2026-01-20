@@ -188,7 +188,9 @@ vi .env  # Edit GITLAB_URL and GITLAB_TOKEN
 curl http://localhost:8000/health
 ```
 
-Your webhook is now available at: `http://your-server:8000/webhook/gitlab`
+**Your webhook endpoints are now available:**
+- GitLab: `http://your-server:8000/webhook/gitlab`
+- Jenkins: `http://your-server:8000/webhook/jenkins`
 
 **Complete Docker guide:** [DOCUMENTATION.md - Docker Operations](DOCUMENTATION.md#23-docker-operations)
 
