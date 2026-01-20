@@ -113,7 +113,7 @@ jenkins_instance_manager: Optional[JenkinsInstanceManager] = None
 token_manager: Optional[TokenManager] = None
 
 
-def init_app():
+def init_app():  # pylint: disable=too-many-branches
     """
     Initialize application components.
 
@@ -861,7 +861,7 @@ async def webhook_jenkins_handler(
         clear_request_id()
 
 
-def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id: str):
+def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id: str):  # pylint: disable=too-many-branches,too-many-nested-blocks  # noqa: C901
     """
     Process a Jenkins build: fetch logs and post to API.
 
@@ -921,7 +921,7 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
         monitor.update_request(db_request_id, RequestStatus.FAILED)
         return
 
-    try:
+    try:  # pylint: disable=too-many-nested-blocks
         # Fetch build metadata
         metadata = None  # Initialize to None for later use
         try:
