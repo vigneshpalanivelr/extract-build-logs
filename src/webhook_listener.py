@@ -1047,6 +1047,50 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
                         'job_name': job_name,
                         'build_number': build_number
                     })
+
+                # Save to files if API_POST_SAVE_TO_FILE is enabled (dual mode)
+                if config.api_post_save_to_file and storage_manager:
+                    try:
+                        # Save console log
+                        storage_manager.save_jenkins_console_log(
+                            job_name=job_name,
+                            build_number=build_number,
+                            console_log=console_log
+                        )
+
+                        # Save stage logs for failed stages
+                        for stage in failed_stages:
+                            stage_name = stage.get('stage_name')
+                            log_content = stage.get('log_content', '')
+                            if log_content:
+                                storage_manager.save_jenkins_stage_log(
+                                    job_name=job_name,
+                                    build_number=build_number,
+                                    stage_name=stage_name,
+                                    log_content=log_content
+                                )
+
+                        # Save metadata
+                        storage_manager.save_jenkins_metadata(
+                            job_name=job_name,
+                            build_number=build_number,
+                            build_data=jenkins_payload
+                        )
+
+                        logger.info("Saved Jenkins build logs to files", extra={
+                            'job_name': job_name,
+                            'build_number': build_number,
+                            'console_log_size': len(console_log),
+                            'stage_logs': len(failed_stages)
+                        })
+
+                    except Exception as storage_error:  # pylint: disable=broad-exception-caught
+                        logger.error(
+                            "Failed to save Jenkins logs to files: %s",
+                            storage_error,
+                            exc_info=True
+                        )
+
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Error posting to API: %s", e, exc_info=True)
 
