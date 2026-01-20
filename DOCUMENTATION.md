@@ -436,7 +436,7 @@ The system consists of several key components working together:
 ### Module Connection Diagram
 
 ```mermaid
-graph LR
+graph TB
     subgraph "Core Modules"
         WL[webhook_listener.py<br/>Main Server<br/>FastAPI]
         PE[pipeline_extractor.py<br/>GitLab Parser]

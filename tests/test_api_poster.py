@@ -72,9 +72,9 @@ class TestApiPoster(unittest.TestCase):
             # Error context extraction
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         self.pipeline_info = {
@@ -234,9 +234,9 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,  # No auth
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         mock_response = MagicMock()
@@ -1018,9 +1018,9 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         poster = ApiPoster(config_with_bfa)
@@ -1077,9 +1077,9 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="secret123",
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         # Patch TokenManager to both exist and fail
@@ -1133,9 +1133,9 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="raw_secret_key",
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         with patch('src.api_poster.TokenManager') as mock_tm_class:
@@ -1187,9 +1187,9 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         # Stop the TokenManager patcher for this test
@@ -1278,9 +1278,9 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-secret-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
-        max_log_lines=100000,
-        tail_log_lines=5000,
-        stream_chunk_size=8192
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
         )
 
         poster = ApiPoster(jenkins_config)
