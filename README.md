@@ -64,92 +64,66 @@ STREAM_CHUNK_SIZE=8192      # Streaming chunk size in bytes
 ### System Architecture Diagram
 
 ```mermaid
-graph TB
-    subgraph "CI/CD Sources"
-        GL[GitLab Server<br/>Pipeline Events]
-        JK[Jenkins Servers<br/>Build Events<br/>Multi-Instance]
+flowchart LR
+    subgraph Sources["CI/CD Sources"]
+        direction TB
+        GL[GitLab<br/>Pipelines]
+        JK[Jenkins<br/>Builds]
     end
 
-    subgraph "Webhook Server (Port 8000)"
-        WH[Webhook Listener<br/>FastAPI Server]
-        VAL[Webhook Validator<br/>Secret Token Check]
-        GLPARSE[GitLab Extractor<br/>Pipeline Parser]
-        JKPARSE[Jenkins Extractor<br/>Build Parser]
+    subgraph Server["Webhook Server :8000"]
+        WH[Listener]
     end
 
-    subgraph "Processing Layer"
-        GLFETCH[GitLab Log Fetcher<br/>Pipeline API]
-        JKFETCH[Jenkins Log Fetcher<br/>Blue Ocean API]
-        ERREXT[Error Extractor<br/>Pattern Matching]
-        RETRY[Error Handler<br/>Retry Logic]
+    subgraph Parse["Parse Events"]
+        direction TB
+        GLP[GitLab<br/>Parser]
+        JKP[Jenkins<br/>Parser]
     end
 
-    subgraph "API Integration"
-        APIPOSTER[API Poster<br/>User Determination]
-        TOKENMGR[Token Manager<br/>JWT Generation]
-        BFA[BFA API<br/>External Endpoint]
+    subgraph Fetch["Fetch Logs"]
+        direction TB
+        GLF[GitLab<br/>API]
+        JKF[Jenkins<br/>API]
     end
 
-    subgraph "Storage Layer"
-        STORE[Storage Manager<br/>File System]
-        META[Metadata Files<br/>metadata.json]
-        LOGS[Log Files<br/>stage_*.log]
+    subgraph Extract["Extract Errors"]
+        ERR[Error<br/>Patterns]
     end
 
-    subgraph "Configuration"
-        CONFIG[Config Loader<br/>.env + JSON]
+    subgraph Post["Post to API"]
+        direction TB
+        API[API<br/>Poster]
+        BFA[BFA<br/>API]
     end
 
-    GL -->|POST /webhook/gitlab| WH
-    JK -->|POST /webhook/jenkins| WH
+    subgraph Store["Save Files"]
+        SAVE[Storage]
+    end
 
-    WH --> VAL
-    VAL -->|GitLab Event| GLPARSE
-    VAL -->|Jenkins Event| JKPARSE
-
-    GLPARSE --> GLFETCH
-    JKPARSE --> JKFETCH
-
-    GLFETCH -->|API Call| GL
-    JKFETCH -->|API Call| JK
-
-    GLFETCH -.->|On Error| RETRY
-    JKFETCH -.->|On Error| RETRY
-    RETRY -.->|Retry| GLFETCH
-    RETRY -.->|Retry| JKFETCH
-
-    GLFETCH --> ERREXT
-    JKFETCH --> ERREXT
-
-    ERREXT --> APIPOSTER
-    APIPOSTER --> TOKENMGR
-    APIPOSTER -->|POST Logs| BFA
-
-    APIPOSTER -.->|Dual Mode| STORE
-    STORE --> META
-    STORE --> LOGS
-
-    CONFIG -.->|Configuration| WH
-    CONFIG -.->|jenkins_instances.json| JKFETCH
-    CONFIG -.->|.env| APIPOSTER
+    GL -->|webhook| WH
+    JK -->|webhook| WH
+    WH --> GLP
+    WH --> JKP
+    GLP --> GLF
+    JKP --> JKF
+    GLF --> ERR
+    JKF --> ERR
+    ERR --> API
+    API --> BFA
+    API -.->|optional| SAVE
 
     style GL fill:#e8f4ea,stroke:#9db5a0,stroke-width:2px
     style JK fill:#fff4e6,stroke:#e6c599,stroke-width:2px
     style WH fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
-    style VAL fill:#c1e1c1,stroke:#7eb07e
-    style GLPARSE fill:#b3d9ff,stroke:#6ba8e6
-    style JKPARSE fill:#ffd699,stroke:#e6a84d
-    style GLFETCH fill:#b3d9ff,stroke:#6ba8e6
-    style JKFETCH fill:#ffd699,stroke:#e6a84d
-    style ERREXT fill:#ffb3d9,stroke:#e66ba8
-    style RETRY fill:#ffb3b3,stroke:#e66b6b
-    style APIPOSTER fill:#a8d5ba,stroke:#6b9e78,stroke-width:2px
-    style TOKENMGR fill:#ffe4b3,stroke:#e6c56b
+    style GLP fill:#b3d9ff,stroke:#6ba8e6
+    style JKP fill:#ffd699,stroke:#e6a84d
+    style GLF fill:#b3d9ff,stroke:#6ba8e6
+    style JKF fill:#ffd699,stroke:#e6a84d
+    style ERR fill:#ffb3d9,stroke:#e66ba8,stroke-width:2px
+    style API fill:#a8d5ba,stroke:#6b9e78,stroke-width:2px
     style BFA fill:#d4f4dd,stroke:#9bcca8,stroke-width:3px
-    style STORE fill:#d9b3ff,stroke:#a86be6
-    style META fill:#e6ccff,stroke:#b380e6
-    style LOGS fill:#f0d9ff,stroke:#c699e6
-    style CONFIG fill:#c5ccd4,stroke:#8b95a1
+    style SAVE fill:#d9b3ff,stroke:#a86be6
 ```
 
 ### Data Flow Diagram
