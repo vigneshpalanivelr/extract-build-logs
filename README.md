@@ -64,42 +64,34 @@ STREAM_CHUNK_SIZE=8192      # Streaming chunk size in bytes
 ### System Architecture Diagram
 
 ```mermaid
-flowchart LR
+flowchart TB
     subgraph Sources["CI/CD Sources"]
-        direction TB
-        GL[GitLab<br/>Pipelines]
-        JK[Jenkins<br/>Builds]
+        direction LR
+        GL[GitLab Pipelines]
+        JK[Jenkins Builds]
     end
 
-    subgraph Server["Webhook Server :8000"]
-        WH[Listener]
+    WH[Webhook Listener :8000]
+
+    subgraph Parse["Event Parsing"]
+        direction LR
+        GLP[GitLab Parser]
+        JKP[Jenkins Parser]
     end
 
-    subgraph Parse["Parse Events"]
-        direction TB
-        GLP[GitLab<br/>Parser]
-        JKP[Jenkins<br/>Parser]
+    subgraph Fetch["Log Fetching"]
+        direction LR
+        GLF[GitLab API]
+        JKF[Jenkins API]
     end
 
-    subgraph Fetch["Fetch Logs"]
-        direction TB
-        GLF[GitLab<br/>API]
-        JKF[Jenkins<br/>API]
-    end
+    ERR[Error Extraction]
 
-    subgraph Extract["Extract Errors"]
-        ERR[Error<br/>Patterns]
-    end
+    API[API Poster<br/>JWT Auth]
 
-    subgraph Post["Post to API"]
-        direction TB
-        API[API<br/>Poster]
-        BFA[BFA<br/>API]
-    end
+    BFA[BFA API Endpoint]
 
-    subgraph Store["Save Files"]
-        SAVE[Storage]
-    end
+    SAVE[Optional File Storage]
 
     GL -->|webhook| WH
     JK -->|webhook| WH
@@ -110,8 +102,8 @@ flowchart LR
     GLF --> ERR
     JKF --> ERR
     ERR --> API
-    API --> BFA
-    API -.->|optional| SAVE
+    API -->|POST| BFA
+    API -.->|dual mode| SAVE
 
     style GL fill:#e8f4ea,stroke:#9db5a0,stroke-width:2px
     style JK fill:#fff4e6,stroke:#e6c599,stroke-width:2px
