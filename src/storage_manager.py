@@ -481,19 +481,19 @@ class StorageManager:
             {build_dir}/console.log
         """
         build_dir = self.get_jenkins_build_directory(job_name, build_number)
-        log_path = build_dir / "console.log"
+        console_log_path = build_dir / "console.log"
 
         try:
-            with open(log_path, 'w', encoding='utf-8') as f:
+            with open(console_log_path, 'w', encoding='utf-8') as f:
                 f.write(console_log)
 
             logger.info(
                 "Saved Jenkins console log for %s #%s to %s",
                 job_name,
                 build_number,
-                log_path
+                console_log_path
             )
-            return log_path
+            return console_log_path
 
         except IOError as e:
             logger.error(
@@ -531,10 +531,10 @@ class StorageManager:
         # Sanitize stage name and create filename
         safe_stage_name = self._sanitize_filename(stage_name.lower())
         log_filename = f"stage_{safe_stage_name}.log"
-        log_path = build_dir / log_filename
+        stage_log_path = build_dir / log_filename
 
         try:
-            with open(log_path, 'w', encoding='utf-8') as f:
+            with open(stage_log_path, 'w', encoding='utf-8') as f:
                 f.write(log_content)
 
             logger.info(
@@ -542,9 +542,9 @@ class StorageManager:
                 job_name,
                 build_number,
                 stage_name,
-                log_path
+                stage_log_path
             )
-            return log_path
+            return stage_log_path
 
         except IOError as e:
             logger.error(
