@@ -1,4 +1,4 @@
-# Example Crontab for Pipeline Logs Database Backups
+# Example Crontab for Pipeline Log Extraction System Maintenance
 #
 # Installation:
 #   1. Copy this file: cp scripts/crontab.example /tmp/pipeline-logs-cron
@@ -11,23 +11,41 @@
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 
-# Pipeline Logs Database Backups
+# Log Cleanup
+# ================================
+# Clean up old GitLab and Jenkins logs based on LOG_RETENTION_DAYS in .env
+# Recommended: Run daily during low-traffic hours
+
+# Daily cleanup at 1:00 AM (uses retention days from .env, default 90 days)
+0 1 * * * cd /path/to/extract-build-logs && ./scripts/cleanup_old_logs.sh >> /var/log/pipeline-logs-cleanup.log 2>&1
+
+# Weekly cleanup with custom retention (keep last 30 days)
+# 0 1 * * 0 cd /path/to/extract-build-logs && ./scripts/cleanup_old_logs.sh --days 30 >> /var/log/pipeline-logs-cleanup.log 2>&1
+
+# Cleanup only GitLab logs (daily at 1:30 AM)
+# 30 1 * * * cd /path/to/extract-build-logs && ./scripts/cleanup_old_logs.sh --gitlab-only >> /var/log/pipeline-logs-cleanup.log 2>&1
+
+# Cleanup only Jenkins logs (daily at 2:00 AM)
+# 0 2 * * * cd /path/to/extract-build-logs && ./scripts/cleanup_old_logs.sh --jenkins-only >> /var/log/pipeline-logs-cleanup.log 2>&1
+
+
+# Database Backups
 # ================================
 
-# Daily backup at 2:00 AM (keeps last 7 days)
-0 2 * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup daily >> /var/log/pipeline-logs-backup.log 2>&1
+# Daily backup at 3:00 AM (keeps last 7 days)
+0 3 * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup daily >> /var/log/pipeline-logs-backup.log 2>&1
 
-# Weekly backup every Sunday at 3:00 AM (keeps last 4 weeks)
-0 3 * * 0 cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup weekly >> /var/log/pipeline-logs-backup.log 2>&1
+# Weekly backup every Sunday at 4:00 AM (keeps last 4 weeks)
+0 4 * * 0 cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup weekly >> /var/log/pipeline-logs-backup.log 2>&1
 
-# Monthly backup on the 1st at 4:00 AM (keeps last 6 months)
-0 4 1 * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup monthly >> /var/log/pipeline-logs-backup.log 2>&1
+# Monthly backup on the 1st at 5:00 AM (keeps last 6 months)
+0 5 1 * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh backup monthly >> /var/log/pipeline-logs-backup.log 2>&1
 
 # Database health check every hour
 0 * * * * cd /path/to/extract-build-logs && ./scripts/manage_database.sh check >> /var/log/pipeline-logs-health.log 2>&1
 
-# Optional: Clean up old logs (keep last 30 days)
-# 0 5 * * * find /var/log/pipeline-logs-*.log -mtime +30 -delete
+# Optional: Clean up old cron log files (keep last 30 days)
+# 0 6 * * * find /var/log/pipeline-logs-*.log -mtime +30 -delete
 
 
 # Alternative schedules (commented out - uncomment and modify as needed)
