@@ -645,7 +645,7 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     bfa_table.add_row("Token Endpoint", "/api/token")
     bfa_table.add_row("Token Usage", "Dynamic JWT for API authentication")
     if not config.get('BFA_SECRET_KEY'):
-        bfa_table.add_row("Status", "[bold red]⚠ Token generation disabled[/bold red]")
+        bfa_table.add_row("Status", "[bold red][WARNING] Token generation disabled[/bold red]")
     console.print(bfa_table)
     console.print()
 
@@ -688,15 +688,15 @@ def show_validation_results(errors: List[str], warnings: List[str]) -> None:
         warnings: List of warning messages
     """
     if errors:
-        console.print("\n[bold red]✗ ERRORS (must be fixed):[/bold red]")
+        console.print("\n[bold red][X] ERRORS (must be fixed):[/bold red]")
         for error in errors:
-            console.print(f"   • {error}", style="red")
+            console.print(f"   - {error}", style="red")
         console.print()
 
     if warnings:
         console.print("[bold yellow]!  WARNINGS:[/bold yellow]")
         for warning in warnings:
-            console.print(f"   • {warning}", style="yellow")
+            console.print(f"   - {warning}", style="yellow")
         console.print()
 
 
@@ -712,7 +712,7 @@ def confirm_action(message: str = "Continue with this configuration?", auto_yes:
         True if user confirmed, False otherwise
     """
     if auto_yes:
-        console.print("✓ Auto-confirmed (--yes flag)", style="green")
+        console.print("[OK] Auto-confirmed (--yes flag)", style="green")
         return True
 
     while True:
@@ -743,7 +743,7 @@ def get_docker_client() -> Optional[docker.DockerClient]:
         client.ping()  # Test connection
         return client
     except DockerException as e:
-        console.print(f"[bold red]✗ Docker Error:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Docker Error:[/bold red] {str(e)}", style="red")
         console.print("\nPlease ensure Docker is installed and running.")
         return None
 
@@ -907,9 +907,9 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         if not logs_path.exists():
             logs_path.mkdir(parents=True, exist_ok=True)
             logs_path.chmod(0o755)
-            console.print(f"[green]✓ Created logs directory: {LOGS_DIR}[/green]")
+            console.print(f"[green][OK] Created logs directory: {LOGS_DIR}[/green]")
         elif not os.access(logs_path, os.W_OK):
-            console.print(f"[yellow]⚠ Warning: {LOGS_DIR} may not be writable. Run: sudo chown -R $USER:$USER {LOGS_DIR}[/yellow]")
+            console.print(f"[yellow][WARNING] Warning: {LOGS_DIR} may not be writable. Run: sudo chown -R $USER:$USER {LOGS_DIR}[/yellow]")
 
         if container_exists(client):
             if container_running(client):
@@ -917,7 +917,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
                 return True
             console.print("[blue]Starting existing container...[/blue]")
             client.containers.get(CONTAINER_NAME).start()
-            console.print("[bold green]✓ Container started![/bold green]")
+            console.print("[bold green][OK] Container started![/bold green]")
             show_endpoints(port)
             return True
 
@@ -935,7 +935,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         jenkins_instances_file = Path.cwd() / 'jenkins_instances.json'
         if jenkins_instances_file.exists():
             volumes[str(jenkins_instances_file.absolute())] = {'bind': '/app/jenkins_instances.json', 'mode': 'ro'}
-            console.print("[dim]  → Found jenkins_instances.json, mounting for multi-instance Jenkins support[/dim]")
+            console.print("[dim]  -> Found jenkins_instances.json, mounting for multi-instance Jenkins support[/dim]")
 
         # Start container with host network and user namespace
         client.containers.run(
@@ -948,7 +948,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             volumes=volumes,
             restart_policy={"Name": "unless-stopped"}
         )
-        console.print("[bold green]✓ Container started successfully![/bold green]")
+        console.print("[bold green][OK] Container started successfully![/bold green]")
 
         # Show shell equivalent
         shell_cmd = (
@@ -970,10 +970,10 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         show_endpoints(port)
         return True
     except ImageNotFound:
-        console.print(f"[bold red]✗ Image '{IMAGE_NAME}:latest' not found. Run 'build' command first.[/bold red]")
+        console.print(f"[bold red][X] Image '{IMAGE_NAME}:latest' not found. Run 'build' command first.[/bold red]")
         return False
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to start container: {str(e)}[/bold red]")
+        console.print(f"[bold red][X] Failed to start container: {str(e)}[/bold red]")
         return False
 
 
@@ -1019,7 +1019,7 @@ def stop_container(client: docker.DockerClient) -> bool:
         console.print(f"[blue]Stopping container:[/blue] {CONTAINER_NAME}")
         container = client.containers.get(CONTAINER_NAME)
         container.stop()
-        console.print("[bold green]✓ Container stopped![/bold green]")
+        console.print("[bold green][OK] Container stopped![/bold green]")
         console.print(f"[dim]Shell equivalent: docker stop {CONTAINER_NAME}[/dim]")
         return True
 
@@ -1027,7 +1027,7 @@ def stop_container(client: docker.DockerClient) -> bool:
         console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
         return True
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to stop container:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Failed to stop container:[/bold red] {str(e)}", style="red")
         return False
 
 
@@ -1044,7 +1044,7 @@ def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bo
     """
     # Check if container exists first
     if not container_exists(client):
-        console.print(f"[bold red]✗ Container '{CONTAINER_NAME}' does not exist.[/bold red]")
+        console.print(f"[bold red][X] Container '{CONTAINER_NAME}' does not exist.[/bold red]")
         console.print("[yellow]Use 'start' command to create and start the container.[/yellow]")
         return False
 
@@ -1079,7 +1079,7 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
     """
     try:
         if not container_exists(client):
-            console.print(f"[bold red]✗ Container '{CONTAINER_NAME}' does not exist.[/bold red]")
+            console.print(f"[bold red][X] Container '{CONTAINER_NAME}' does not exist.[/bold red]")
             return False
 
         console.print(f"[blue]Showing logs for:[/blue] {CONTAINER_NAME}")
@@ -1102,10 +1102,10 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
         return True
 
     except NotFound:
-        console.print(f"[bold red]✗ Container '{CONTAINER_NAME}' not found.[/bold red]")
+        console.print(f"[bold red][X] Container '{CONTAINER_NAME}' not found.[/bold red]")
         return False
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to get logs:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Failed to get logs:[/bold red] {str(e)}", style="red")
         return False
 
 
@@ -1127,7 +1127,7 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
     try:
         container = client.containers.get(CONTAINER_NAME)
         if container.status == 'running':
-            console.print("[bold green]✓ Container is RUNNING[/bold green]\n")
+            console.print("[bold green][OK] Container is RUNNING[/bold green]\n")
 
             info_table = Table(show_header=True, header_style="bold cyan")
             info_table.add_column("Property", style="yellow")
@@ -1209,7 +1209,7 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
                         console.print(f"[yellow]  ... and {len(error_lines) - 5} more errors[/yellow]")
                     console.print()
                 else:
-                    console.print("[green]✓ No recent errors found[/green]\n")
+                    console.print("[green][OK] No recent errors found[/green]\n")
             except Exception as e:
                 console.print(f"[yellow]!  Could not fetch recent logs: {str(e)}[/yellow]\n")
         else:
@@ -1217,10 +1217,10 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
             console.print("Use 'start' command to start it.")
         return True
     except NotFound:
-        console.print(f"[bold red]✗ Container '{CONTAINER_NAME}' not found.[/bold red]")
+        console.print(f"[bold red][X] Container '{CONTAINER_NAME}' not found.[/bold red]")
         return False
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to get status:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Failed to get status:[/bold red] {str(e)}", style="red")
         return False
 
 
@@ -1278,25 +1278,25 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
                     console.print(f"[yellow]!  Could not stop: {e}. Attempting force removal...[/yellow]")
                     force_remove = True
             container.remove(force=force_remove)
-            console.print("[bold green]✓ Container removed![/bold green]")
+            console.print("[bold green][OK] Container removed![/bold green]")
 
         if remove_image and image_exists_flag:
             try:
                 console.print(f"[blue]Removing image: {IMAGE_NAME}:latest[/blue]")
                 client.images.remove(f"{IMAGE_NAME}:latest", force=force_remove)
-                console.print("[bold green]✓ Image removed![/bold green]")
+                console.print("[bold green][OK] Image removed![/bold green]")
             except APIError as e:
-                console.print(f"[bold red]✗ Failed to remove image: {str(e)}[/bold red]")
+                console.print(f"[bold red][X] Failed to remove image: {str(e)}[/bold red]")
                 if not force_remove:
-                    console.print("[yellow]💡 Tip: Try --force-remove flag[/yellow]")
+                    console.print("[yellow][TIP] Tip: Try --force-remove flag[/yellow]")
                 return False
         return True
     except NotFound:
         console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
         return True
     except APIError as e:
-        console.print(f"[bold red]✗ Failed to remove: {str(e)}[/bold red]")
-        console.print("[yellow]💡 Tip: Try --force-remove flag[/yellow]")
+        console.print(f"[bold red][X] Failed to remove: {str(e)}[/bold red]")
+        console.print("[yellow][TIP] Tip: Try --force-remove flag[/yellow]")
         return False
 
 
@@ -1314,7 +1314,7 @@ def show_monitor(client: docker.DockerClient, args: List[str]) -> bool:
     """
     try:
         if not container_running(client):
-            console.print("[bold red]✗ Container is not running.[/bold red]")
+            console.print("[bold red][X] Container is not running.[/bold red]")
             return False
 
         console.print("[blue]Opening monitoring dashboard...[/blue]\n")
@@ -1330,7 +1330,7 @@ def show_monitor(client: docker.DockerClient, args: List[str]) -> bool:
         return True
 
     except Exception as e:
-        console.print(f"[bold red]✗ Failed to show monitor:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Failed to show monitor:[/bold red] {str(e)}", style="red")
         return False
 
 
@@ -1356,11 +1356,11 @@ def export_monitoring_data(filename: str = "monitoring_export.csv") -> bool:
         with open(filename, 'w') as f:
             f.write(response.text)
 
-        console.print(f"[bold green]✓ Data exported to: {filename}[/bold green]")
+        console.print(f"[bold green][OK] Data exported to: {filename}[/bold green]")
         return True
 
     except Exception as e:
-        console.print(f"[bold red]✗ Failed to export data:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Failed to export data:[/bold red] {str(e)}", style="red")
         return False
 
 
@@ -1423,7 +1423,7 @@ def test_webhook() -> bool:
         response.raise_for_status()
         result = response.json()
 
-        console.print("[bold green]✓ Test webhook sent successfully![/bold green]")
+        console.print("[bold green][OK] Test webhook sent successfully![/bold green]")
         console.print("\n[bold]Response:[/bold]")
         console.print(json.dumps(result, indent=2))
         console.print("\n[dim]Check logs with: ./manage_container.py logs[/dim]")
@@ -1431,7 +1431,7 @@ def test_webhook() -> bool:
         return True
 
     except Exception as e:
-        console.print(f"[bold red]✗ Failed to send test webhook:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red][X] Failed to send test webhook:[/bold red] {str(e)}", style="red")
         return False
 
 
@@ -1442,7 +1442,7 @@ def cmd_config(args):
     # Load configuration
     cfg = load_config(Path(args.env_file))
     if cfg is None:
-        console.print(f"[bold red]✗ Configuration file not found: {args.env_file}[/bold red]")
+        console.print(f"[bold red][X] Configuration file not found: {args.env_file}[/bold red]")
         console.print(f"Please create {args.env_file} from .env.example:")
         console.print(f"  cp .env.example {args.env_file}")
         sys.exit(EXIT_CONFIG_ERROR)
@@ -1457,14 +1457,14 @@ def cmd_config(args):
 
     # Exit on errors
     if errors:
-        console.print("[bold red]✗ Configuration has critical errors. Please fix .env file.[/bold red]")
+        console.print("[bold red][X] Configuration has critical errors. Please fix .env file.[/bold red]")
         sys.exit(EXIT_CONFIG_ERROR)
 
     if args.validate_only:
         if warnings:
-            console.print("[bold green]✓ Configuration is valid (but has warnings)[/bold green]")
+            console.print("[bold green][OK] Configuration is valid (but has warnings)[/bold green]")
         else:
-            console.print("[bold green]✓ Configuration is valid[/bold green]")
+            console.print("[bold green][OK] Configuration is valid[/bold green]")
 
     sys.exit(EXIT_SUCCESS)
 
@@ -1485,7 +1485,7 @@ def cmd_start(args):
 
     # Check .env file
     if not Path(ENV_FILE).exists():
-        console.print(f"[bold red]✗ Configuration file not found: {ENV_FILE}[/bold red]")
+        console.print(f"[bold red][X] Configuration file not found: {ENV_FILE}[/bold red]")
         console.print(f"Please create {ENV_FILE} from .env.example:")
         console.print(f"  cp .env.example {ENV_FILE}")
         sys.exit(EXIT_CONFIG_ERROR)
@@ -1503,7 +1503,7 @@ def cmd_start(args):
     show_validation_results(errors, warnings)
 
     if errors:
-        console.print("[bold red]✗ Configuration has critical errors. Please fix .env file.[/bold red]")
+        console.print("[bold red][X] Configuration has critical errors. Please fix .env file.[/bold red]")
         sys.exit(EXIT_CONFIG_ERROR)
 
     # Confirm
@@ -1537,7 +1537,7 @@ def cmd_restart(args):
     # Load config
     cfg = load_config()
     if cfg is None:
-        console.print(f"[bold red]✗ Configuration file not found: {ENV_FILE}[/bold red]")
+        console.print(f"[bold red][X] Configuration file not found: {ENV_FILE}[/bold red]")
         sys.exit(EXIT_CONFIG_ERROR)
 
     client = get_docker_client()
