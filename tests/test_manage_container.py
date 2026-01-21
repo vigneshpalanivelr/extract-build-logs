@@ -233,9 +233,20 @@ class TestGetPortFromConfig(unittest.TestCase):
 class TestBuildImage(unittest.TestCase):
     """Test cases for build_image function."""
 
+    @patch('manage_container.os.environ.get')
     @patch('manage_container.console')
-    def test_build_image_success(self, mock_console):
-        """Test successful image build."""
+    def test_build_image_success(self, mock_console, mock_env_get):
+        """Test successful image build with build args."""
+        # Mock environment variables for USER_UID and USER_GID
+        def env_get_side_effect(key, default=None):
+            if key == 'USER_UID':
+                return '12345'
+            elif key == 'USER_GID':
+                return '54321'
+            return default
+
+        mock_env_get.side_effect = env_get_side_effect
+
         mock_client = MagicMock()
         mock_client.images.build.return_value = (MagicMock(), [])
 
@@ -243,6 +254,14 @@ class TestBuildImage(unittest.TestCase):
 
         self.assertTrue(result)
         mock_client.images.build.assert_called_once()
+
+        # Verify build args were passed correctly
+        call_args = mock_client.images.build.call_args
+        self.assertEqual(call_args[1]['tag'], 'bfa-gitlab-pipeline-extractor:latest')
+        self.assertIn('buildargs', call_args[1])
+        self.assertEqual(call_args[1]['buildargs']['USER_UID'], '12345')
+        self.assertEqual(call_args[1]['buildargs']['USER_GID'], '54321')
+        self.assertTrue(call_args[1]['rm'])
 
     @patch('manage_container.console')
     def test_build_image_failure(self, mock_console):
@@ -334,7 +353,7 @@ class TestStartContainer(unittest.TestCase):
     @patch('manage_container.container_running')
     @patch('manage_container.show_endpoints')
     def test_start_container_new(self, mock_endpoints, mock_running, mock_exists, mock_console, mock_path):
-        """Test starting new container."""
+        """Test starting new container with host network and user namespace."""
         mock_exists.return_value = False
         mock_client = MagicMock()
         config = {'WEBHOOK_PORT': '8000'}
@@ -348,6 +367,16 @@ class TestStartContainer(unittest.TestCase):
 
         self.assertTrue(result)
         mock_client.containers.run.assert_called_once()
+
+        # Verify container was started with correct parameters
+        call_args = mock_client.containers.run.call_args
+        self.assertEqual(call_args[0][0], 'bfa-gitlab-pipeline-extractor:latest')  # Image with :latest tag
+        self.assertEqual(call_args[1]['name'], 'bfa-gitlab-pipeline-extractor')
+        self.assertTrue(call_args[1]['detach'])
+        self.assertEqual(call_args[1]['network_mode'], 'host')  # Host networking
+        self.assertEqual(call_args[1]['userns_mode'], 'host')  # Host user namespace
+        self.assertIn('volumes', call_args[1])
+        self.assertIn('restart_policy', call_args[1])
 
 
 class TestStopContainer(unittest.TestCase):
