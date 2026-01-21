@@ -748,5 +748,91 @@ class TestMain(unittest.TestCase):
         mock_cmd.assert_called_once()
 
 
+class TestSimpleFallbackClasses(unittest.TestCase):
+    """Test cases for simple fallback classes when rich is not available."""
+
+    def test_simple_console_print(self):
+        """Test SimpleConsole strips rich markup."""
+        console = manage_container.SimpleConsole()
+        # This should not raise an exception
+        import io
+        import sys
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        console.print("[bold]Test[/bold] [red]message[/red]")
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
+        # Rich markup should be stripped
+        self.assertIn("Test message", output)
+        self.assertNotIn("[bold]", output)
+        self.assertNotIn("[red]", output)
+
+    def test_simple_table_creation(self):
+        """Test SimpleTable creates basic table output."""
+        table = manage_container.SimpleTable(title="Test Table")
+        table.add_column("Column1")
+        table.add_column("Column2")
+        table.add_row("Value1", "Value2")
+        table.add_row("Value3", "Value4")
+
+        output = str(table)
+        self.assertIn("Test Table", output)
+        self.assertIn("Column1", output)
+        self.assertIn("Column2", output)
+        self.assertIn("Value1", output)
+        self.assertIn("Value2", output)
+
+    def test_simple_table_with_console_print(self):
+        """Test SimpleConsole can print SimpleTable objects."""
+        console = manage_container.SimpleConsole()
+        table = manage_container.SimpleTable(title="Test")
+        table.add_column("Col1")
+        table.add_row("Val1")
+
+        import io
+        import sys
+        captured_output = io.StringIO()
+        sys.stdout = captured_output
+        console.print(table)
+        sys.stdout = sys.__stdout__
+        output = captured_output.getvalue()
+
+        self.assertIn("Test", output)
+        self.assertIn("Col1", output)
+        self.assertIn("Val1", output)
+
+    def test_simple_progress_context(self):
+        """Test SimpleProgress works as context manager."""
+        with manage_container.SimpleProgress() as progress:
+            task = progress.add_task("Test task")
+            self.assertIsNotNone(task)
+            progress.update(task, completed=True)
+        # Should not raise any exceptions
+
+    def test_simple_prompt_with_choices(self):
+        """Test SimplePrompt validates choices."""
+        import io
+        import sys
+
+        # Mock user input
+        sys.stdin = io.StringIO("1\n")
+        result = manage_container.SimplePrompt.ask("Choose", choices=["1", "2"], default="2")
+        sys.stdin = sys.__stdin__
+
+        self.assertEqual(result, "1")
+
+    def test_simple_prompt_default(self):
+        """Test SimplePrompt returns default on empty input."""
+        import io
+        import sys
+
+        # Mock empty input
+        sys.stdin = io.StringIO("\n")
+        result = manage_container.SimplePrompt.ask("Choose", choices=["1", "2"], default="2")
+        sys.stdin = sys.__stdin__
+
+        self.assertEqual(result, "2")
+
+
 if __name__ == '__main__':
     unittest.main()
