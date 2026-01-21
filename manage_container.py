@@ -1579,7 +1579,8 @@ For more information, see OPERATIONS.md
     )
 
     parser.add_argument('--version', action='version', version='%(prog)s 2.0.0')
-    subparsers = parser.add_subparsers(dest='command', help='Available commands', required=True)
+    # Note: required=True is not supported in Python 3.6, added in Python 3.7
+    subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
     parser_config = subparsers.add_parser('config', help='Display and validate configuration')
     parser_config.add_argument('--env-file', default=ENV_FILE, help='Path to .env file')
@@ -1625,6 +1626,12 @@ For more information, see OPERATIONS.md
     parser_test.set_defaults(func=cmd_test)
 
     args = parser.parse_args()
+
+    # Handle Python 3.6 compatibility - required=True not supported in add_subparsers
+    if not hasattr(args, 'func') or args.command is None:
+        parser.print_help()
+        sys.exit(EXIT_ERROR)
+
     args.func(args)
 
 
