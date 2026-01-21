@@ -186,11 +186,11 @@ if RICH_AVAILABLE:
     console = Console()
 else:
     # Dummy classes for Progress columns (only needed in simple mode)
-    class SpinnerColumn:
+    class SpinnerColumn:  # noqa: F811
         """Dummy spinner column for simple mode."""
         pass
 
-    class TextColumn:
+    class TextColumn:  # noqa: F811
         """Dummy text column for simple mode."""
         def __init__(self, *args, **kwargs):
             pass
