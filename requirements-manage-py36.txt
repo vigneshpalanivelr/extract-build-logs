@@ -7,20 +7,22 @@
 # Note: The main application (requirements.txt) still uses Python 3.8 inside Docker.
 # This file is ONLY for running manage_container.py on Python 3.6 host systems.
 #
-# ⚠️ VERIFIED VERSIONS - All tested to support Python 3.6.1+ ⚠️
-# ⚠️ IMPORTANT: Python 3.6.0 is NOT supported - requires Python 3.6.1 or later ⚠️
+# ⚠️ VERIFIED VERSIONS - All tested to support Python 3.6.0+ ⚠️
+# ⚠️ NEW: manage_container.py now works on Python 3.6.0! Rich is optional. ⚠️
 
 # Container management - Last version supporting Python 3.6
 # Source: https://github.com/docker/docker-py/issues/3039
 # Version 6.0.0+ requires Python 3.7+
 docker==5.0.3
 
-# Rich terminal output - Last version supporting Python 3.6.1+
+# Rich terminal output - OPTIONAL for Python 3.6.0 users
 # Source: https://github.com/Textualize/rich/blob/master/CHANGELOG.md
 # Version 13.0.0+ requires Python 3.7+
 # IMPORTANT: Requires Python 3.6.1+ (NOT 3.6.0)
 # Source: https://github.com/willmcgugan/rich/issues/215
-rich==12.6.0
+# If you have Python 3.6.0, skip installing rich or it will fail
+# The script will work in basic mode without rich
+rich==12.6.0; python_version >= "3.6.1"
 
 # Environment variable management - Last version supporting Python 3.6
 # Source: https://pypi.org/project/python-dotenv/

@@ -45,15 +45,23 @@ import requests
 try:
     import docker
     from docker.errors import DockerException, ImageNotFound, NotFound, APIError
-    from rich.console import Console
-    from rich.table import Table
-    from rich.progress import Progress, SpinnerColumn, TextColumn
-    from rich.prompt import Prompt
     from dotenv import dotenv_values
 except ImportError as e:
     print(f"Error: Required package not found: {e}")
     print("Please install dependencies: pip install -r requirements.txt")
     sys.exit(1)
+
+# Try to import rich, but make it optional for Python 3.6.0 compatibility
+RICH_AVAILABLE = False
+try:
+    from rich.console import Console
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn
+    from rich.prompt import Prompt
+    RICH_AVAILABLE = True
+except ImportError:
+    # Rich not available - will use basic fallback
+    pass
 
 
 # Constants
@@ -69,8 +77,134 @@ EXIT_CONFIG_ERROR = 2
 EXIT_DOCKER_ERROR = 3
 EXIT_CANCELLED = 4
 
-# Initialize console for rich output
-console = Console()
+
+# Simple console wrapper that works with or without rich
+class SimpleConsole:
+    """Fallback console for when rich is not available."""
+
+    def print(self, *args, **kwargs):
+        """Simple print that strips rich markup."""
+        if len(args) == 1 and isinstance(args[0], SimpleTable):
+            # Handle SimpleTable objects
+            print(str(args[0]))
+        else:
+            message = ' '.join(str(arg) for arg in args)
+            # Remove rich markup tags like [bold], [red], etc.
+            import re
+            message = re.sub(r'\[/?[a-z]+[^\]]*\]', '', message)
+            print(message)
+
+
+class SimpleTable:
+    """Fallback table for when rich is not available."""
+
+    def __init__(self, title="", **kwargs):
+        self.title = title
+        self.columns = []
+        self.rows = []
+
+    def add_column(self, name, **kwargs):
+        self.columns.append(name)
+
+    def add_row(self, *values):
+        self.rows.append(values)
+
+    def __str__(self):
+        output = []
+        if self.title:
+            output.append(f"\n{self.title}")
+            output.append("=" * len(self.title))
+
+        if self.rows:
+            # Calculate column widths
+            col_widths = [len(col) for col in self.columns]
+            for row in self.rows:
+                for i, val in enumerate(row):
+                    col_widths[i] = max(col_widths[i], len(str(val)))
+
+            # Print header
+            header = " | ".join(col.ljust(col_widths[i]) for i, col in enumerate(self.columns))
+            output.append(header)
+            output.append("-" * len(header))
+
+            # Print rows
+            for row in self.rows:
+                row_str = " | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row))
+                output.append(row_str)
+
+        return "\n".join(output)
+
+
+class SimpleProgress:
+    """Fallback progress for when rich is not available."""
+
+    def __init__(self, *args, **kwargs):
+        self.tasks = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def add_task(self, description, **kwargs):
+        print(f"  {description}")
+        return len(self.tasks)
+
+    def update(self, task_id, **kwargs):
+        pass
+
+
+class SimplePrompt:
+    """Fallback prompt for when rich is not available."""
+
+    @staticmethod
+    def ask(prompt, choices=None, default=None):
+        """Simple input prompt with choices validation."""
+        while True:
+            if choices:
+                prompt_text = f"{prompt} ({'/'.join(choices)})"
+                if default:
+                    prompt_text += f" [{default}]"
+                prompt_text += ": "
+            else:
+                prompt_text = f"{prompt}: "
+
+            response = input(prompt_text).strip()
+
+            if not response and default:
+                return default
+
+            if choices is None or response in choices:
+                return response
+
+            print(f"Invalid choice. Please select from: {', '.join(choices)}")
+
+
+# Dummy classes for Progress columns (not used in simple mode but needed for compatibility)
+class SpinnerColumn:
+    """Dummy spinner column for simple mode."""
+    pass
+
+
+class TextColumn:
+    """Dummy text column for simple mode."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+
+# Initialize console (rich or simple fallback)
+if RICH_AVAILABLE:
+    console = Console()
+else:
+    console = SimpleConsole()
+    Table = SimpleTable
+    Progress = SimpleProgress
+    Prompt = SimplePrompt
+    # SpinnerColumn and TextColumn are already defined as dummy classes above
+    print("Note: Running in basic mode (rich library not available)")
+    print("For enhanced output, upgrade to Python 3.6.1+ and install rich==12.6.0\n")
 
 
 # Configuration Management (merged from show_config.py)
@@ -109,7 +243,7 @@ def mask_value(value: Optional[str], show_chars: int = 8) -> str:
     return f"{value[:show_chars]}****"
 
 
-def create_config_table(title: str) -> Table:
+def create_config_table(title: str):
     """
     Create a standardized configuration table with consistent styling.
 
@@ -117,11 +251,16 @@ def create_config_table(title: str) -> Table:
         title: Table title
 
     Returns:
-        Configured Rich Table ready for adding rows
+        Configured Rich Table or SimpleTable ready for adding rows
     """
-    table = Table(title=title, show_header=True, header_style="bold cyan")
-    table.add_column("Setting", style="yellow", width=30)
-    table.add_column("Value", style="green")
+    if RICH_AVAILABLE:
+        table = Table(title=title, show_header=True, header_style="bold cyan")
+        table.add_column("Setting", style="yellow", width=30)
+        table.add_column("Value", style="green")
+    else:
+        table = SimpleTable(title=title)
+        table.add_column("Setting")
+        table.add_column("Value")
     return table
 
 
