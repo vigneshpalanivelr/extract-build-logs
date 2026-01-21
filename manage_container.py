@@ -1142,7 +1142,10 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
 
         console.print(f"[blue]Showing logs for:[/blue] {CONTAINER_NAME}")
         if follow:
-            console.print("[dim]Press Ctrl+C to exit[/dim]\n")
+            console.print("[dim]Press Ctrl+C to exit[/dim]")
+            console.print(f"[dim]Shell equivalent: docker logs -f {CONTAINER_NAME}[/dim]\n")
+        else:
+            console.print(f"[dim]Shell equivalent: docker logs {CONTAINER_NAME}[/dim]\n")
 
         container = client.containers.get(CONTAINER_NAME)
 
@@ -1331,21 +1334,34 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         if container_exists_flag:
             console.print(f"[blue]Removing container: {CONTAINER_NAME}[/blue]")
             container = client.containers.get(CONTAINER_NAME)
+            stopped_first = False
             if not force_remove and container.status in ['running', 'restarting']:
                 try:
                     console.print("[blue]Stopping container first...[/blue]")
                     container.stop(timeout=10)
+                    console.print(f"[dim]Shell equivalent: docker stop {CONTAINER_NAME}[/dim]")
+                    stopped_first = True
                 except Exception as e:
                     console.print(f"[yellow]!  Could not stop: {e}. Attempting force removal...[/yellow]")
                     force_remove = True
             container.remove(force=force_remove)
             console.print("[bold green][OK] Container removed![/bold green]")
+            if force_remove:
+                console.print(f"[dim]Shell equivalent: docker rm -f {CONTAINER_NAME}[/dim]")
+            elif stopped_first:
+                console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
+            else:
+                console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
 
         if remove_image and image_exists_flag:
             try:
                 console.print(f"[blue]Removing image: {IMAGE_NAME}:latest[/blue]")
                 client.images.remove(f"{IMAGE_NAME}:latest", force=force_remove)
                 console.print("[bold green][OK] Image removed![/bold green]")
+                if force_remove:
+                    console.print(f"[dim]Shell equivalent: docker rmi -f {IMAGE_NAME}:latest[/dim]")
+                else:
+                    console.print(f"[dim]Shell equivalent: docker rmi {IMAGE_NAME}:latest[/dim]")
             except APIError as e:
                 console.print(f"[bold red][X] Failed to remove image: {str(e)}[/bold red]")
                 if not force_remove:
