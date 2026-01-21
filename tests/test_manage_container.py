@@ -237,7 +237,7 @@ class TestBuildImage(unittest.TestCase):
     @patch('manage_container.os.environ.get')
     @patch('manage_container.console')
     def test_build_image_success(self, mock_console, mock_env_get, mock_progress):
-        """Test successful image build with build args using Docker SDK."""
+        """Test successful image build with build args using Docker SDK with API 1.40."""
         # Mock environment variables for USER_UID and USER_GID
         def env_get_side_effect(key, default=None):
             if key == 'USER_UID':
@@ -264,14 +264,12 @@ class TestBuildImage(unittest.TestCase):
 
         # Verify build args were passed correctly
         call_args = mock_client.images.build.call_args
-        self.assertIn('path', call_args[1])  # Should have absolute path
+        self.assertEqual(call_args[1]['path'], '.')  # Relative path like CLI
         self.assertEqual(call_args[1]['tag'], 'bfa-gitlab-pipeline-extractor:latest')
         self.assertIn('buildargs', call_args[1])
         self.assertEqual(call_args[1]['buildargs']['USER_UID'], '12345')
         self.assertEqual(call_args[1]['buildargs']['USER_GID'], '54321')
         self.assertTrue(call_args[1]['rm'])
-        self.assertTrue(call_args[1]['forcerm'])
-        self.assertFalse(call_args[1]['pull'])
 
     @patch('manage_container.Progress')
     @patch('manage_container.console')

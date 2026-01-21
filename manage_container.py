@@ -37,7 +37,6 @@ import os
 import json
 import argparse
 import socket
-import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
@@ -738,7 +737,8 @@ def get_docker_client() -> Optional[docker.DockerClient]:
         Docker client or None
     """
     try:
-        client = docker.from_env()
+        # Explicitly set API version to 1.40 for Docker 19.03.5 compatibility
+        client = docker.from_env(version='1.40')
         client.ping()  # Test connection
         return client
     except DockerException as e:
@@ -790,17 +790,6 @@ def build_image(client: docker.DockerClient) -> bool:
 
         start_time = time.time()
 
-        # Use subprocess to call docker CLI directly
-        # The Docker SDK has issues with user namespace mapping that the CLI doesn't have
-        build_cmd = [
-            'docker', 'build',
-            '--build-arg', f'USER_UID={user_uid}',
-            '--build-arg', f'USER_GID={user_gid}',
-            '-t', f'{IMAGE_NAME}:latest',
-            '--rm',
-            '.'
-        ]
-
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -808,20 +797,19 @@ def build_image(client: docker.DockerClient) -> bool:
         ) as progress:
             task = progress.add_task("Building image...", total=None)
 
-            # Run docker build command
-            result = subprocess.run(
-                build_cmd,
-                capture_output=True,
-                text=True,
-                cwd=os.path.abspath(".")
+            # Build with SDK using API 1.40 compatibility
+            # Using relative path "." like CLI does
+            image, build_logs = client.images.build(
+                path=".",
+                tag=f"{IMAGE_NAME}:latest",
+                buildargs={
+                    'USER_UID': str(user_uid),
+                    'USER_GID': str(user_gid)
+                },
+                rm=True
             )
 
             progress.update(task, completed=True)
-
-            if result.returncode != 0:
-                console.print("[bold red]ERROR: Build failed[/bold red]", style="red")
-                console.print(result.stderr)
-                return False
 
         elapsed_time = time.time() - start_time
 
@@ -830,7 +818,7 @@ def build_image(client: docker.DockerClient) -> bool:
         console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
         return True
 
-    except subprocess.CalledProcessError as e:
+    except APIError as e:
         console.print(f"[bold red]ERROR: Build failed - {str(e)}[/bold red]", style="red")
         return False
     except Exception as e:
