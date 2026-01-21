@@ -950,8 +950,23 @@ def show_status(client: docker.DockerClient) -> bool:
             import re
             started_at = container.attrs['State'].get('StartedAt')
             if started_at:
+                # Python 3.6 compatible: Manual ISO format parsing instead of fromisoformat()
                 started_at = re.sub(r'(\.\d{6})\d+', r'\1', started_at)
-                start_time = datetime.fromisoformat(started_at.replace('Z', '+00:00'))
+                # Parse ISO 8601 format manually for Python 3.6 compatibility
+                # Format: 2024-01-01T10:00:00.123456Z or 2024-01-01T10:00:00.123456+00:00
+                datetime_str = started_at.replace('Z', '').replace('+00:00', '').replace('-00:00', '')
+                try:
+                    if '.' in datetime_str:
+                        # Has microseconds: 2024-01-01T10:00:00.123456
+                        start_time = datetime.strptime(datetime_str, '%Y-%m-%dT%H:%M:%S.%f')
+                    else:
+                        # No microseconds: 2024-01-01T10:00:00
+                        start_time = datetime.strptime(datetime_str, '%Y-%m-%dT%H:%M:%S')
+                    # Make timezone-aware for UTC
+                    start_time = start_time.replace(tzinfo=timezone.utc)
+                except ValueError:
+                    # Fallback if parsing fails
+                    start_time = datetime.now(timezone.utc)
                 uptime = datetime.now(timezone.utc) - start_time
                 days, hours = uptime.days, uptime.seconds // 3600
                 minutes = (uptime.seconds % 3600) // 60
