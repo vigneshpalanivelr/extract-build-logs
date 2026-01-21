@@ -233,9 +233,10 @@ class TestGetPortFromConfig(unittest.TestCase):
 class TestBuildImage(unittest.TestCase):
     """Test cases for build_image function."""
 
+    @patch('manage_container.Progress')
     @patch('manage_container.os.environ.get')
     @patch('manage_container.console')
-    def test_build_image_success(self, mock_console, mock_env_get):
+    def test_build_image_success(self, mock_console, mock_env_get, mock_progress):
         """Test successful image build with build args."""
         # Mock environment variables for USER_UID and USER_GID
         def env_get_side_effect(key, default=None):
@@ -246,6 +247,11 @@ class TestBuildImage(unittest.TestCase):
             return default
 
         mock_env_get.side_effect = env_get_side_effect
+
+        # Mock Progress context manager
+        mock_progress_instance = MagicMock()
+        mock_progress.return_value.__enter__.return_value = mock_progress_instance
+        mock_progress_instance.add_task.return_value = 0
 
         mock_client = MagicMock()
         mock_client.images.build.return_value = (MagicMock(), [])
@@ -263,10 +269,17 @@ class TestBuildImage(unittest.TestCase):
         self.assertEqual(call_args[1]['buildargs']['USER_GID'], '54321')
         self.assertTrue(call_args[1]['rm'])
 
+    @patch('manage_container.Progress')
     @patch('manage_container.console')
-    def test_build_image_failure(self, mock_console):
+    def test_build_image_failure(self, mock_console, mock_progress):
         """Test image build failure."""
         from docker.errors import APIError
+
+        # Mock Progress context manager
+        mock_progress_instance = MagicMock()
+        mock_progress.return_value.__enter__.return_value = mock_progress_instance
+        mock_progress_instance.add_task.return_value = 0
+
         mock_client = MagicMock()
         mock_client.images.build.side_effect = APIError("Build failed")
 

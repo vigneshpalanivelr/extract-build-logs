@@ -195,11 +195,11 @@ else:
         def __init__(self, *args, **kwargs):
             pass
 
-    # Assign fallback classes
+    # Assign fallback classes - noqa to suppress false positive F811 warnings
     console = SimpleConsole()
-    Table = SimpleTable
-    Progress = SimpleProgress
-    Prompt = SimplePrompt
+    Table = SimpleTable  # noqa: F811
+    Progress = SimpleProgress  # noqa: F811
+    Prompt = SimplePrompt  # noqa: F811
     print("Note: Running in basic mode (rich library not available)")
     print("For enhanced output, upgrade to Python 3.6.1+ and install rich==12.6.0\n")
 
