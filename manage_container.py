@@ -38,6 +38,7 @@ import json
 import argparse
 import socket
 import subprocess
+import traceback
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
@@ -111,26 +112,31 @@ class SimpleTable:
         self.rows.append(values)
 
     def __str__(self):
+        import re
         output = []
         if self.title:
             output.append(f"\n{self.title}")
             output.append("=" * len(self.title))
 
         if self.rows:
-            # Calculate column widths
-            col_widths = [len(col) for col in self.columns]
+            # Strip rich markup from all values for proper width calculation
+            def strip_markup(text):
+                return re.sub(r'\[/?[a-z]+[^\]]*\]', '', str(text))
+
+            # Calculate column widths based on stripped text
+            col_widths = [len(strip_markup(col)) for col in self.columns]
             for row in self.rows:
                 for i, val in enumerate(row):
-                    col_widths[i] = max(col_widths[i], len(str(val)))
+                    col_widths[i] = max(col_widths[i], len(strip_markup(val)))
 
             # Print header
-            header = " | ".join(col.ljust(col_widths[i]) for i, col in enumerate(self.columns))
+            header = " | ".join(strip_markup(col).ljust(col_widths[i]) for i, col in enumerate(self.columns))
             output.append(header)
             output.append("-" * len(header))
 
-            # Print rows
+            # Print rows with stripped markup
             for row in self.rows:
-                row_str = " | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row))
+                row_str = " | ".join(strip_markup(val).ljust(col_widths[i]) for i, val in enumerate(row))
                 output.append(row_str)
 
         return "\n".join(output)
@@ -385,16 +391,30 @@ def validate_jenkins_config(config: Dict[str, str]) -> Tuple[List[str], List[str
     warnings = []
 
     jenkins_enabled = config.get('JENKINS_ENABLED', 'false').lower() == 'true'
-    if jenkins_enabled:
-        if not config.get('JENKINS_URL'):
-            errors.append("JENKINS_ENABLED is true but JENKINS_URL is not set")
-        elif not config.get('JENKINS_URL').startswith(('http://', 'https://')):
-            warnings.append("JENKINS_URL should start with http:// or https://")
 
-        if not config.get('JENKINS_USER'):
-            errors.append("JENKINS_ENABLED is true but JENKINS_USER is not set")
-        if not config.get('JENKINS_API_TOKEN'):
-            errors.append("JENKINS_ENABLED is true but JENKINS_API_TOKEN is not set")
+    # Check if using multi-instance Jenkins setup (jenkins_instances.json)
+    jenkins_instances_file = Path('jenkins_instances.json')
+    using_multi_instance = jenkins_instances_file.exists()
+
+    if jenkins_enabled:
+        if using_multi_instance:
+            # Multi-instance setup: jenkins_instances.json contains all config
+            # No need to check JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
+            # They will be in the JSON file instead
+            pass
+        else:
+            # Single-instance setup: validate old environment variables
+            if not config.get('JENKINS_URL'):
+                errors.append("JENKINS_ENABLED is true but JENKINS_URL is not set")
+            elif not config.get('JENKINS_URL').startswith(('http://', 'https://')):
+                warnings.append("JENKINS_URL should start with http:// or https://")
+
+            if not config.get('JENKINS_USER'):
+                errors.append("JENKINS_ENABLED is true but JENKINS_USER is not set")
+            if not config.get('JENKINS_API_TOKEN'):
+                errors.append("JENKINS_ENABLED is true but JENKINS_API_TOKEN is not set")
+
+        # Webhook secret warning applies to both setups
         if not config.get('JENKINS_WEBHOOK_SECRET'):
             warnings.append("JENKINS_WEBHOOK_SECRET is not set (Jenkins webhooks will be unauthenticated)")
 
@@ -809,6 +829,8 @@ def build_image(client: docker.DockerClient) -> bool:
             '.'
         ]
 
+        console.print("[dim]Starting Docker build process...[/dim]")
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -816,45 +838,59 @@ def build_image(client: docker.DockerClient) -> bool:
         ) as progress:
             task = progress.add_task("Building image...", total=None)
 
-            # Run docker build command
-            # Note: Using stdout/stderr PIPE instead of capture_output for Python 3.6 compatibility
-            # capture_output parameter was added in Python 3.7
-            result = subprocess.run(
-                build_cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,  # Python 3.6 equivalent of text=True
-                cwd=os.path.abspath(".")
-            )
+            try:
+                # Run docker build command
+                # Note: Using stdout/stderr PIPE instead of capture_output for Python 3.6 compatibility
+                # capture_output parameter was added in Python 3.7
+                console.print("[dim]Executing: docker build command[/dim]")
+                result = subprocess.run(
+                    build_cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,  # Python 3.6 equivalent of text=True
+                    cwd=os.path.abspath(".")
+                )
 
-            progress.update(task, completed=True)
+                progress.update(task, completed=True)
+
+            except OSError as e:
+                progress.update(task, completed=True)
+                console.print("\n[bold red]ERROR: Failed to execute docker command[/bold red]")
+                console.print(f"[dim]  Error: {str(e)}[/dim]")
+                console.print("[dim]  Is Docker installed and in PATH?[/dim]")
+                return False
 
         elapsed_time = time.time() - start_time
 
         if result.returncode != 0:
-            console.print("[bold red]ERROR: Build failed[/bold red]")
+            console.print("\n[bold red]ERROR: Build failed[/bold red]")
             console.print(f"[dim]Return code: {result.returncode}[/dim]")
+            console.print(f"[dim]Build time: {elapsed_time:.1f} seconds[/dim]")
             if result.stderr:
-                console.print("[dim]STDERR:[/dim]")
+                console.print("\n[dim]STDERR output:[/dim]")
                 console.print(result.stderr)
             if result.stdout:
-                console.print("[dim]STDOUT:[/dim]")
+                console.print("\n[dim]STDOUT output:[/dim]")
                 console.print(result.stdout)
+            console.print("\n[dim]TIP: Check if Docker daemon is running and you have permissions[/dim]")
             return False
 
-        console.print("[bold green]SUCCESS: Image built successfully![/bold green]")
+        console.print("\n[bold green]SUCCESS: Image built successfully![/bold green]")
         console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
         console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
+        console.print(f"[green]  Build args: USER_UID={user_uid}, USER_GID={user_gid}[/green]")
         return True
 
     except subprocess.CalledProcessError as e:
         console.print("\n[bold red]ERROR: Subprocess error[/bold red]")
         console.print(f"[dim]  Error: {str(e)}[/dim]")
+        console.print(f"[dim]  Command: {' '.join(build_cmd)}[/dim]")
         return False
     except Exception as e:
-        console.print("\n[bold red]ERROR: Unexpected exception[/bold red]")
+        console.print("\n[bold red]ERROR: Unexpected exception during build[/bold red]")
         console.print(f"[dim]  Error type: {type(e).__name__}[/dim]")
         console.print(f"[dim]  Error message: {str(e)}[/dim]")
+        console.print(f"[dim]  Traceback: {traceback.format_exc()}[/dim]")
         return False
 
 
