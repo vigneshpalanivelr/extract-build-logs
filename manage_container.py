@@ -114,30 +114,48 @@ class SimpleTable:
     def __str__(self):
         import re
         output = []
+
+        # Helper function to strip rich markup
+        def strip_markup(text):
+            return re.sub(r'\[/?[a-z]+[^\]]*\]', '', str(text))
+
+        if not self.rows:
+            return ""
+
+        # Calculate column widths based on stripped text
+        col_widths = [len(strip_markup(col)) for col in self.columns]
+        for row in self.rows:
+            for i, val in enumerate(row):
+                col_widths[i] = max(col_widths[i], len(strip_markup(val)))
+
+        # Calculate total table width (columns + separators + padding)
+        # Format: "col1 | col2 | col3" so separators are " | " (3 chars each)
+        total_width = sum(col_widths) + (len(col_widths) - 1) * 3
+
+        # Add title if present (centered)
         if self.title:
-            output.append(f"\n{self.title}")
-            output.append("=" * len(self.title))
+            title_stripped = strip_markup(self.title)
+            title_padding = (total_width - len(title_stripped)) // 2
+            output.append("")
+            output.append(" " * title_padding + title_stripped)
 
-        if self.rows:
-            # Strip rich markup from all values for proper width calculation
-            def strip_markup(text):
-                return re.sub(r'\[/?[a-z]+[^\]]*\]', '', str(text))
+        # Top border
+        output.append("-" * total_width)
 
-            # Calculate column widths based on stripped text
-            col_widths = [len(strip_markup(col)) for col in self.columns]
-            for row in self.rows:
-                for i, val in enumerate(row):
-                    col_widths[i] = max(col_widths[i], len(strip_markup(val)))
+        # Header row
+        header = " | ".join(strip_markup(col).ljust(col_widths[i]) for i, col in enumerate(self.columns))
+        output.append(header)
 
-            # Print header
-            header = " | ".join(strip_markup(col).ljust(col_widths[i]) for i, col in enumerate(self.columns))
-            output.append(header)
-            output.append("-" * len(header))
+        # Header separator
+        output.append("-" * total_width)
 
-            # Print rows with stripped markup
-            for row in self.rows:
-                row_str = " | ".join(strip_markup(val).ljust(col_widths[i]) for i, val in enumerate(row))
-                output.append(row_str)
+        # Data rows with stripped markup
+        for row in self.rows:
+            row_str = " | ".join(strip_markup(val).ljust(col_widths[i]) for i, val in enumerate(row))
+            output.append(row_str)
+
+        # Empty line after table for spacing
+        output.append("")
 
         return "\n".join(output)
 
@@ -1129,18 +1147,21 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
         container = client.containers.get(CONTAINER_NAME)
 
         if follow:
-            for line in container.logs(stream=True, follow=True):
-                try:
+            try:
+                for line in container.logs(stream=True, follow=True):
                     console.print(line.decode('utf-8'), end='')
-                except KeyboardInterrupt:
-                    console.print("\n[yellow]Stopped following logs.[/yellow]")
-                    break
+            except KeyboardInterrupt:
+                console.print("\n[yellow]Stopped following logs.[/yellow]")
+                return True
         else:
             logs = container.logs().decode('utf-8')
             console.print(logs)
 
         return True
 
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Stopped following logs.[/yellow]")
+        return True
     except NotFound:
         console.print(f"[bold red][X] Container '{CONTAINER_NAME}' not found.[/bold red]")
         return False
