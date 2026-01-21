@@ -279,6 +279,12 @@ class TestBuildImage(unittest.TestCase):
         self.assertIn('--rm', cmd)
         self.assertIn('.', cmd)
 
+        # Verify Python 3.6 compatible parameters are used
+        import subprocess
+        self.assertEqual(call_args[1]['stdout'], subprocess.PIPE)
+        self.assertEqual(call_args[1]['stderr'], subprocess.PIPE)
+        self.assertTrue(call_args[1]['universal_newlines'])
+
     @patch('manage_container.subprocess.run')
     @patch('manage_container.Progress')
     @patch('manage_container.console')

@@ -817,10 +817,13 @@ def build_image(client: docker.DockerClient) -> bool:
             task = progress.add_task("Building image...", total=None)
 
             # Run docker build command
+            # Note: Using stdout/stderr PIPE instead of capture_output for Python 3.6 compatibility
+            # capture_output parameter was added in Python 3.7
             result = subprocess.run(
                 build_cmd,
-                capture_output=True,
-                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,  # Python 3.6 equivalent of text=True
                 cwd=os.path.abspath(".")
             )
 
