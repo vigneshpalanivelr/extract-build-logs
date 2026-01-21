@@ -954,9 +954,10 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             if container_running(client):
                 console.print("[yellow]!  Container is already running. Use 'restart' to restart it.[/yellow]")
                 return True
-            console.print("[blue]Starting existing container...[/blue]")
+            console.print(f"[blue]Starting existing container: {CONTAINER_NAME}[/blue]")
             client.containers.get(CONTAINER_NAME).start()
             console.print("[bold green][OK] Container started![/bold green]")
+            console.print(f"[dim]Shell equivalent: docker start {CONTAINER_NAME}[/dim]\n")
             show_endpoints(port)
             return True
 
