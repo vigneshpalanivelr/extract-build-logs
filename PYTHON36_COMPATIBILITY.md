@@ -2,7 +2,22 @@
 
 ## Overview
 
-This document explains how to use `manage_container.py` on a **Python 3.6.x host system** while keeping the containerized application running on **Python 3.8**.
+This document explains how to use `manage_container.py` on a **Python 3.6.1+ host system** while keeping the containerized application running on **Python 3.8**.
+
+## ⚠️ CRITICAL: Python Version Requirement
+
+**Minimum Required: Python 3.6.1**
+
+- ✅ **Python 3.6.1 to 3.6.8**: Fully supported
+- ❌ **Python 3.6.0**: NOT supported (will cause `AttributeError: type object 'Color' has no attribute 'parse'`)
+- **Why?** The `rich` library requires Python 3.6.1+ ([source](https://github.com/willmcgugan/rich/issues/215))
+
+**Check your version first:**
+```bash
+python3 --version
+```
+
+If you have Python 3.6.0, you **must** upgrade to at least Python 3.6.1 or use Python 3.7+.
 
 ## The Problem
 
@@ -162,6 +177,47 @@ All commands now work on Python 3.6:
 - ✅ Tests, CI/CD, documentation - No changes
 
 ## Troubleshooting
+
+### Error: "AttributeError: type object 'Color' has no attribute 'parse'"
+
+**This is the most common error!**
+
+```
+Traceback (most recent call last):
+  File "./manage_container.py", line 48, in <module>
+    from rich.console import Console
+  ...
+AttributeError: type object 'Color' has no attribute 'parse'
+```
+
+**Root Cause**: You have **Python 3.6.0** which is NOT supported by rich library.
+
+**Solution**:
+```bash
+# Check your Python version
+python3 --version
+
+# If it shows 3.6.0, you MUST upgrade to at least 3.6.1
+# Ubuntu/Debian example:
+sudo apt-get update
+sudo apt-get install python3.6
+
+# Or use pyenv to install a newer Python 3.6.x version
+pyenv install 3.6.8
+pyenv local 3.6.8
+```
+
+**Quick Fix**: If you can't upgrade Python 3.6.0, install this specific version:
+```bash
+# This may work with 3.6.0 (older rich version)
+pip3 install rich==9.13.0
+```
+
+**Sources:**
+- [Rich Issue #215 - Python 3.6.0 not supported](https://github.com/willmcgugan/rich/issues/215)
+- [Rich Issue #2162 - Minimum version 3.6.3](https://github.com/Textualize/rich/issues/2162)
+
+---
 
 ### Error: "No module named 'docker'"
 **Solution**: Install Python 3.6 compatible dependencies:
