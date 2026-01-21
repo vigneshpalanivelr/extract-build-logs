@@ -37,6 +37,7 @@ import os
 import json
 import argparse
 import socket
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
@@ -789,6 +790,17 @@ def build_image(client: docker.DockerClient) -> bool:
 
         start_time = time.time()
 
+        # Use subprocess to call docker CLI directly
+        # The Docker SDK has issues with user namespace mapping that the CLI doesn't have
+        build_cmd = [
+            'docker', 'build',
+            '--build-arg', f'USER_UID={user_uid}',
+            '--build-arg', f'USER_GID={user_gid}',
+            '-t', f'{IMAGE_NAME}:latest',
+            '--rm',
+            '.'
+        ]
+
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -796,36 +808,33 @@ def build_image(client: docker.DockerClient) -> bool:
         ) as progress:
             task = progress.add_task("Building image...", total=None)
 
-            # Build image with SDK
-            # Use absolute path and don't decode to avoid streaming issues
-            build_path = os.path.abspath(".")
-
-            image, build_logs = client.images.build(
-                path=build_path,
-                tag=f"{IMAGE_NAME}:latest",
-                buildargs={
-                    'USER_UID': str(user_uid),
-                    'USER_GID': str(user_gid)
-                },
-                rm=True,
-                forcerm=True,  # Always remove intermediate containers
-                pull=False     # Don't pull base image if it exists locally
+            # Run docker build command
+            result = subprocess.run(
+                build_cmd,
+                capture_output=True,
+                text=True,
+                cwd=os.path.abspath(".")
             )
 
             progress.update(task, completed=True)
 
+            if result.returncode != 0:
+                console.print("[bold red]ERROR: Build failed[/bold red]", style="red")
+                console.print(result.stderr)
+                return False
+
         elapsed_time = time.time() - start_time
 
-        console.print("[bold green]✓ Image built successfully![/bold green]")
+        console.print("[bold green]SUCCESS: Image built successfully![/bold green]")
         console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
         console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
         return True
 
-    except APIError as e:
-        console.print(f"[bold red]✗ Build failed:[/bold red] {str(e)}", style="red")
+    except subprocess.CalledProcessError as e:
+        console.print(f"[bold red]ERROR: Build failed - {str(e)}[/bold red]", style="red")
         return False
     except Exception as e:
-        console.print(f"[bold red]✗ Build failed:[/bold red] {str(e)}", style="red")
+        console.print(f"[bold red]ERROR: Build failed - {str(e)}[/bold red]", style="red")
         return False
 
 
