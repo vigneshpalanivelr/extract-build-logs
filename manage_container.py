@@ -1075,7 +1075,7 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
         return False
 
 
-def show_status(client: docker.DockerClient) -> bool:
+def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
     """
     Show container status and resource usage.
 
