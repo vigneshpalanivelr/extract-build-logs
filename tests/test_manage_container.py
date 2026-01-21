@@ -473,6 +473,94 @@ class TestShowStatus(unittest.TestCase):
 
         self.assertTrue(result)
 
+    @patch('manage_container.console')
+    @patch('manage_container.container_exists')
+    def test_show_status_with_uptime_microseconds(self, mock_exists, mock_console):
+        """Test status with StartedAt timestamp containing microseconds (Python 3.6 datetime parsing)."""
+        mock_exists.return_value = True
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_container.name = 'gitlab-log-extractor'
+        mock_container.status = 'running'
+        mock_container.short_id = 'abc123'
+        mock_container.attrs = {
+            'Created': '2024-01-01T00:00:00Z',
+            'NetworkSettings': {'Ports': {}},
+            'State': {
+                'StartedAt': '2024-01-01T10:00:00.123456Z'  # ISO format with microseconds
+            }
+        }
+        mock_container.stats.return_value = {
+            'cpu_stats': {'cpu_usage': {'total_usage': 1000}, 'system_cpu_usage': 2000, 'online_cpus': 1},
+            'precpu_stats': {'cpu_usage': {'total_usage': 500}, 'system_cpu_usage': 1000},
+            'memory_stats': {'usage': 1024 * 1024 * 100, 'limit': 1024 * 1024 * 1000}
+        }
+        mock_container.logs.return_value = b"test log output"
+        mock_client.containers.get.return_value = mock_container
+
+        result = manage_container.show_status(mock_client)
+
+        self.assertTrue(result)
+
+    @patch('manage_container.console')
+    @patch('manage_container.container_exists')
+    def test_show_status_with_uptime_no_microseconds(self, mock_exists, mock_console):
+        """Test status with StartedAt timestamp without microseconds (Python 3.6 datetime parsing)."""
+        mock_exists.return_value = True
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_container.name = 'gitlab-log-extractor'
+        mock_container.status = 'running'
+        mock_container.short_id = 'abc123'
+        mock_container.attrs = {
+            'Created': '2024-01-01T00:00:00Z',
+            'NetworkSettings': {'Ports': {}},
+            'State': {
+                'StartedAt': '2024-01-01T10:00:00+00:00'  # ISO format without microseconds
+            }
+        }
+        mock_container.stats.return_value = {
+            'cpu_stats': {'cpu_usage': {'total_usage': 1000}, 'system_cpu_usage': 2000, 'online_cpus': 1},
+            'precpu_stats': {'cpu_usage': {'total_usage': 500}, 'system_cpu_usage': 1000},
+            'memory_stats': {'usage': 1024 * 1024 * 100, 'limit': 1024 * 1024 * 1000}
+        }
+        mock_container.logs.return_value = b"test log output"
+        mock_client.containers.get.return_value = mock_container
+
+        result = manage_container.show_status(mock_client)
+
+        self.assertTrue(result)
+
+    @patch('manage_container.console')
+    @patch('manage_container.container_exists')
+    def test_show_status_with_malformed_timestamp(self, mock_exists, mock_console):
+        """Test status handles malformed timestamp gracefully (Python 3.6 datetime parsing)."""
+        mock_exists.return_value = True
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_container.name = 'gitlab-log-extractor'
+        mock_container.status = 'running'
+        mock_container.short_id = 'abc123'
+        mock_container.attrs = {
+            'Created': '2024-01-01T00:00:00Z',
+            'NetworkSettings': {'Ports': {}},
+            'State': {
+                'StartedAt': 'invalid-timestamp'  # Malformed timestamp - should fallback
+            }
+        }
+        mock_container.stats.return_value = {
+            'cpu_stats': {'cpu_usage': {'total_usage': 1000}, 'system_cpu_usage': 2000, 'online_cpus': 1},
+            'precpu_stats': {'cpu_usage': {'total_usage': 500}, 'system_cpu_usage': 1000},
+            'memory_stats': {'usage': 1024 * 1024 * 100, 'limit': 1024 * 1024 * 1000}
+        }
+        mock_container.logs.return_value = b"test log output"
+        mock_client.containers.get.return_value = mock_container
+
+        # Should not raise exception, fallback to current time
+        result = manage_container.show_status(mock_client)
+
+        self.assertTrue(result)
+
 
 @unittest.skip("open_shell function removed during script condensing")
 class TestOpenShell(unittest.TestCase):

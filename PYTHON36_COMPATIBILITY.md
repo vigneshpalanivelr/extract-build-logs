@@ -186,6 +186,8 @@ sudo usermod -aG docker $USER
 
 ## Testing
 
+### Manual Testing
+
 To verify everything works:
 
 ```bash
@@ -210,6 +212,42 @@ python3 --version
 # 7. View logs
 ./manage_container.py logs --no-follow
 ```
+
+### Unit Tests
+
+The test file `tests/test_manage_container.py` has been **enhanced with Python 3.6 datetime parsing tests**:
+
+#### New Tests Added
+1. **test_show_status_with_uptime_microseconds** - Tests ISO 8601 with microseconds
+   - Format: `2024-01-01T10:00:00.123456Z`
+   - Verifies `datetime.strptime('%Y-%m-%dT%H:%M:%S.%f')` works correctly
+
+2. **test_show_status_with_uptime_no_microseconds** - Tests ISO 8601 without microseconds
+   - Format: `2024-01-01T10:00:00+00:00`
+   - Verifies `datetime.strptime('%Y-%m-%dT%H:%M:%S')` works correctly
+
+3. **test_show_status_with_malformed_timestamp** - Tests error handling
+   - Verifies fallback to current time on parsing errors
+   - Ensures no exceptions are raised
+
+#### Running Tests on Python 3.6
+
+To run the unit tests on your Python 3.6 system:
+
+```bash
+# Install Python 3.6 test dependencies
+pip3 install -r requirements-manage-py36.txt
+
+# Run all tests
+python3 -m unittest tests.test_manage_container -v
+
+# Run only the Python 3.6 datetime parsing tests
+python3 -m unittest tests.test_manage_container.TestShowStatus.test_show_status_with_uptime_microseconds -v
+python3 -m unittest tests.test_manage_container.TestShowStatus.test_show_status_with_uptime_no_microseconds -v
+python3 -m unittest tests.test_manage_container.TestShowStatus.test_show_status_with_malformed_timestamp -v
+```
+
+**Note**: The tests use `unittest` (built into Python 3.6) and `unittest.mock`, so no additional test frameworks are needed.
 
 ## Summary
 
