@@ -44,7 +44,7 @@ import requests
 
 try:
     import docker
-    from docker.errors import DockerException, ImageNotFound, NotFound, APIError
+    from docker.errors import DockerException, ImageNotFound, NotFound, APIError, BuildError
     from dotenv import dotenv_values
 except ImportError as e:
     print(f"Error: Required package not found: {e}")
@@ -797,15 +797,24 @@ def build_image(client: docker.DockerClient) -> bool:
             task = progress.add_task("Building image...", total=None)
 
             # Build image with build args
+            # Use absolute path for build context to avoid SDK path resolution issues
+            build_path = os.path.abspath(".")
+
             image, build_logs = client.images.build(
-                path=".",
+                path=build_path,
                 tag=f"{IMAGE_NAME}:latest",
                 buildargs={
                     'USER_UID': str(user_uid),
                     'USER_GID': str(user_gid)
                 },
-                rm=True
+                rm=True,
+                decode=True
             )
+
+            # Consume build logs to ensure build completes
+            # The SDK will raise BuildError automatically if there's an error
+            for _ in build_logs:
+                pass
 
             progress.update(task, completed=True)
 
@@ -816,6 +825,9 @@ def build_image(client: docker.DockerClient) -> bool:
         console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
         return True
 
+    except BuildError as e:
+        console.print(f"[bold red]✗ Build failed:[/bold red] {str(e)}", style="red")
+        return False
     except APIError as e:
         console.print(f"[bold red]✗ Build failed:[/bold red] {str(e)}", style="red")
         return False

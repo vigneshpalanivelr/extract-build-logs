@@ -254,7 +254,7 @@ class TestBuildImage(unittest.TestCase):
         mock_progress_instance.add_task.return_value = 0
 
         mock_client = MagicMock()
-        mock_client.images.build.return_value = (MagicMock(), [])
+        mock_client.images.build.return_value = (MagicMock(), iter([]))  # Return empty iterator
 
         result = manage_container.build_image(mock_client)
 
@@ -263,11 +263,13 @@ class TestBuildImage(unittest.TestCase):
 
         # Verify build args were passed correctly
         call_args = mock_client.images.build.call_args
+        self.assertIn('path', call_args[1])  # Should have absolute path
         self.assertEqual(call_args[1]['tag'], 'bfa-gitlab-pipeline-extractor:latest')
         self.assertIn('buildargs', call_args[1])
         self.assertEqual(call_args[1]['buildargs']['USER_UID'], '12345')
         self.assertEqual(call_args[1]['buildargs']['USER_GID'], '54321')
         self.assertTrue(call_args[1]['rm'])
+        self.assertTrue(call_args[1]['decode'])  # Should use decode=True
 
     @patch('manage_container.Progress')
     @patch('manage_container.console')
