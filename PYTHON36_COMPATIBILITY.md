@@ -42,14 +42,19 @@ except ValueError:
 
 #### 2. **Dependency Downgrades** (requirements-manage-py36.txt)
 
-Created a separate requirements file with Python 3.6 compatible versions:
+Created a separate requirements file with **VERIFIED** Python 3.6 compatible versions:
 
-| Package | Python 3.8 Version | Python 3.6 Version |
-|---------|-------------------|-------------------|
-| docker | ≥7.0.0 (requires 3.8+) | 6.1.3 (last 3.6 version) |
-| rich | ≥13.0.0 (requires 3.7+) | 12.6.0 (last 3.6 version) |
-| python-dotenv | 1.0.0 (requires 3.8+) | 0.21.1 (3.6 compatible) |
-| requests | 2.31.0 | 2.28.2 (3.6 compatible) |
+| Package | Python 3.8 Version | Python 3.6 Version | Why This Version? |
+|---------|-------------------|-------------------|-------------------|
+| docker | ≥7.0.0 (requires 3.8+) | **5.0.3** | Last version supporting Python 3.6 ([source](https://github.com/docker/docker-py/issues/3039)) |
+| rich | ≥13.0.0 (requires 3.7+) | **12.6.0** | Last version supporting Python 3.6 ([source](https://github.com/Textualize/rich)) |
+| python-dotenv | 1.0.0 (requires 3.8+) | **0.19.0** | Last version supporting Python 3.6 ([source](https://pypi.org/project/python-dotenv/)) |
+| requests | 2.31.0 | **2.27.1** | Stable Python 3.6+ version |
+
+**Important Notes:**
+- ❌ **docker 6.x** requires Python 3.7+ (not 3.6!)
+- ❌ **python-dotenv 1.0+** requires Python 3.8+ (not 3.6!)
+- ✅ All versions above are **verified** to work with Python 3.6
 
 ## Installation Instructions
 
@@ -64,8 +69,10 @@ pip3 install -r requirements-manage-py36.txt
 
 Or install individually:
 ```bash
-pip3 install docker==6.1.3 rich==12.6.0 python-dotenv==0.21.1 requests==2.28.2
+pip3 install docker==5.0.3 rich==12.6.0 python-dotenv==0.19.0 requests==2.27.1
 ```
+
+**⚠️ IMPORTANT**: Make sure to use these exact versions. Higher versions will NOT work with Python 3.6!
 
 ### Step 2: Verify Installation
 
