@@ -181,28 +181,25 @@ class SimplePrompt:
             print(f"Invalid choice. Please select from: {', '.join(choices)}")
 
 
-# Dummy classes for Progress columns (not used in simple mode but needed for compatibility)
-class SpinnerColumn:
-    """Dummy spinner column for simple mode."""
-    pass
-
-
-class TextColumn:
-    """Dummy text column for simple mode."""
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-
 # Initialize console (rich or simple fallback)
 if RICH_AVAILABLE:
     console = Console()
 else:
+    # Dummy classes for Progress columns (only needed in simple mode)
+    class SpinnerColumn:
+        """Dummy spinner column for simple mode."""
+        pass
+
+    class TextColumn:
+        """Dummy text column for simple mode."""
+        def __init__(self, *args, **kwargs):
+            pass
+
+    # Assign fallback classes
     console = SimpleConsole()
     Table = SimpleTable
     Progress = SimpleProgress
     Prompt = SimplePrompt
-    # SpinnerColumn and TextColumn are already defined as dummy classes above
     print("Note: Running in basic mode (rich library not available)")
     print("For enhanced output, upgrade to Python 3.6.1+ and install rich==12.6.0\n")
 
