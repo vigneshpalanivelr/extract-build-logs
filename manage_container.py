@@ -788,6 +788,44 @@ def build_image(client: docker.DockerClient) -> bool:
         )
         console.print(f"[dim]Shell equivalent: {shell_cmd}[/dim]\n")
 
+        # DEBUG: Print Docker client information
+        console.print("[yellow]DEBUG: Docker Client Information[/yellow]")
+        try:
+            version_info = client.version()
+            console.print(f"[dim]  Docker Version: {version_info.get('Version', 'unknown')}[/dim]")
+            console.print(f"[dim]  API Version: {version_info.get('ApiVersion', 'unknown')}[/dim]")
+            console.print(f"[dim]  Platform: {version_info.get('Platform', {}).get('Name', 'unknown')}[/dim]")
+        except Exception as e:
+            console.print(f"[dim]  Could not get version info: {e}[/dim]")
+
+        console.print(f"[dim]  Client API version: {client.api.api_version}[/dim]")
+        console.print(f"[dim]  Client base URL: {client.api.base_url}[/dim]")
+
+        # DEBUG: Print build context information
+        console.print("\n[yellow]DEBUG: Build Context Information[/yellow]")
+        build_path = os.path.abspath(".")
+        console.print(f"[dim]  Build path (absolute): {build_path}[/dim]")
+        console.print("[dim]  Build path (relative): .[/dim]")
+        console.print(f"[dim]  Current working dir: {os.getcwd()}[/dim]")
+
+        # Check if Dockerfile exists
+        dockerfile_path = os.path.join(build_path, "Dockerfile")
+        console.print(f"[dim]  Dockerfile exists: {os.path.exists(dockerfile_path)}[/dim]")
+
+        # DEBUG: Print exact build parameters
+        console.print("\n[yellow]DEBUG: Build Parameters[/yellow]")
+        build_params = {
+            'path': '.',
+            'tag': f'{IMAGE_NAME}:latest',
+            'buildargs': {
+                'USER_UID': str(user_uid),
+                'USER_GID': str(user_gid)
+            },
+            'rm': True
+        }
+        console.print(f"[dim]  Parameters: {json.dumps(build_params, indent=2)}[/dim]")
+        console.print("")
+
         start_time = time.time()
 
         with Progress(
@@ -799,6 +837,7 @@ def build_image(client: docker.DockerClient) -> bool:
 
             # Build with SDK using API 1.40 compatibility
             # Using relative path "." like CLI does
+            console.print("[yellow]DEBUG: Calling client.images.build()...[/yellow]")
             image, build_logs = client.images.build(
                 path=".",
                 tag=f"{IMAGE_NAME}:latest",
@@ -819,10 +858,22 @@ def build_image(client: docker.DockerClient) -> bool:
         return True
 
     except APIError as e:
-        console.print(f"[bold red]ERROR: Build failed - {str(e)}[/bold red]", style="red")
+        console.print("\n[bold red]ERROR: APIError caught[/bold red]")
+        console.print(f"[dim]  Error type: {type(e).__name__}[/dim]")
+        console.print(f"[dim]  Error message: {str(e)}[/dim]")
+        console.print(f"[dim]  Status code: {getattr(e, 'status_code', 'N/A')}[/dim]")
+        console.print(f"[dim]  Explanation: {getattr(e, 'explanation', 'N/A')}[/dim]")
         return False
     except Exception as e:
-        console.print(f"[bold red]ERROR: Build failed - {str(e)}[/bold red]", style="red")
+        console.print("\n[bold red]ERROR: Exception caught[/bold red]")
+        console.print(f"[dim]  Error type: {type(e).__name__}[/dim]")
+        console.print(f"[dim]  Error message: {str(e)}[/dim]")
+        console.print(f"[dim]  Error module: {type(e).__module__}[/dim]")
+
+        # Try to get more details if it's a docker error
+        if hasattr(e, '__dict__'):
+            console.print(f"[dim]  Error attributes: {e.__dict__}[/dim]")
+
         return False
 
 
