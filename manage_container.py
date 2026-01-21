@@ -764,7 +764,7 @@ def get_port_from_config() -> int:
 
 def build_image(client: docker.DockerClient) -> bool:
     """
-    Build Docker image.
+    Build Docker image with build args.
 
     Args:
         client: Docker client
@@ -775,10 +775,20 @@ def build_image(client: docker.DockerClient) -> bool:
     import time
 
     try:
-        console.print(f"[bold blue]Building Docker image:[/bold blue] {IMAGE_NAME}")
+        # Get USER_UID and USER_GID from environment or use defaults
+        user_uid = os.environ.get('USER_UID', os.getuid() if hasattr(os, 'getuid') else '1000')
+        user_gid = os.environ.get('USER_GID', os.getgid() if hasattr(os, 'getgid') else '1000')
+
+        console.print(f"[bold blue]Building Docker image:[/bold blue] {IMAGE_NAME}:latest")
+        console.print(f"[dim]Build args: USER_UID={user_uid}, USER_GID={user_gid}[/dim]")
 
         # Show shell equivalent
-        console.print("[dim]Shell equivalent: docker build -t gitlab-log-extractor:latest --rm .[/dim]\n")
+        shell_cmd = (
+            f"docker build --build-arg USER_UID={user_uid} "
+            f"--build-arg USER_GID={user_gid} "
+            f"-t {IMAGE_NAME}:latest --rm ."
+        )
+        console.print(f"[dim]Shell equivalent: {shell_cmd}[/dim]\n")
 
         start_time = time.time()
 
@@ -789,10 +799,14 @@ def build_image(client: docker.DockerClient) -> bool:
         ) as progress:
             task = progress.add_task("Building image...", total=None)
 
-            # Build image
+            # Build image with build args
             image, build_logs = client.images.build(
                 path=".",
-                tag=IMAGE_NAME,
+                tag=f"{IMAGE_NAME}:latest",
+                buildargs={
+                    'USER_UID': str(user_uid),
+                    'USER_GID': str(user_gid)
+                },
                 rm=True
             )
 
@@ -802,6 +816,7 @@ def build_image(client: docker.DockerClient) -> bool:
 
         console.print("[bold green]✓ Image built successfully![/bold green]")
         console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
+        console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
         return True
 
     except APIError as e:
@@ -877,20 +892,27 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
 
         console.print(f"[bold blue]Starting new container: {CONTAINER_NAME} (port {port})[/bold blue]")
 
-        # Build volumes dictionary
+        # Build volumes dictionary with absolute paths
+        logs_path = Path.cwd() / LOGS_DIR
+        env_path = Path.cwd() / ENV_FILE
         volumes = {
-            str(Path.cwd() / LOGS_DIR): {'bind': '/app/logs', 'mode': 'rw'},
-            str(Path.cwd() / ENV_FILE): {'bind': '/app/.env', 'mode': 'ro'}
+            str(logs_path.absolute()): {'bind': '/app/logs', 'mode': 'rw'},
+            str(env_path.absolute()): {'bind': '/app/.env', 'mode': 'ro'}
         }
 
         # Add jenkins_instances.json if it exists (for multi-instance Jenkins support)
         jenkins_instances_file = Path.cwd() / 'jenkins_instances.json'
         if jenkins_instances_file.exists():
-            volumes[str(jenkins_instances_file)] = {'bind': '/app/jenkins_instances.json', 'mode': 'ro'}
+            volumes[str(jenkins_instances_file.absolute())] = {'bind': '/app/jenkins_instances.json', 'mode': 'ro'}
             console.print("[dim]  → Found jenkins_instances.json, mounting for multi-instance Jenkins support[/dim]")
 
+        # Start container with host network and user namespace
         client.containers.run(
-            IMAGE_NAME, name=CONTAINER_NAME, detach=True,
+            f"{IMAGE_NAME}:latest",
+            name=CONTAINER_NAME,
+            detach=True,
+            network_mode='host',
+            userns_mode='host',
             ports={f'{port}/tcp': port},
             volumes=volumes,
             restart_policy={"Name": "unless-stopped"}
@@ -898,19 +920,18 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         console.print("[bold green]✓ Container started successfully![/bold green]")
 
         # Show shell equivalent
-        logs_path = Path.cwd() / LOGS_DIR
-        env_path = Path.cwd() / ENV_FILE
         shell_cmd = (
             f"docker run -d --name {CONTAINER_NAME} "
+            f"--network host --userns=host "
             f"-p {port}:{port} "
-            f"-v {logs_path}:/app/logs:rw "
-            f"-v {env_path}:/app/.env:ro "
+            f"-v {logs_path.absolute()}:/app/logs:rw "
+            f"-v {env_path.absolute()}:/app/.env:ro "
         )
         if jenkins_instances_file.exists():
-            shell_cmd += f"-v {jenkins_instances_file}:/app/jenkins_instances.json:ro "
+            shell_cmd += f"-v {jenkins_instances_file.absolute()}:/app/jenkins_instances.json:ro "
         shell_cmd += (
             f"--restart unless-stopped "
-            f"{IMAGE_NAME}"
+            f"{IMAGE_NAME}:latest"
         )
         console.print("[dim]Shell equivalent:[/dim]")
         console.print(f"[dim]{shell_cmd}[/dim]\n")
@@ -918,7 +939,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         show_endpoints(port)
         return True
     except ImageNotFound:
-        console.print(f"[bold red]✗ Image '{IMAGE_NAME}' not found. Run 'build' command first.[/bold red]")
+        console.print(f"[bold red]✗ Image '{IMAGE_NAME}:latest' not found. Run 'build' command first.[/bold red]")
         return False
     except APIError as e:
         console.print(f"[bold red]✗ Failed to start container: {str(e)}[/bold red]")
@@ -1187,7 +1208,7 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
     try:
         container_exists_flag = container_exists(client)
         try:
-            client.images.get(IMAGE_NAME)
+            client.images.get(f"{IMAGE_NAME}:latest")
             image_exists_flag = True
         except ImageNotFound:
             image_exists_flag = False
@@ -1230,8 +1251,8 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
 
         if remove_image and image_exists_flag:
             try:
-                console.print(f"[blue]Removing image: {IMAGE_NAME}[/blue]")
-                client.images.remove(IMAGE_NAME, force=force_remove)
+                console.print(f"[blue]Removing image: {IMAGE_NAME}:latest[/blue]")
+                client.images.remove(f"{IMAGE_NAME}:latest", force=force_remove)
                 console.print("[bold green]✓ Image removed![/bold green]")
             except APIError as e:
                 console.print(f"[bold red]✗ Failed to remove image: {str(e)}[/bold red]")
