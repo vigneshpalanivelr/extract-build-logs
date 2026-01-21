@@ -37,6 +37,7 @@ import os
 import json
 import argparse
 import socket
+import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
@@ -788,45 +789,25 @@ def build_image(client: docker.DockerClient) -> bool:
         )
         console.print(f"[dim]Shell equivalent: {shell_cmd}[/dim]\n")
 
-        # DEBUG: Print Docker client information
-        console.print("[yellow]DEBUG: Docker Client Information[/yellow]")
-        try:
-            version_info = client.version()
-            console.print(f"[dim]  Docker Version: {version_info.get('Version', 'unknown')}[/dim]")
-            console.print(f"[dim]  API Version: {version_info.get('ApiVersion', 'unknown')}[/dim]")
-            console.print(f"[dim]  Platform: {version_info.get('Platform', {}).get('Name', 'unknown')}[/dim]")
-        except Exception as e:
-            console.print(f"[dim]  Could not get version info: {e}[/dim]")
-
-        console.print(f"[dim]  Client API version: {client.api.api_version}[/dim]")
-        console.print(f"[dim]  Client base URL: {client.api.base_url}[/dim]")
-
-        # DEBUG: Print build context information
-        console.print("\n[yellow]DEBUG: Build Context Information[/yellow]")
-        build_path = os.path.abspath(".")
-        console.print(f"[dim]  Build path (absolute): {build_path}[/dim]")
-        console.print("[dim]  Build path (relative): .[/dim]")
-        console.print(f"[dim]  Current working dir: {os.getcwd()}[/dim]")
-
-        # Check if Dockerfile exists
-        dockerfile_path = os.path.join(build_path, "Dockerfile")
-        console.print(f"[dim]  Dockerfile exists: {os.path.exists(dockerfile_path)}[/dim]")
-
-        # DEBUG: Print exact build parameters
-        console.print("\n[yellow]DEBUG: Build Parameters[/yellow]")
-        build_params = {
-            'path': '.',
-            'tag': f'{IMAGE_NAME}:latest',
-            'buildargs': {
-                'USER_UID': str(user_uid),
-                'USER_GID': str(user_gid)
-            },
-            'rm': True
-        }
-        console.print(f"[dim]  Parameters: {json.dumps(build_params, indent=2)}[/dim]")
-        console.print("")
+        # NOTE: Using subprocess instead of Docker SDK
+        # Investigation showed that Docker SDK 5.0.3 with Docker 19.03.5 has a bug
+        # where it cannot handle user namespace mapping during build COPY operations.
+        # The SDK raises BuildError: "Container ID <UID> cannot be mapped to a host ID"
+        # even though API version (1.40) and all parameters are correct.
+        # The Docker CLI works around this issue, so we call it directly via subprocess.
+        console.print("[yellow]Using subprocess to call Docker CLI (SDK has user namespace mapping issue)[/yellow]\n")
 
         start_time = time.time()
+
+        # Build command matching the working CLI command
+        build_cmd = [
+            'docker', 'build',
+            '--build-arg', f'USER_UID={user_uid}',
+            '--build-arg', f'USER_GID={user_gid}',
+            '-t', f'{IMAGE_NAME}:latest',
+            '--rm',
+            '.'
+        ]
 
         with Progress(
             SpinnerColumn(),
@@ -835,45 +816,42 @@ def build_image(client: docker.DockerClient) -> bool:
         ) as progress:
             task = progress.add_task("Building image...", total=None)
 
-            # Build with SDK using API 1.40 compatibility
-            # Using relative path "." like CLI does
-            console.print("[yellow]DEBUG: Calling client.images.build()...[/yellow]")
-            image, build_logs = client.images.build(
-                path=".",
-                tag=f"{IMAGE_NAME}:latest",
-                buildargs={
-                    'USER_UID': str(user_uid),
-                    'USER_GID': str(user_gid)
-                },
-                rm=True
+            # Run docker build command
+            result = subprocess.run(
+                build_cmd,
+                capture_output=True,
+                text=True,
+                cwd=os.path.abspath(".")
             )
 
             progress.update(task, completed=True)
 
         elapsed_time = time.time() - start_time
 
+        if result.returncode != 0:
+            console.print("[bold red]ERROR: Build failed[/bold red]")
+            console.print(f"[dim]Return code: {result.returncode}[/dim]")
+            if result.stderr:
+                console.print("[dim]STDERR:[/dim]")
+                console.print(result.stderr)
+            if result.stdout:
+                console.print("[dim]STDOUT:[/dim]")
+                console.print(result.stdout)
+            return False
+
         console.print("[bold green]SUCCESS: Image built successfully![/bold green]")
         console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
         console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
         return True
 
-    except APIError as e:
-        console.print("\n[bold red]ERROR: APIError caught[/bold red]")
-        console.print(f"[dim]  Error type: {type(e).__name__}[/dim]")
-        console.print(f"[dim]  Error message: {str(e)}[/dim]")
-        console.print(f"[dim]  Status code: {getattr(e, 'status_code', 'N/A')}[/dim]")
-        console.print(f"[dim]  Explanation: {getattr(e, 'explanation', 'N/A')}[/dim]")
+    except subprocess.CalledProcessError as e:
+        console.print("\n[bold red]ERROR: Subprocess error[/bold red]")
+        console.print(f"[dim]  Error: {str(e)}[/dim]")
         return False
     except Exception as e:
-        console.print("\n[bold red]ERROR: Exception caught[/bold red]")
+        console.print("\n[bold red]ERROR: Unexpected exception[/bold red]")
         console.print(f"[dim]  Error type: {type(e).__name__}[/dim]")
         console.print(f"[dim]  Error message: {str(e)}[/dim]")
-        console.print(f"[dim]  Error module: {type(e).__module__}[/dim]")
-
-        # Try to get more details if it's a docker error
-        if hasattr(e, '__dict__'):
-            console.print(f"[dim]  Error attributes: {e.__dict__}[/dim]")
-
         return False
 
 
