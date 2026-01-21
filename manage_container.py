@@ -37,7 +37,6 @@ import os
 import json
 import argparse
 import socket
-import subprocess
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import time
@@ -790,16 +789,6 @@ def build_image(client: docker.DockerClient) -> bool:
 
         start_time = time.time()
 
-        # Use subprocess to call docker build directly since SDK has issues with user namespace
-        build_cmd = [
-            'docker', 'build',
-            '--build-arg', f'USER_UID={user_uid}',
-            '--build-arg', f'USER_GID={user_gid}',
-            '-t', f'{IMAGE_NAME}:latest',
-            '--rm',
-            '.'
-        ]
-
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -807,20 +796,23 @@ def build_image(client: docker.DockerClient) -> bool:
         ) as progress:
             task = progress.add_task("Building image...", total=None)
 
-            # Run docker build command
-            result = subprocess.run(
-                build_cmd,
-                capture_output=True,
-                text=True,
-                cwd=os.path.abspath(".")
+            # Build image with SDK
+            # Use absolute path and don't decode to avoid streaming issues
+            build_path = os.path.abspath(".")
+
+            image, build_logs = client.images.build(
+                path=build_path,
+                tag=f"{IMAGE_NAME}:latest",
+                buildargs={
+                    'USER_UID': str(user_uid),
+                    'USER_GID': str(user_gid)
+                },
+                rm=True,
+                forcerm=True,  # Always remove intermediate containers
+                pull=False     # Don't pull base image if it exists locally
             )
 
             progress.update(task, completed=True)
-
-            if result.returncode != 0:
-                console.print("[bold red]✗ Build failed:[/bold red]", style="red")
-                console.print(result.stderr)
-                return False
 
         elapsed_time = time.time() - start_time
 
@@ -829,7 +821,7 @@ def build_image(client: docker.DockerClient) -> bool:
         console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
         return True
 
-    except subprocess.CalledProcessError as e:
+    except APIError as e:
         console.print(f"[bold red]✗ Build failed:[/bold red] {str(e)}", style="red")
         return False
     except Exception as e:

@@ -233,12 +233,11 @@ class TestGetPortFromConfig(unittest.TestCase):
 class TestBuildImage(unittest.TestCase):
     """Test cases for build_image function."""
 
-    @patch('manage_container.subprocess.run')
     @patch('manage_container.Progress')
     @patch('manage_container.os.environ.get')
     @patch('manage_container.console')
-    def test_build_image_success(self, mock_console, mock_env_get, mock_progress, mock_subprocess_run):
-        """Test successful image build with build args using subprocess."""
+    def test_build_image_success(self, mock_console, mock_env_get, mock_progress):
+        """Test successful image build with build args using Docker SDK."""
         # Mock environment variables for USER_UID and USER_GID
         def env_get_side_effect(key, default=None):
             if key == 'USER_UID':
@@ -254,47 +253,40 @@ class TestBuildImage(unittest.TestCase):
         mock_progress.return_value.__enter__.return_value = mock_progress_instance
         mock_progress_instance.add_task.return_value = 0
 
-        # Mock subprocess.run to return success
-        mock_result = MagicMock()
-        mock_result.returncode = 0
-        mock_subprocess_run.return_value = mock_result
-
+        # Mock Docker client
         mock_client = MagicMock()
+        mock_client.images.build.return_value = (MagicMock(), [])
 
         result = manage_container.build_image(mock_client)
 
         self.assertTrue(result)
-        mock_subprocess_run.assert_called_once()
+        mock_client.images.build.assert_called_once()
 
-        # Verify subprocess was called with correct command
-        call_args = mock_subprocess_run.call_args
-        cmd = call_args[0][0]
-        self.assertIn('docker', cmd)
-        self.assertIn('build', cmd)
-        self.assertIn('--build-arg', cmd)
-        self.assertIn('USER_UID=12345', cmd)
-        self.assertIn('USER_GID=54321', cmd)
-        self.assertIn('-t', cmd)
-        self.assertIn('bfa-gitlab-pipeline-extractor:latest', cmd)
-        self.assertIn('--rm', cmd)
+        # Verify build args were passed correctly
+        call_args = mock_client.images.build.call_args
+        self.assertIn('path', call_args[1])  # Should have absolute path
+        self.assertEqual(call_args[1]['tag'], 'bfa-gitlab-pipeline-extractor:latest')
+        self.assertIn('buildargs', call_args[1])
+        self.assertEqual(call_args[1]['buildargs']['USER_UID'], '12345')
+        self.assertEqual(call_args[1]['buildargs']['USER_GID'], '54321')
+        self.assertTrue(call_args[1]['rm'])
+        self.assertTrue(call_args[1]['forcerm'])
+        self.assertFalse(call_args[1]['pull'])
 
-    @patch('manage_container.subprocess.run')
     @patch('manage_container.Progress')
     @patch('manage_container.console')
-    def test_build_image_failure(self, mock_console, mock_progress, mock_subprocess_run):
-        """Test image build failure using subprocess."""
+    def test_build_image_failure(self, mock_console, mock_progress):
+        """Test image build failure using Docker SDK."""
+        from docker.errors import APIError
+
         # Mock Progress context manager
         mock_progress_instance = MagicMock()
         mock_progress.return_value.__enter__.return_value = mock_progress_instance
         mock_progress_instance.add_task.return_value = 0
 
-        # Mock subprocess.run to return failure
-        mock_result = MagicMock()
-        mock_result.returncode = 1
-        mock_result.stderr = "Build failed"
-        mock_subprocess_run.return_value = mock_result
-
+        # Mock Docker client to raise APIError
         mock_client = MagicMock()
+        mock_client.images.build.side_effect = APIError("Build failed")
 
         result = manage_container.build_image(mock_client)
 
