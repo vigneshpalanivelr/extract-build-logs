@@ -996,19 +996,21 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             console.print("[dim]  -> Found jenkins_instances.json, mounting for multi-instance Jenkins support[/dim]")
 
         # Start container with host network and user namespace
+        # Note: When using network_mode='host', ports parameter must not be specified
+        # The container uses the host's network stack directly, so port mapping is automatic
         client.containers.run(
             f"{IMAGE_NAME}:latest",
             name=CONTAINER_NAME,
             detach=True,
             network_mode='host',
             userns_mode='host',
-            ports={f'{port}/tcp': port},
             volumes=volumes,
             restart_policy={"Name": "unless-stopped"}
         )
         console.print("[bold green][OK] Container started successfully![/bold green]")
 
         # Show shell equivalent
+        # Note: -p flag is shown for clarity but is ignored when using --network host
         shell_cmd = (
             f"docker run -d --name {CONTAINER_NAME} "
             f"--network host --userns=host "
@@ -1023,7 +1025,8 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             f"{IMAGE_NAME}:latest"
         )
         console.print("[dim]Shell equivalent:[/dim]")
-        console.print(f"[dim]{shell_cmd}[/dim]\n")
+        console.print(f"[dim]{shell_cmd}[/dim]")
+        console.print("[dim](Note: -p flag ignored with --network host; port is available on host directly)[/dim]\n")
 
         show_endpoints(port)
         return True
