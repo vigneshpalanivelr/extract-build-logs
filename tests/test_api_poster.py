@@ -1297,5 +1297,1548 @@ class TestApiPoster(unittest.TestCase):
         self.assertFalse(result)
 
 
+    def test_initialization_without_gitlab_session(self):
+        """Test ApiPoster initialization without GitLab credentials (line 88)."""
+        self.token_manager_patcher.stop()
+
+        config_no_gitlab = Config(
+            gitlab_url=None,  # No GitLab URL
+            gitlab_token=None,  # No GitLab token
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key=None,
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config_no_gitlab)
+
+        # GitLab session should not be initialized
+        self.assertIsNone(poster.gitlab_session)
+        self.assertIsNone(poster.gitlab_base_url)
+
+        # Token manager should also be None without secret key
+        self.assertIsNone(poster.token_manager)
+
+        self.token_manager_patcher.start()
+
+    def test_format_jenkins_payload_with_failed_stages(self):
+        """Test format_jenkins_payload with failed stages (lines 253, 270-293)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        jenkins_payload = {
+            'job_name': 'test-job',
+            'build_number': 42,
+            'repo': 'test-repo',
+            'branch': 'main',
+            'status': 'FAILED',
+            'stages': [
+                {
+                    'stage_name': 'build',
+                    'status': 'FAILED',
+                    'log_content': 'Line 1: Error building\nLine 2: Build failed'
+                },
+                {
+                    'stage_name': 'test',
+                    'status': 'FAILED',
+                    'log_content': ''  # Empty log content
+                },
+                {
+                    'stage_name': 'deploy',
+                    'status': 'SUCCESS',
+                    'log_content': 'Deployment successful'
+                }
+            ],
+            'parameters': {},
+            'parameters': {}
+        }
+
+        # Pass build_metadata as separate parameter
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'admin'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        result = poster.format_jenkins_payload(jenkins_payload, build_metadata)
+
+        # Should transform failed stages
+        self.assertIn('failed_steps', result)
+        self.assertEqual(len(result['failed_steps']), 2)  # Only failed stages
+
+        # Check first failed stage with log content
+        self.assertEqual(result['failed_steps'][0]['step_name'], 'build')
+        self.assertEqual(len(result['failed_steps'][0]['error_lines']), 1)
+        self.assertIn('Error building', result['failed_steps'][0]['error_lines'][0])
+
+        # Check second failed stage with empty log content
+        self.assertEqual(result['failed_steps'][1]['step_name'], 'test')
+        self.assertEqual(len(result['failed_steps'][1]['error_lines']), 1)
+        self.assertIn("no log content available", result['failed_steps'][1]['error_lines'][0])
+
+        # Check triggered_by was determined
+        self.assertEqual(result['triggered_by'], 'admin@internal.com')
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_gitlab_project_id_success(self, mock_session_class):
+        """Test _get_gitlab_project_id with successful API response (lines 330-353)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {'id': 12345}
+        mock_session.get.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+
+        # Mock the session that was created in __init__
+        poster.gitlab_session = mock_session
+
+        project_id = poster._get_gitlab_project_id('test-namespace', 'test-repo')
+
+        self.assertEqual(project_id, 12345)
+        mock_session.get.assert_called_once()
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_gitlab_project_id_no_session(self, mock_session_class):
+        """Test _get_gitlab_project_id when GitLab session not available (line 330-332)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url=None,  # No GitLab configured
+            gitlab_token=None,
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        project_id = poster._get_gitlab_project_id('test-namespace', 'test-repo')
+
+        self.assertIsNone(project_id)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_gitlab_project_id_api_error(self, mock_session_class):
+        """Test _get_gitlab_project_id with API error (lines 348-353)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = Exception("API Error")
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        project_id = poster._get_gitlab_project_id('test-namespace', 'test-repo')
+
+        self.assertIsNone(project_id)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_merge_request_success(self, mock_session_class):
+        """Test _get_user_from_merge_request with successful API response (lines 368-393)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {'author': {'username': 'john.doe'}}
+        mock_session.get.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_merge_request(12345, 10)
+
+        self.assertEqual(username, 'john.doe')
+
+        self.token_manager_patcher.start()
+
+    def test_get_user_from_merge_request_no_session(self):
+        """Test _get_user_from_merge_request when GitLab session not available (lines 368-369)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url=None,
+            gitlab_token=None,
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        username = poster._get_user_from_merge_request(12345, 10)
+
+        self.assertIsNone(username)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_merge_request_api_error(self, mock_session_class):
+        """Test _get_user_from_merge_request with API error (lines 387-393)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = Exception("API Error")
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_merge_request(12345, 10)
+
+        self.assertIsNone(username)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_commit_with_email(self, mock_session_class):
+        """Test _get_user_from_commit with email (lines 408-442)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {'author_email': 'john.doe@example.com', 'author_name': 'John Doe'}
+        mock_session.get.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_commit(12345, 'abc123')
+
+        self.assertEqual(username, 'john.doe')
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_commit_with_name_only(self, mock_session_class):
+        """Test _get_user_from_commit with name only (lines 429-433)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_response = MagicMock()
+        mock_response.json.return_value = {'author_email': 'noemail', 'author_name': 'John Doe'}
+        mock_session.get.return_value = mock_response
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_commit(12345, 'abc123')
+
+        self.assertEqual(username, 'John Doe')
+
+        self.token_manager_patcher.start()
+
+    def test_get_user_from_commit_no_session(self):
+        """Test _get_user_from_commit when GitLab session not available (lines 408-409)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url=None,
+            gitlab_token=None,
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        username = poster._get_user_from_commit(12345, 'abc123')
+
+        self.assertIsNone(username)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_commit_api_error(self, mock_session_class):
+        """Test _get_user_from_commit with API error (lines 437-442)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = Exception("API Error")
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_commit(12345, 'abc123')
+
+        self.assertIsNone(username)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_branch_success(self, mock_session_class):
+        """Test _get_user_from_branch with successful API response (lines 457-483)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+
+        # First call: get branch
+        branch_response = MagicMock()
+        branch_response.json.return_value = {'commit': {'id': 'abc123'}}
+
+        # Second call: get commit
+        commit_response = MagicMock()
+        commit_response.json.return_value = {'author_email': 'jane.doe@example.com', 'author_name': 'Jane Doe'}
+
+        mock_session.get.side_effect = [branch_response, commit_response]
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_branch(12345, 'feature-branch')
+
+        self.assertEqual(username, 'jane.doe')
+
+        self.token_manager_patcher.start()
+
+    def test_get_user_from_branch_no_session(self):
+        """Test _get_user_from_branch when GitLab session not available (lines 457-458)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url=None,
+            gitlab_token=None,
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        username = poster._get_user_from_branch(12345, 'feature-branch')
+
+        self.assertIsNone(username)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_get_user_from_branch_api_error(self, mock_session_class):
+        """Test _get_user_from_branch with API error (lines 478-483)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = Exception("API Error")
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        username = poster._get_user_from_branch(12345, 'feature-branch')
+
+        self.assertIsNone(username)
+
+        self.token_manager_patcher.start()
+
+    def test_extract_jenkins_user_from_metadata_success(self):
+        """Test _extract_jenkins_user_from_metadata with valid metadata (lines 497-514)."""
+        poster = ApiPoster(self.config)
+
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'john.doe'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        username = poster._extract_jenkins_user_from_metadata(build_metadata)
+
+        self.assertEqual(username, 'john.doe')
+
+    def test_extract_jenkins_user_from_metadata_no_user_cause(self):
+        """Test _extract_jenkins_user_from_metadata without UserIdCause (lines 509-510)."""
+        poster = ApiPoster(self.config)
+
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$SCMTriggerCause',
+                            'shortDescription': 'Started by SCM change'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        username = poster._extract_jenkins_user_from_metadata(build_metadata)
+
+        self.assertIsNone(username)
+
+    def test_extract_jenkins_user_from_metadata_exception(self):
+        """Test _extract_jenkins_user_from_metadata with exception (lines 512-514)."""
+        poster = ApiPoster(self.config)
+
+        # Invalid metadata that will cause exception
+        build_metadata = None
+
+        username = poster._extract_jenkins_user_from_metadata(build_metadata)
+
+        self.assertIsNone(username)
+
+    def test_determine_jenkins_triggered_by_manual_user(self):
+        """Test _determine_jenkins_triggered_by with manual Jenkins user (lines 538-546)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        parameters = {}
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'admin'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        triggered_by = poster._determine_jenkins_triggered_by(parameters, build_metadata)
+
+        self.assertEqual(triggered_by, 'admin@internal.com')
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_determine_jenkins_triggered_by_gitlab_webhook_with_mr(self, mock_session_class):
+        """Test _determine_jenkins_triggered_by with GitLab webhook and MR (lines 548-577)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+
+        # First call: get project
+        project_response = MagicMock()
+        project_response.json.return_value = {'id': 12345}
+
+        # Second call: get MR
+        mr_response = MagicMock()
+        mr_response.json.return_value = {'author': {'username': 'gitlab.user'}}
+
+        mock_session.get.side_effect = [project_response, mr_response]
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        parameters = {
+            'gitlabSourceNamespace': 'test-namespace',
+            'gitlabSourceRepoName': 'test-repo',
+            'gitlabMergeRequestIid': '42'
+        }
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'jenkins'  # System user
+                        }
+                    ]
+                }
+            ]
+        }
+
+        triggered_by = poster._determine_jenkins_triggered_by(parameters, build_metadata)
+
+        self.assertEqual(triggered_by, 'gitlab.user@internal.com')
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_determine_jenkins_triggered_by_gitlab_webhook_with_commit(self, mock_session_class):
+        """Test _determine_jenkins_triggered_by with GitLab webhook and commit SHA (lines 578-588)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+
+        # First call: get project
+        project_response = MagicMock()
+        project_response.json.return_value = {'id': 12345}
+
+        # Second call: get commit
+        commit_response = MagicMock()
+        commit_response.json.return_value = {'author_email': 'commit.author@example.com'}
+
+        mock_session.get.side_effect = [project_response, commit_response]
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        parameters = {
+            'gitlabSourceNamespace': 'test-namespace',
+            'gitlabSourceRepoName': 'test-repo',
+            'gitlabMergeRequestLastCommit': 'abc123def456'
+        }
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'jenkins'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        triggered_by = poster._determine_jenkins_triggered_by(parameters, build_metadata)
+
+        self.assertEqual(triggered_by, 'commit.author@internal.com')
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.Session')
+    def test_determine_jenkins_triggered_by_gitlab_webhook_with_branch(self, mock_session_class):
+        """Test _determine_jenkins_triggered_by with GitLab webhook and branch (lines 589-599)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        mock_session = MagicMock()
+
+        # First call: get project
+        project_response = MagicMock()
+        project_response.json.return_value = {'id': 12345}
+
+        # Second call: get branch
+        branch_response = MagicMock()
+        branch_response.json.return_value = {'commit': {'id': 'xyz789'}}
+
+        # Third call: get commit
+        commit_response = MagicMock()
+        commit_response.json.return_value = {'author_email': 'branch.committer@example.com'}
+
+        mock_session.get.side_effect = [project_response, branch_response, commit_response]
+        mock_session_class.return_value = mock_session
+
+        poster = ApiPoster(config)
+        poster.gitlab_session = mock_session
+
+        parameters = {
+            'gitlabSourceNamespace': 'test-namespace',
+            'gitlabSourceRepoName': 'test-repo',
+            'gitlabSourceBranch': 'feature-branch'
+        }
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'jenkins'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        triggered_by = poster._determine_jenkins_triggered_by(parameters, build_metadata)
+
+        self.assertEqual(triggered_by, 'branch.committer@internal.com')
+
+        self.token_manager_patcher.start()
+
+    def test_determine_jenkins_triggered_by_fallback(self):
+        """Test _determine_jenkins_triggered_by with fallback to jenkins@internal.com (lines 600-606)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url=None,  # No GitLab configured
+            gitlab_token=None,
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        parameters = {
+            'gitlabSourceNamespace': 'test-namespace',
+            'gitlabSourceRepoName': 'test-repo'
+        }
+        build_metadata = {
+            'actions': [
+                {
+                    '_class': 'hudson.model.CauseAction',
+                    'causes': [
+                        {
+                            '_class': 'hudson.model.Cause$UserIdCause',
+                            'userId': 'jenkins'
+                        }
+                    ]
+                }
+            ]
+        }
+
+        triggered_by = poster._determine_jenkins_triggered_by(parameters, build_metadata)
+
+        self.assertEqual(triggered_by, 'jenkins@internal.com')
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.post')
+    def test_fetch_token_from_bfa_server_value_error(self, mock_post):
+        """Test _fetch_token_from_bfa_server with ValueError (lines 656-658)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key=None,
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        # Mock response that will raise ValueError when parsing JSON
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.side_effect = ValueError("Invalid JSON")
+        mock_post.return_value = mock_response
+
+        token = poster._fetch_token_from_bfa_server("test_subject")
+
+        self.assertIsNone(token)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.post')
+    def test_fetch_token_from_bfa_server_key_error(self, mock_post):
+        """Test _fetch_token_from_bfa_server with KeyError (lines 656-658)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key=None,
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        # Mock response without 'token' field
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {}  # Missing 'token' key
+        mock_post.return_value = mock_response
+
+        token = poster._fetch_token_from_bfa_server("test_subject")
+
+        self.assertIsNone(token)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.post')
+    def test_post_to_api_jwt_generation_fails_uses_bfa_server(self, mock_post):
+        """Test _post_to_api when JWT generation fails, falls back to BFA server (lines 693-705)."""
+        self.token_manager_patcher.stop()
+
+        # Create a config with both TokenManager and BFA host
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        # Create poster with real TokenManager
+        with patch('src.api_poster.TokenManager') as mock_tm_class:
+            mock_tm = MagicMock()
+            mock_tm.generate_token.side_effect = Exception("JWT generation failed")
+            mock_tm_class.return_value = mock_tm
+
+            poster = ApiPoster(config)
+            poster.token_manager = mock_tm
+
+            # Mock BFA server token fetch
+            with patch.object(poster, '_fetch_token_from_bfa_server', return_value='bfa-token'):
+                mock_api_response = MagicMock()
+                mock_api_response.status_code = 200
+                mock_api_response.text = '{"status": "success"}'
+                # Properly mock the response.json().get() chain
+                mock_api_response.json.return_value = {"status": "ok"}
+                mock_post.return_value = mock_api_response
+
+                payload = {
+                    'repo': 'test-repo',
+                    'pipeline_id': 12345,
+                    'source': 'gitlab'
+                }
+
+                status_code, response_body, duration = poster._post_to_api(payload)
+
+                self.assertEqual(status_code, 200)
+
+        self.token_manager_patcher.start()
+
+    @patch('requests.post')
+    def test_post_to_api_bfa_fetch_exception(self, mock_post):
+        """Test _post_to_api when BFA token fetch raises exception (lines 714-716)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=True,
+            api_post_save_to_file=False,
+            jenkins_enabled=False,
+            jenkins_url=None,
+            jenkins_user=None,
+            jenkins_api_token=None,
+            jenkins_webhook_secret=None,
+            bfa_host="https://bfa.example.com",
+            bfa_secret_key=None,  # No secret key
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        # Mock _fetch_token_from_bfa_server to raise exception
+        with patch.object(poster, '_fetch_token_from_bfa_server', side_effect=Exception("Network error")):
+            mock_api_response = MagicMock()
+            mock_api_response.status_code = 200
+            mock_api_response.text = '{"status": "success"}'
+            mock_api_response.json.return_value = {"status": "ok"}
+            mock_post.return_value = mock_api_response
+
+            payload = {
+                'repo': 'test-repo',
+                'pipeline_id': 12345,
+                'source': 'gitlab'
+            }
+
+            status_code, response_body, duration = poster._post_to_api(payload)
+
+            # Should still make the API call without authentication
+            self.assertEqual(status_code, 200)
+
+        self.token_manager_patcher.start()
+
+    def test_log_api_request_file_write_exception(self):
+        """Test _log_api_request when file write raises exception (lines 845-846)."""
+        poster = ApiPoster(self.config)
+
+        # Make the api_log_file path invalid to cause write error
+        poster.api_log_file = Path("/nonexistent/directory/api-requests.log")
+
+        # This should not raise an exception, just log the error
+        # Correct signature: pipeline_id, project_id, status_code, response_body, duration_ms, error
+        poster._log_api_request(
+            pipeline_id=12345,
+            project_id=123,
+            status_code=200,
+            response_body="Success",
+            duration_ms=100,
+            error=None
+        )
+
+        # Test passes if no exception is raised
+
+    @patch('requests.post')
+    def test_post_jenkins_logs_non_success_status_code(self, mock_post):
+        """Test post_jenkins_logs returns False for non-success status code (lines 1117-1126)."""
+        self.token_manager_patcher.stop()
+
+        config = Config(
+            gitlab_url="https://gitlab.example.com",
+            gitlab_token="test-token",
+            webhook_port=8000,
+            webhook_secret=None,
+            log_output_dir=self.temp_dir,
+            retry_attempts=3,
+            retry_delay=1,
+            log_level="INFO",
+            log_save_pipeline_status=["all"],
+            log_save_projects=[],
+            log_exclude_projects=[],
+            log_save_job_status=["all"],
+            log_save_metadata_always=True,
+            api_post_enabled=True,
+            api_post_url="https://api.example.com/logs",
+            api_post_timeout=30,
+            api_post_retry_enabled=False,
+            api_post_save_to_file=False,
+            jenkins_enabled=True,
+            jenkins_url="https://jenkins.example.com",
+            jenkins_user="test",
+            jenkins_api_token="token",
+            jenkins_webhook_secret=None,
+            bfa_host=None,
+            bfa_secret_key="test-key",
+            error_context_lines_before=50,
+            error_context_lines_after=10,
+            max_log_lines=100000,
+            tail_log_lines=5000,
+            stream_chunk_size=8192
+        )
+
+        poster = ApiPoster(config)
+
+        jenkins_payload = {
+            'job_name': 'test-job',
+            'build_number': 42,
+            'status': 'FAILED',
+            'stages': []
+        }
+
+        # Mock API to return 400 status code
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_response.text = "Bad Request"
+        mock_post.return_value = mock_response
+
+        result = poster.post_jenkins_logs(jenkins_payload)
+
+        self.assertFalse(result)
+
+        self.token_manager_patcher.start()
+
+
 if __name__ == "__main__":
     unittest.main()
