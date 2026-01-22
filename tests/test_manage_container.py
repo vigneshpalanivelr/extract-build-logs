@@ -236,9 +236,13 @@ class TestBuildImage(unittest.TestCase):
     @patch('manage_container.subprocess.run')
     @patch('manage_container.Progress')
     @patch('manage_container.os.environ.get')
+    @patch('manage_container.os.path.abspath')
     @patch('manage_container.console')
-    def test_build_image_success(self, mock_console, mock_env_get, mock_progress, mock_subprocess):
+    def test_build_image_success(self, mock_console, mock_abspath, mock_env_get, mock_progress, mock_subprocess):
         """Test successful image build using subprocess (SDK has user namespace issue)."""
+        # Mock os.path.abspath to return current directory
+        mock_abspath.return_value = '/current/dir'
+
         # Mock environment variables for USER_UID and USER_GID
         def env_get_side_effect(key, default=None):
             if key == 'USER_UID':
@@ -257,6 +261,8 @@ class TestBuildImage(unittest.TestCase):
         # Mock subprocess.run to return success
         mock_result = MagicMock()
         mock_result.returncode = 0
+        mock_result.stdout = ""
+        mock_result.stderr = ""
         mock_subprocess.return_value = mock_result
 
         mock_client = MagicMock()
@@ -284,12 +290,17 @@ class TestBuildImage(unittest.TestCase):
         self.assertEqual(call_args[1]['stdout'], subprocess.PIPE)
         self.assertEqual(call_args[1]['stderr'], subprocess.PIPE)
         self.assertTrue(call_args[1]['universal_newlines'])
+        self.assertEqual(call_args[1]['cwd'], '/current/dir')
 
     @patch('manage_container.subprocess.run')
     @patch('manage_container.Progress')
+    @patch('manage_container.os.path.abspath')
     @patch('manage_container.console')
-    def test_build_image_failure(self, mock_console, mock_progress, mock_subprocess):
+    def test_build_image_failure(self, mock_console, mock_abspath, mock_progress, mock_subprocess):
         """Test image build failure using subprocess."""
+        # Mock os.path.abspath
+        mock_abspath.return_value = '/current/dir'
+
         # Mock Progress context manager
         mock_progress_instance = MagicMock()
         mock_progress.return_value.__enter__.return_value = mock_progress_instance
@@ -895,6 +906,311 @@ class TestSimpleFallbackClasses(unittest.TestCase):
         sys.stdin = sys.__stdin__
 
         self.assertEqual(result, "2")
+
+
+class TestFormatBytes(unittest.TestCase):
+    """Test cases for format_bytes function."""
+
+    def test_format_bytes_zero(self):
+        """Test formatting zero bytes."""
+        result = manage_container.format_bytes(0)
+        self.assertEqual(result, "0 B")
+
+    def test_format_bytes_kb(self):
+        """Test formatting kilobytes."""
+        result = manage_container.format_bytes(1500)
+        self.assertEqual(result, "1.5 KB")
+
+    def test_format_bytes_mb(self):
+        """Test formatting megabytes."""
+        result = manage_container.format_bytes(1500000)
+        self.assertEqual(result, "1.4 MB")
+
+    def test_format_bytes_gb(self):
+        """Test formatting gigabytes."""
+        result = manage_container.format_bytes(1500000000)
+        self.assertEqual(result, "1.4 GB")
+
+    def test_format_bytes_tb(self):
+        """Test formatting terabytes."""
+        result = manage_container.format_bytes(1500000000000)
+        self.assertEqual(result, "1.4 TB")
+
+
+class TestGetDirectorySize(unittest.TestCase):
+    """Test cases for get_directory_size function."""
+
+    @patch('manage_container.Path')
+    def test_get_directory_size_not_exists(self, mock_path):
+        """Test directory size when path doesn't exist."""
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = False
+        mock_path.return_value = mock_path_instance
+
+        result = manage_container.get_directory_size(mock_path_instance)
+        self.assertEqual(result, "N/A (not created)")
+
+    @patch('manage_container.format_bytes')
+    @patch('manage_container.Path')
+    def test_get_directory_size_exists(self, mock_path, mock_format):
+        """Test directory size calculation."""
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = True
+
+        # Mock files with sizes
+        mock_file1 = MagicMock()
+        mock_file1.is_file.return_value = True
+        mock_file1.stat.return_value.st_size = 1000
+
+        mock_file2 = MagicMock()
+        mock_file2.is_file.return_value = True
+        mock_file2.stat.return_value.st_size = 2000
+
+        mock_path_instance.rglob.return_value = [mock_file1, mock_file2]
+        mock_format.return_value = "3.0 KB"
+
+        result = manage_container.get_directory_size(mock_path_instance)
+        mock_format.assert_called_once_with(3000)
+        self.assertEqual(result, "3.0 KB")
+
+
+class TestGetDiskSpace(unittest.TestCase):
+    """Test cases for get_disk_space function."""
+
+    @patch('manage_container.shutil.disk_usage')
+    @patch('manage_container.format_bytes')
+    def test_get_disk_space_success(self, mock_format, mock_disk_usage):
+        """Test getting disk space."""
+        mock_disk_usage.return_value = MagicMock(total=10000000000, used=4000000000, free=6000000000)
+        mock_format.side_effect = lambda x: f"{x/1e9:.1f} GB"
+
+        result = manage_container.get_disk_space("/test/path")
+        self.assertIn("6.0 GB", result)
+        self.assertIn("10.0 GB", result)
+        self.assertIn("40.0%", result)
+
+
+class TestGetHostIP(unittest.TestCase):
+    """Test cases for get_host_ip function."""
+
+    @patch('manage_container.socket.socket')
+    def test_get_host_ip_success(self, mock_socket):
+        """Test getting host IP address."""
+        mock_sock = MagicMock()
+        mock_sock.getsockname.return_value = ('192.168.1.100', 0)
+        mock_socket.return_value.__enter__.return_value = mock_sock
+
+        result = manage_container.get_host_ip()
+        self.assertEqual(result, '192.168.1.100')
+
+    @patch('manage_container.socket.socket')
+    def test_get_host_ip_failure(self, mock_socket):
+        """Test getting host IP when socket fails."""
+        mock_socket.return_value.__enter__.side_effect = Exception("Socket error")
+
+        result = manage_container.get_host_ip()
+        self.assertEqual(result, 'localhost')
+
+
+class TestCheckFilePermissions(unittest.TestCase):
+    """Test cases for check_file_permissions function."""
+
+    @patch('manage_container.Path')
+    def test_check_file_permissions_not_exists(self, mock_path):
+        """Test file permissions when file doesn't exist."""
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = False
+        mock_path.return_value = mock_path_instance
+
+        result = manage_container.check_file_permissions(mock_path_instance)
+        self.assertEqual(result, "N/A (not found)")
+
+    @patch('manage_container.Path')
+    def test_check_file_permissions_secure(self, mock_path):
+        """Test file permissions when secure."""
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = True
+        mock_path_instance.stat.return_value.st_mode = 0o100600  # 600 permissions
+
+        result = manage_container.check_file_permissions(mock_path_instance)
+        self.assertIn("600", result)
+
+    @patch('manage_container.Path')
+    def test_check_file_permissions_insecure(self, mock_path):
+        """Test file permissions when insecure."""
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = True
+        mock_path_instance.stat.return_value.st_mode = 0o100755  # 755 permissions
+
+        result = manage_container.check_file_permissions(mock_path_instance)
+        self.assertIn("755", result)
+        self.assertIn("consider", result)
+
+
+class TestValidationFunctions(unittest.TestCase):
+    """Test cases for validation functions."""
+
+    def test_validate_required_fields_missing_gitlab_url(self):
+        """Test validation with missing GitLab URL."""
+        config = {'GITLAB_TOKEN': 'test'}
+        errors, warnings = manage_container.validate_required_fields(config)
+        self.assertIn("GITLAB_URL is required", errors)
+
+    def test_validate_required_fields_missing_token(self):
+        """Test validation with missing GitLab token."""
+        config = {'GITLAB_URL': 'https://gitlab.com'}
+        errors, warnings = manage_container.validate_required_fields(config)
+        self.assertIn("GITLAB_TOKEN is required", errors)
+
+    def test_validate_required_fields_invalid_url(self):
+        """Test validation with invalid URL."""
+        config = {'GITLAB_URL': 'not-a-url', 'GITLAB_TOKEN': 'test'}
+        errors, warnings = manage_container.validate_required_fields(config)
+        self.assertTrue(any('http' in str(w) for w in warnings))
+
+    def test_validate_logging_config_invalid_level(self):
+        """Test validation with invalid log level."""
+        config = {'LOG_LEVEL': 'INVALID'}
+        errors, warnings = manage_container.validate_logging_config(config)
+        self.assertTrue(len(warnings) > 0)
+
+    def test_validate_api_config_enabled_missing_url(self):
+        """Test API validation when enabled but URL missing."""
+        config = {'API_POST_ENABLED': 'true'}
+        errors, warnings = manage_container.validate_api_config(config)
+        self.assertIn("API_POST_ENABLED is true but API_POST_URL is not set", errors)
+
+    @patch('manage_container.Path')
+    def test_validate_jenkins_config_multi_instance(self, mock_path):
+        """Test Jenkins validation with jenkins_instances.json."""
+        mock_path_instance = MagicMock()
+        mock_path_instance.exists.return_value = True
+        mock_path.return_value = mock_path_instance
+
+        config = {'JENKINS_ENABLED': 'true'}
+        errors, warnings = manage_container.validate_jenkins_config(config)
+        # Should not have errors about missing JENKINS_URL, etc. when using multi-instance
+        self.assertFalse(any('JENKINS_URL' in str(e) for e in errors))
+
+    def test_validate_log_filters_invalid_status(self):
+        """Test log filter validation with invalid status."""
+        config = {'LOG_SAVE_PIPELINE_STATUS': 'invalid_status'}
+        errors, warnings = manage_container.validate_log_filters(config)
+        self.assertTrue(len(warnings) > 0 or len(errors) > 0)
+
+    @patch('manage_container.shutil.disk_usage')
+    def test_validate_system_resources_low_space(self, mock_disk):
+        """Test system validation with low disk space."""
+        mock_disk.return_value = MagicMock(total=10000000000, free=500000000)  # < 1GB free
+        config = {}
+        errors, warnings = manage_container.validate_system_resources(config)
+        self.assertTrue(any('disk space' in str(w).lower() for w in warnings))
+
+
+class TestShowFunctions(unittest.TestCase):
+    """Test cases for show_* functions."""
+
+    @patch('manage_container.console')
+    def test_show_endpoints(self, mock_console):
+        """Test showing endpoints."""
+        manage_container.show_endpoints(8000)
+        # Should print endpoints table
+        self.assertTrue(mock_console.print.called)
+
+    @patch('manage_container.console')
+    def test_show_endpoints_with_host(self, mock_console):
+        """Test showing endpoints with custom host."""
+        manage_container.show_endpoints(8000, host='192.168.1.100')
+        self.assertTrue(mock_console.print.called)
+
+    @patch('manage_container.console')
+    def test_show_validation_results_no_issues(self, mock_console):
+        """Test showing validation results with no issues."""
+        manage_container.show_validation_results([], [])
+        # Should not print any errors or warnings sections
+        calls = [str(call) for call in mock_console.print.call_args_list]
+        self.assertFalse(any('ERRORS' in str(c) for c in calls))
+
+    @patch('manage_container.console')
+    def test_show_validation_results_with_errors(self, mock_console):
+        """Test showing validation results with errors."""
+        manage_container.show_validation_results(['Error 1', 'Error 2'], [])
+        calls = [str(call) for call in mock_console.print.call_args_list]
+        self.assertTrue(any('ERRORS' in str(c) for c in calls))
+
+    @patch('manage_container.console')
+    def test_show_validation_results_with_warnings(self, mock_console):
+        """Test showing validation results with warnings."""
+        manage_container.show_validation_results([], ['Warning 1'])
+        calls = [str(call) for call in mock_console.print.call_args_list]
+        self.assertTrue(any('WARNINGS' in str(c) for c in calls))
+
+
+class TestTestWebhook(unittest.TestCase):
+    """Test cases for test_webhook function."""
+
+    @patch('manage_container.requests.post')
+    @patch('manage_container.console')
+    def test_webhook_success(self, mock_console, mock_post):
+        """Test webhook test with success response."""
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.text = "Success"
+        mock_post.return_value = mock_response
+
+        result = manage_container.test_webhook('http://localhost:8000/webhook/gitlab')
+        self.assertTrue(result)
+
+    @patch('manage_container.requests.post')
+    @patch('manage_container.console')
+    def test_webhook_failure(self, mock_console, mock_post):
+        """Test webhook test with failure response."""
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Error"
+        mock_post.return_value = mock_response
+
+        result = manage_container.test_webhook('http://localhost:8000/webhook/gitlab')
+        self.assertFalse(result)
+
+    @patch('manage_container.requests.post')
+    @patch('manage_container.console')
+    def test_webhook_connection_error(self, mock_console, mock_post):
+        """Test webhook test with connection error."""
+        mock_post.side_effect = Exception("Connection refused")
+
+        result = manage_container.test_webhook('http://localhost:8000/webhook/gitlab')
+        self.assertFalse(result)
+
+
+class TestExportMonitoringData(unittest.TestCase):
+    """Test cases for export_monitoring_data function."""
+
+    @patch('manage_container.container_exists')
+    @patch('manage_container.console')
+    def test_export_no_container(self, mock_console, mock_exists):
+        """Test export when container doesn't exist."""
+        mock_exists.return_value = False
+        mock_client = MagicMock()
+
+        result = manage_container.export_monitoring_data(mock_client, 'test.json')
+        self.assertFalse(result)
+
+    @patch('manage_container.json.dump')
+    @patch('builtins.open', new_callable=MagicMock)
+    @patch('manage_container.container_exists')
+    @patch('manage_container.console')
+    def test_export_success(self, mock_console, mock_exists, mock_open, mock_json_dump):
+        """Test successful export."""
+        mock_exists.return_value = True
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_container.attrs = {'State': {'Status': 'running'}}
+        mock_container.stats.return_value = [{'cpu_stats': {}, 'memory_stats': {}}]
+        mock_client.containers.get.return_value = mock_container
+
+        result = manage_container.export_monitoring_data(mock_client, 'test.json')
+        self.assertTrue(result)
 
 
 if __name__ == '__main__':
