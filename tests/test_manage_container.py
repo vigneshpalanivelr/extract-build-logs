@@ -1147,8 +1147,8 @@ class TestShowFunctions(unittest.TestCase):
         self.assertTrue(any('WARNINGS' in str(c) for c in calls))
 
 
-class TestTestWebhook(unittest.TestCase):
-    """Test cases for test_webhook function."""
+class TestTestWebhookWithHostIP(unittest.TestCase):
+    """Test cases for test_webhook function with host IP."""
 
     @patch('manage_container.requests.post')
     @patch('manage_container.get_host_ip')
@@ -1193,8 +1193,8 @@ class TestTestWebhook(unittest.TestCase):
         self.assertFalse(result)
 
 
-class TestExportMonitoringData(unittest.TestCase):
-    """Test cases for export_monitoring_data function."""
+class TestExportMonitoringDataWithHostIP(unittest.TestCase):
+    """Test cases for export_monitoring_data function with host IP."""
 
     @patch('manage_container.requests.get')
     @patch('manage_container.get_host_ip')

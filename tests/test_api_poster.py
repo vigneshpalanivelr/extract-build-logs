@@ -1296,7 +1296,6 @@ class TestApiPoster(unittest.TestCase):
         # Should return False for non-success status
         self.assertFalse(result)
 
-
     def test_initialization_without_gitlab_session(self):
         """Test ApiPoster initialization without GitLab credentials (line 88)."""
         self.token_manager_patcher.stop()
@@ -1407,7 +1406,6 @@ class TestApiPoster(unittest.TestCase):
                     'log_content': 'Deployment successful'
                 }
             ],
-            'parameters': {},
             'parameters': {}
         }
 
@@ -2781,7 +2779,7 @@ class TestApiPoster(unittest.TestCase):
         # Test passes if no exception is raised
 
     @patch('requests.post')
-    def test_post_jenkins_logs_non_success_status_code(self, mock_post):
+    def test_post_jenkins_logs_returns_false_on_non_ok_status(self, mock_post):
         """Test post_jenkins_logs returns False for non-success status code (lines 1117-1126)."""
         self.token_manager_patcher.stop()
 
