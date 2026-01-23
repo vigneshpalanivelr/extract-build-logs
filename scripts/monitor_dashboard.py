@@ -102,7 +102,11 @@ def print_pipeline_details(monitor: PipelineMonitor, pipeline_id: int):
             req['status'],
             f"{req['processing_time']:.1f}s" if req['processing_time'] else '-',
             f"{req['success_count']}/{req['error_count']}" if req['success_count'] is not None else '-',
-            req['error_message'][:30] + '...' if req['error_message'] and len(req['error_message']) > 30 else req['error_message'] or '-'
+            (
+                req['error_message'][:30] + '...'
+                if req['error_message'] and len(req['error_message']) > 30
+                else req['error_message'] or '-'
+            )
         ])
 
     headers = ['Request ID', 'Timestamp', 'Status', 'Time', 'Success/Error', 'Error']
@@ -139,7 +143,11 @@ Examples:
         """
     )
 
-    parser.add_argument('--db', default='./logs/monitoring.db', help='Path to monitoring database (default: ./logs/monitoring.db)')
+    parser.add_argument(
+        '--db',
+        default='./logs/monitoring.db',
+        help='Path to monitoring database (default: ./logs/monitoring.db)'
+    )
     parser.add_argument('--hours', type=int, default=24, help='Number of hours to include in summary (default: 24)')
     parser.add_argument('--recent', type=int, metavar='N', help='Show N most recent requests')
     parser.add_argument('--pipeline', type=int, metavar='ID', help='Show details for specific pipeline ID')

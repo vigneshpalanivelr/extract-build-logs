@@ -129,8 +129,9 @@ def init_app():  # pylint: disable=too-many-branches
     """
     # Global state is necessary for FastAPI application components
     # These are initialized once at startup and accessed by request handlers
-    global config, log_fetcher, storage_manager, pipeline_extractor, monitor, api_poster  # pylint: disable=global-statement
-    global jenkins_extractor, jenkins_log_fetcher, jenkins_instance_manager, token_manager  # pylint: disable=global-statement
+    # pylint: disable=global-statement
+    global config, log_fetcher, storage_manager, pipeline_extractor, monitor, api_poster
+    global jenkins_extractor, jenkins_log_fetcher, jenkins_instance_manager, token_manager
 
     try:
         # Load configuration first
@@ -861,7 +862,9 @@ async def webhook_jenkins_handler(
         clear_request_id()
 
 
-def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id: str):  # pylint: disable=too-many-branches,too-many-nested-blocks  # noqa: C901
+def process_jenkins_build(
+    build_info: Dict[str, Any], db_request_id: int, req_id: str
+):  # pylint: disable=too-many-branches,too-many-nested-blocks  # noqa: C901
     """
     Process a Jenkins build: fetch logs and post to API.
 
@@ -1132,7 +1135,9 @@ def process_jenkins_build(build_info: Dict[str, Any], db_request_id: int, req_id
         clear_request_id()
 
 
-def process_pipeline_event(pipeline_info: Dict[str, Any], db_request_id: int, req_id: str):  # pylint: disable=too-many-branches  # noqa: C901
+def process_pipeline_event(
+    pipeline_info: Dict[str, Any], db_request_id: int, req_id: str
+):  # pylint: disable=too-many-branches  # noqa: C901
     """
     Process a pipeline event: fetch and store logs.
 

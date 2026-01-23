@@ -16,11 +16,9 @@ exclude =
     htmlcov
 
 # Error codes to ignore
-# E203: Whitespace before ':' (conflicts with black)
-# E501: Line too long (handled by black)
-# W503: Line break before binary operator (conflicts with black)
-# E402: Module level import not at top of file (sometimes needed)
-ignore = E203,E501,W503,E402
+# W503: Line break before binary operator (conflicts with PEP 8 update - now preferred style)
+# E402: Module level import not at top of file (needed in test files for sys.path modification)
+ignore = W503,E402
 
 # Maximum complexity
 max-complexity = 15

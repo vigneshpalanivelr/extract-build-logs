@@ -674,7 +674,11 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     env_table.add_row("GitLab URL", config.get('GITLAB_URL', '[dim]Not Set[/dim]'))
     env_table.add_row("GitLab Token", mask_value(config.get('GITLAB_TOKEN', 'Not Set'), 8))
     env_table.add_row("Webhook Port", config.get('WEBHOOK_PORT', '[dim]Not Set[/dim]'))
-    env_table.add_row("Webhook Secret", mask_value(config.get('WEBHOOK_SECRET', ''), 4) if config.get('WEBHOOK_SECRET') else '[dim]Not Set[/dim]')
+    webhook_secret = config.get('WEBHOOK_SECRET')
+    webhook_secret_display = (
+        mask_value(webhook_secret, 4) if webhook_secret else '[dim]Not Set[/dim]'
+    )
+    env_table.add_row("Webhook Secret", webhook_secret_display)
     env_table.add_row("Log Level", config.get('LOG_LEVEL', '[dim]Not Set[/dim]'))
     env_table.add_row("Log Directory", config.get('LOG_OUTPUT_DIR', '[dim]Not Set[/dim]'))
     env_table.add_row("Retry Attempts", config.get('RETRY_ATTEMPTS', '[dim]Not Set[/dim]'))
@@ -709,7 +713,9 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
         bfa_host = config.get('BFA_HOST', '')
         api_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else '[dim]Not Set (BFA_HOST missing)[/dim]'
         api_table.add_row("API URL", api_url)
-        api_table.add_row("Auth Token", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[dim]Not Set[/dim]')
+        bfa_secret = config.get('BFA_SECRET_KEY')
+        auth_token_display = mask_value(bfa_secret, 8) if bfa_secret else '[dim]Not Set[/dim]'
+        api_table.add_row("Auth Token", auth_token_display)
         api_table.add_row("API Timeout", f"{config.get('API_POST_TIMEOUT', '30')}s")
         api_table.add_row("API Retry Enabled", config.get('API_POST_RETRY_ENABLED', 'true'))
         api_table.add_row("Also Save to File", config.get('API_POST_SAVE_TO_FILE', 'false'))
@@ -723,15 +729,29 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
         jenkins_table.add_row("Jenkins Enabled", "[bold green]Yes[/bold green]")
         jenkins_table.add_row("Jenkins URL", config.get('JENKINS_URL', '[dim]Not Set[/dim]'))
         jenkins_table.add_row("Jenkins User", config.get('JENKINS_USER', '[dim]Not Set[/dim]'))
-        jenkins_table.add_row("Jenkins API Token", mask_value(config.get('JENKINS_API_TOKEN', ''), 8) if config.get('JENKINS_API_TOKEN') else '[dim]Not Set[/dim]')
-        jenkins_table.add_row("Jenkins Webhook Secret", mask_value(config.get('JENKINS_WEBHOOK_SECRET', ''), 4) if config.get('JENKINS_WEBHOOK_SECRET') else '[dim]Not Set[/dim]')
+
+        jenkins_token = config.get('JENKINS_API_TOKEN')
+        jenkins_token_display = (
+            mask_value(jenkins_token, 8) if jenkins_token else '[dim]Not Set[/dim]'
+        )
+        jenkins_table.add_row("Jenkins API Token", jenkins_token_display)
+
+        jenkins_secret = config.get('JENKINS_WEBHOOK_SECRET')
+        jenkins_secret_display = (
+            mask_value(jenkins_secret, 4) if jenkins_secret else '[dim]Not Set[/dim]'
+        )
+        jenkins_table.add_row("Jenkins Webhook Secret", jenkins_secret_display)
         console.print(jenkins_table)
         console.print()
 
     # BFA Token Generation Configuration
     bfa_table = create_config_table("BFA JWT Token Generation")
     bfa_table.add_row("BFA Host", config.get('BFA_HOST', '[dim]Not Set[/dim]'))
-    bfa_table.add_row("BFA Secret Key", mask_value(config.get('BFA_SECRET_KEY', ''), 8) if config.get('BFA_SECRET_KEY') else '[bold red]Not Set[/bold red]')
+    bfa_secret_key = config.get('BFA_SECRET_KEY')
+    bfa_secret_display = (
+        mask_value(bfa_secret_key, 8) if bfa_secret_key else '[bold red]Not Set[/bold red]'
+    )
+    bfa_table.add_row("BFA Secret Key", bfa_secret_display)
     bfa_table.add_row("Token Endpoint", "/api/token")
     bfa_table.add_row("Token Usage", "Dynamic JWT for API authentication")
     if not config.get('BFA_SECRET_KEY'):
@@ -761,7 +781,10 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
 
     available, total, percent_used = get_disk_space(Path.cwd())
     disk_color = "green" if percent_used < 80 else ("yellow" if percent_used < 90 else "red")
-    system_table.add_row("Disk Available", f"[{disk_color}]{available} / {total} ({percent_used:.1f}% used)[/{disk_color}]")
+    disk_info = (
+        f"[{disk_color}]{available} / {total} ({percent_used:.1f}% used)[/{disk_color}]"
+    )
+    system_table.add_row("Disk Available", disk_info)
 
     env_file = Path(ENV_FILE)
     if env_file.exists():
@@ -1036,7 +1059,11 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             logs_path.chmod(0o755)
             console.print(f"[green][OK] Created logs directory: {logs_dir}[/green]")
         elif not os.access(logs_path, os.W_OK):
-            console.print(f"[yellow][WARNING] Warning: {logs_dir} may not be writable. Run: sudo chown -R $USER:$USER {logs_dir}[/yellow]")
+            warning_msg = (
+                f"[yellow][WARNING] Warning: {logs_dir} may not be writable. "
+                f"Run: sudo chown -R $USER:$USER {logs_dir}[/yellow]"
+            )
+            console.print(warning_msg)
 
         if container_exists(client):
             if container_running(client):
@@ -1299,7 +1326,12 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
                 uptime = datetime.now(timezone.utc) - start_time
                 days, hours = uptime.days, uptime.seconds // 3600
                 minutes = (uptime.seconds % 3600) // 60
-                uptime_str = f"{days}d {hours}h {minutes}m" if days > 0 else (f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m")
+                if days > 0:
+                    uptime_str = f"{days}d {hours}h {minutes}m"
+                elif hours > 0:
+                    uptime_str = f"{hours}h {minutes}m"
+                else:
+                    uptime_str = f"{minutes}m"
                 info_table.add_row("Uptime", uptime_str)
 
             ports = container.attrs.get('NetworkSettings', {}).get('Ports', {})
@@ -1315,9 +1347,17 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
 
             try:
                 stats = container.stats(stream=False)
-                cpu_delta = stats['cpu_stats']['cpu_usage']['total_usage'] - stats['precpu_stats']['cpu_usage']['total_usage']
-                system_delta = stats['cpu_stats']['system_cpu_usage'] - stats['precpu_stats']['system_cpu_usage']
-                cpu_percent = (cpu_delta / system_delta) * stats['cpu_stats'].get('online_cpus', 1) * 100.0 if system_delta > 0 and cpu_delta > 0 else 0.0
+                cpu_total = stats['cpu_stats']['cpu_usage']['total_usage']
+                precpu_total = stats['precpu_stats']['cpu_usage']['total_usage']
+                cpu_delta = cpu_total - precpu_total
+                system_current = stats['cpu_stats']['system_cpu_usage']
+                system_previous = stats['precpu_stats']['system_cpu_usage']
+                system_delta = system_current - system_previous
+                if system_delta > 0 and cpu_delta > 0:
+                    online_cpus = stats['cpu_stats'].get('online_cpus', 1)
+                    cpu_percent = (cpu_delta / system_delta) * online_cpus * 100.0
+                else:
+                    cpu_percent = 0.0
                 mem_usage = stats['memory_stats'].get('usage', 0) / (1024 * 1024)
                 mem_limit = stats['memory_stats'].get('limit', 0) / (1024 * 1024)
 
@@ -1362,7 +1402,11 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
         return False
 
 
-def remove_container(client: docker.DockerClient, force: bool = False, force_remove: bool = False) -> bool:  # noqa: C901
+def remove_container(
+    client: docker.DockerClient,
+    force: bool = False,
+    force_remove: bool = False
+) -> bool:  # noqa: C901
     """
     Remove container and optionally image with user confirmation.
 
@@ -1398,7 +1442,11 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         if not force:
             console.print(f"[bold yellow]What would you like to remove? (Logs preserved in {logs_dir})[/bold yellow]")
             if container_exists_flag and image_exists_flag:
-                console.print("[cyan]1.[/cyan] Container only\n[cyan]2.[/cyan] Container and image\n[cyan]3.[/cyan] Cancel")
+                console.print(
+                    "[cyan]1.[/cyan] Container only\n"
+                    "[cyan]2.[/cyan] Container and image\n"
+                    "[cyan]3.[/cyan] Cancel"
+                )
                 choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="3")
                 if choice == "3":
                     console.print("[blue]Cancelled.[/blue]")
@@ -1414,7 +1462,10 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
                     return False
 
         if container_exists_flag:
-            container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name()) if config else get_container_name()
+            if config:
+                container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
+            else:
+                container_name = get_container_name()
             console.print(f"[blue]Removing container: {container_name}[/blue]")
             container = client.containers.get(get_container_name())
             stopped_first = False

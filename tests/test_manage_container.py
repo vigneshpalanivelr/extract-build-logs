@@ -267,7 +267,10 @@ class TestBuildImage(unittest.TestCase):
     @patch('manage_container.os.environ.get')
     @patch('manage_container.os.path.abspath')
     @patch('manage_container.console')
-    def test_build_image_success(self, mock_console, mock_abspath, mock_env_get, mock_progress, mock_subprocess, mock_load_config):
+    def test_build_image_success(
+        self, mock_console, mock_abspath, mock_env_get, mock_progress,
+        mock_subprocess, mock_load_config
+    ):
         """Test successful image build using subprocess (SDK has user namespace issue)."""
         # Mock load_config to return config with Docker settings
         mock_load_config.return_value = {
@@ -417,7 +420,12 @@ class TestStartContainer(unittest.TestCase):
         mock_exists.return_value = True
         mock_running.return_value = True
         mock_client = MagicMock()
-        config = {'WEBHOOK_PORT': '8000', 'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_LOGS_DIR': './logs'}
+        config = {
+            'WEBHOOK_PORT': '8000',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
 
         # Mock Path instance
         mock_path_instance = MagicMock()
@@ -437,7 +445,12 @@ class TestStartContainer(unittest.TestCase):
         """Test starting new container with host network and user namespace."""
         mock_exists.return_value = False
         mock_client = MagicMock()
-        config = {'WEBHOOK_PORT': '8000', 'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_LOGS_DIR': './logs'}
+        config = {
+            'WEBHOOK_PORT': '8000',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
 
         # Mock Path instance
         mock_path_instance = MagicMock()
@@ -504,7 +517,12 @@ class TestRestartContainer(unittest.TestCase):
         mock_stop.return_value = True
         mock_start.return_value = True
         mock_client = MagicMock()
-        config = {'WEBHOOK_PORT': '8000', 'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_LOGS_DIR': './logs'}
+        config = {
+            'WEBHOOK_PORT': '8000',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
 
         result = manage_container.restart_container(mock_client, config)
 
