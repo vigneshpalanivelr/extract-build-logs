@@ -106,9 +106,11 @@ class SimpleTable:
         self.rows = []
 
     def add_column(self, name, **kwargs):
+        """Add a column to the table."""
         self.columns.append(name)
 
     def add_row(self, *values):
+        """Add a row to the table."""
         self.rows.append(values)
 
     def __str__(self):
@@ -173,10 +175,12 @@ class SimpleProgress:
         pass
 
     def add_task(self, description, **kwargs):
+        """Add a task to the progress tracker."""
         print(f"  {description}")
         return len(self.tasks)
 
     def update(self, task_id, **kwargs):
+        """Update a task's progress."""
         pass
 
 
