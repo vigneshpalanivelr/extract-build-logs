@@ -356,12 +356,8 @@ def validate_required_fields(config: Dict[str, str]) -> Tuple[List[str], List[st
     return errors, warnings
 
 
-def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
-    """Validate logging and retry configuration."""
-    errors = []
-    warnings = []
-
-    # Docker settings validation
+def _validate_docker_settings(config: Dict[str, str], errors: List[str]) -> None:
+    """Validate Docker configuration settings."""
     if not config.get('DOCKER_IMAGE_NAME'):
         errors.append("DOCKER_IMAGE_NAME is not set (required)")
     if not config.get('DOCKER_CONTAINER_NAME'):
@@ -369,7 +365,9 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
     if not config.get('DOCKER_LOGS_DIR'):
         errors.append("DOCKER_LOGS_DIR is not set (required)")
 
-    # Log level validation
+
+def _validate_log_level(config: Dict[str, str], errors: List[str]) -> None:
+    """Validate LOG_LEVEL setting."""
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
     if not config.get('LOG_LEVEL'):
         errors.append("LOG_LEVEL is not set (required)")
@@ -378,11 +376,9 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
         if log_level not in valid_levels:
             errors.append(f"LOG_LEVEL '{log_level}' is invalid (must be one of: {', '.join(valid_levels)})")
 
-    # Log output directory validation
-    if not config.get('LOG_OUTPUT_DIR'):
-        errors.append("LOG_OUTPUT_DIR is not set (required)")
 
-    # Port validation
+def _validate_webhook_port(config: Dict[str, str], errors: List[str]) -> None:
+    """Validate WEBHOOK_PORT setting."""
     if not config.get('WEBHOOK_PORT'):
         errors.append("WEBHOOK_PORT is not set (required)")
     else:
@@ -393,7 +389,9 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
         except ValueError:
             errors.append(f"WEBHOOK_PORT '{config.get('WEBHOOK_PORT')}' is not a valid number")
 
-    # Retry attempts validation
+
+def _validate_retry_settings(config: Dict[str, str], errors: List[str]) -> None:
+    """Validate RETRY_ATTEMPTS and RETRY_DELAY settings."""
     if not config.get('RETRY_ATTEMPTS'):
         errors.append("RETRY_ATTEMPTS is not set (required)")
     else:
@@ -404,7 +402,6 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
         except ValueError:
             errors.append(f"RETRY_ATTEMPTS '{config.get('RETRY_ATTEMPTS')}' is not a valid number")
 
-    # Retry delay validation
     if not config.get('RETRY_DELAY'):
         errors.append("RETRY_DELAY is not set (required)")
     else:
@@ -414,6 +411,22 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
                 errors.append("RETRY_DELAY cannot be negative")
         except ValueError:
             errors.append(f"RETRY_DELAY '{config.get('RETRY_DELAY')}' is not a valid number")
+
+
+def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str]]:
+    """Validate logging and retry configuration."""
+    errors = []
+    warnings = []
+
+    _validate_docker_settings(config, errors)
+    _validate_log_level(config, errors)
+
+    # Log output directory validation
+    if not config.get('LOG_OUTPUT_DIR'):
+        errors.append("LOG_OUTPUT_DIR is not set (required)")
+
+    _validate_webhook_port(config, errors)
+    _validate_retry_settings(config, errors)
 
     return errors, warnings
 
