@@ -66,7 +66,7 @@ except ImportError:
     pass
 
 
-# Constants
+# Constants (defaults - can be overridden via .env)
 IMAGE_NAME = "bfa-gitlab-pipeline-extractor"
 CONTAINER_NAME = "bfa-gitlab-pipeline-extractor"
 LOGS_DIR = "./logs"
@@ -694,9 +694,12 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
 
     # Container Configuration
     container_table = create_config_table("Container Settings")
-    container_table.add_row("Container Name", CONTAINER_NAME)
-    container_table.add_row("Image Name", IMAGE_NAME)
-    container_table.add_row("Logs Volume", f"{Path.cwd()}/{LOGS_DIR}")
+    container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME)
+    image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME)
+    logs_dir = config.get('DOCKER_LOGS_DIR', LOGS_DIR)
+    container_table.add_row("Container Name", container_name)
+    container_table.add_row("Image Name", image_name)
+    container_table.add_row("Logs Volume", f"{Path.cwd()}/{logs_dir}")
     console.print(container_table)
     console.print()
 
@@ -821,18 +824,22 @@ def build_image(client: docker.DockerClient) -> bool:
     import time
 
     try:
+        # Load config to get image name (if available)
+        config = load_config()
+        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME) if config else IMAGE_NAME
+
         # Get USER_UID and USER_GID from environment or use defaults
         user_uid = os.environ.get('USER_UID', os.getuid() if hasattr(os, 'getuid') else '1000')
         user_gid = os.environ.get('USER_GID', os.getgid() if hasattr(os, 'getgid') else '1000')
 
-        console.print(f"[bold blue]Building Docker image:[/bold blue] {IMAGE_NAME}:latest")
+        console.print(f"[bold blue]Building Docker image:[/bold blue] {image_name}:latest")
         console.print(f"[dim]Build args: USER_UID={user_uid}, USER_GID={user_gid}[/dim]")
 
         # Show shell equivalent
         shell_cmd = (
             f"docker build --build-arg USER_UID={user_uid} "
             f"--build-arg USER_GID={user_gid} "
-            f"-t {IMAGE_NAME}:latest --rm ."
+            f"-t {image_name}:latest --rm ."
         )
         console.print(f"[dim]Shell equivalent: {shell_cmd}[/dim]\n")
 
@@ -851,7 +858,7 @@ def build_image(client: docker.DockerClient) -> bool:
             'docker', 'build',
             '--build-arg', f'USER_UID={user_uid}',
             '--build-arg', f'USER_GID={user_gid}',
-            '-t', f'{IMAGE_NAME}:latest',
+            '-t', f'{image_name}:latest',
             '--rm',
             '.'
         ]
@@ -904,7 +911,7 @@ def build_image(client: docker.DockerClient) -> bool:
 
         console.print("\n[bold green]SUCCESS: Image built successfully![/bold green]")
         console.print(f"[green]  Build time: {elapsed_time:.1f} seconds[/green]")
-        console.print(f"[green]  Image: {IMAGE_NAME}:latest[/green]")
+        console.print(f"[green]  Image: {image_name}:latest[/green]")
         console.print(f"[green]  Build args: USER_UID={user_uid}, USER_GID={user_gid}[/green]")
         return True
 
@@ -969,29 +976,33 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
     """
     try:
         port = int(config.get('WEBHOOK_PORT'))
-        logs_path = Path(LOGS_DIR)
+        container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME)
+        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME)
+        logs_dir = config.get('DOCKER_LOGS_DIR', LOGS_DIR)
+
+        logs_path = Path(logs_dir)
         if not logs_path.exists():
             logs_path.mkdir(parents=True, exist_ok=True)
             logs_path.chmod(0o755)
-            console.print(f"[green][OK] Created logs directory: {LOGS_DIR}[/green]")
+            console.print(f"[green][OK] Created logs directory: {logs_dir}[/green]")
         elif not os.access(logs_path, os.W_OK):
-            console.print(f"[yellow][WARNING] Warning: {LOGS_DIR} may not be writable. Run: sudo chown -R $USER:$USER {LOGS_DIR}[/yellow]")
+            console.print(f"[yellow][WARNING] Warning: {logs_dir} may not be writable. Run: sudo chown -R $USER:$USER {logs_dir}[/yellow]")
 
         if container_exists(client):
             if container_running(client):
                 console.print("[yellow]!  Container is already running. Use 'restart' to restart it.[/yellow]")
                 return True
-            console.print(f"[blue]Starting existing container: {CONTAINER_NAME}[/blue]")
+            console.print(f"[blue]Starting existing container: {container_name}[/blue]")
             client.containers.get(CONTAINER_NAME).start()
             console.print("[bold green][OK] Container started![/bold green]")
-            console.print(f"[dim]Shell equivalent: docker start {CONTAINER_NAME}[/dim]\n")
+            console.print(f"[dim]Shell equivalent: docker start {container_name}[/dim]\n")
             show_endpoints(port)
             return True
 
-        console.print(f"[bold blue]Starting new container: {CONTAINER_NAME} (port {port})[/bold blue]")
+        console.print(f"[bold blue]Starting new container: {container_name} (port {port})[/bold blue]")
 
         # Build volumes dictionary with absolute paths
-        logs_path = Path.cwd() / LOGS_DIR
+        logs_path = Path.cwd() / logs_dir
         env_path = Path.cwd() / ENV_FILE
         volumes = {
             str(logs_path.absolute()): {'bind': '/app/logs', 'mode': 'rw'},
@@ -1008,8 +1019,8 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         # Note: When using network_mode='host', ports parameter must not be specified
         # The container uses the host's network stack directly, so port mapping is automatic
         client.containers.run(
-            f"{IMAGE_NAME}:latest",
-            name=CONTAINER_NAME,
+            f"{image_name}:latest",
+            name=container_name,
             detach=True,
             network_mode='host',
             userns_mode='host',
@@ -1021,7 +1032,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         # Show shell equivalent
         # Note: -p flag is shown for clarity but is ignored when using --network host
         shell_cmd = (
-            f"docker run -d --name {CONTAINER_NAME} "
+            f"docker run -d --name {container_name} "
             f"--network host --userns=host "
             f"-p {port}:{port} "
             f"-v {logs_path.absolute()}:/app/logs:rw "
@@ -1031,7 +1042,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
             shell_cmd += f"-v {jenkins_instances_file.absolute()}:/app/jenkins_instances.json:ro "
         shell_cmd += (
             f"--restart unless-stopped "
-            f"{IMAGE_NAME}:latest"
+            f"{image_name}:latest"
         )
         console.print("[dim]Shell equivalent:[/dim]")
         console.print(f"[dim]{shell_cmd}[/dim]")
@@ -1040,7 +1051,8 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         show_endpoints(port)
         return True
     except ImageNotFound:
-        console.print(f"[bold red][X] Image '{IMAGE_NAME}:latest' not found. Run 'build' command first.[/bold red]")
+        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME)
+        console.print(f"[bold red][X] Image '{image_name}:latest' not found. Run 'build' command first.[/bold red]")
         return False
     except APIError as e:
         console.print(f"[bold red][X] Failed to start container: {str(e)}[/bold red]")
@@ -1313,9 +1325,14 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         True if successful, False otherwise
     """
     try:
+        # Load config to get image/container/logs names (if available)
+        config = load_config()
+        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME) if config else IMAGE_NAME
+        logs_dir = config.get('DOCKER_LOGS_DIR', LOGS_DIR) if config else LOGS_DIR
+
         container_exists_flag = container_exists(client)
         try:
-            client.images.get(f"{IMAGE_NAME}:latest")
+            client.images.get(f"{image_name}:latest")
             image_exists_flag = True
         except ImageNotFound:
             image_exists_flag = False
@@ -1326,7 +1343,7 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
 
         remove_image = False
         if not force:
-            console.print(f"[bold yellow]What would you like to remove? (Logs preserved in {LOGS_DIR})[/bold yellow]")
+            console.print(f"[bold yellow]What would you like to remove? (Logs preserved in {logs_dir})[/bold yellow]")
             if container_exists_flag and image_exists_flag:
                 console.print("[cyan]1.[/cyan] Container only\n[cyan]2.[/cyan] Container and image\n[cyan]3.[/cyan] Cancel")
                 choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="3")
@@ -1344,14 +1361,15 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
                     return False
 
         if container_exists_flag:
-            console.print(f"[blue]Removing container: {CONTAINER_NAME}[/blue]")
+            container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME) if config else CONTAINER_NAME
+            console.print(f"[blue]Removing container: {container_name}[/blue]")
             container = client.containers.get(CONTAINER_NAME)
             stopped_first = False
             if not force_remove and container.status in ['running', 'restarting']:
                 try:
                     console.print("[blue]Stopping container first...[/blue]")
                     container.stop(timeout=10)
-                    console.print(f"[dim]Shell equivalent: docker stop {CONTAINER_NAME}[/dim]")
+                    console.print(f"[dim]Shell equivalent: docker stop {container_name}[/dim]")
                     stopped_first = True
                 except Exception as e:
                     console.print(f"[yellow]!  Could not stop: {e}. Attempting force removal...[/yellow]")
@@ -1359,21 +1377,21 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
             container.remove(force=force_remove)
             console.print("[bold green][OK] Container removed![/bold green]")
             if force_remove:
-                console.print(f"[dim]Shell equivalent: docker rm -f {CONTAINER_NAME}[/dim]")
+                console.print(f"[dim]Shell equivalent: docker rm -f {container_name}[/dim]")
             elif stopped_first:
-                console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
+                console.print(f"[dim]Shell equivalent: docker rm {container_name}[/dim]")
             else:
-                console.print(f"[dim]Shell equivalent: docker rm {CONTAINER_NAME}[/dim]")
+                console.print(f"[dim]Shell equivalent: docker rm {container_name}[/dim]")
 
         if remove_image and image_exists_flag:
             try:
-                console.print(f"[blue]Removing image: {IMAGE_NAME}:latest[/blue]")
-                client.images.remove(f"{IMAGE_NAME}:latest", force=force_remove)
+                console.print(f"[blue]Removing image: {image_name}:latest[/blue]")
+                client.images.remove(f"{image_name}:latest", force=force_remove)
                 console.print("[bold green][OK] Image removed![/bold green]")
                 if force_remove:
-                    console.print(f"[dim]Shell equivalent: docker rmi -f {IMAGE_NAME}:latest[/dim]")
+                    console.print(f"[dim]Shell equivalent: docker rmi -f {image_name}:latest[/dim]")
                 else:
-                    console.print(f"[dim]Shell equivalent: docker rmi {IMAGE_NAME}:latest[/dim]")
+                    console.print(f"[dim]Shell equivalent: docker rmi {image_name}:latest[/dim]")
             except APIError as e:
                 console.print(f"[bold red][X] Failed to remove image: {str(e)}[/bold red]")
                 if not force_remove:
@@ -1381,7 +1399,8 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
                 return False
         return True
     except NotFound:
-        console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
+        container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME) if config else CONTAINER_NAME
+        console.print(f"[yellow]!  Container '{container_name}' does not exist.[/yellow]")
         return True
     except APIError as e:
         console.print(f"[bold red][X] Failed to remove: {str(e)}[/bold red]")
