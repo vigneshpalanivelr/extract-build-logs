@@ -27,7 +27,7 @@ import hmac
 import uuid
 import time
 import tempfile
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -1432,7 +1432,7 @@ def _should_save_logs_to_files(api_post_success: bool) -> bool:
 def _save_pipeline_logs_to_files(
     pipeline_info: Dict[str, Any],
     all_logs: Dict[int, Dict[str, Any]]
-) -> tuple[int, int]:
+) -> Tuple[int, int]:
     """
     Save pipeline logs to files.
 

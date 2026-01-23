@@ -657,7 +657,9 @@ class ApiPoster:
             logger.error("Failed to parse token response from BFA server: %s", e, exc_info=True)
             return None
 
-    def _prepare_authentication_header(self, subject: str) -> Optional[str]:
+    def _prepare_authentication_header(  # pylint: disable=too-many-return-statements
+        self, subject: str
+    ) -> Optional[str]:
         """
         Prepare authentication header value based on available configuration.
 

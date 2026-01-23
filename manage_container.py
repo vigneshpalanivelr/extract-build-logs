@@ -1406,7 +1406,7 @@ def _get_removal_choice(
     container_exists_flag: bool,
     image_exists_flag: bool,
     logs_dir: str
-) -> tuple[bool, bool]:
+) -> Tuple[bool, bool]:
     """
     Get user's choice for what to remove.
 
