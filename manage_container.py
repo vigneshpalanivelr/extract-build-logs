@@ -312,20 +312,6 @@ def load_config(env_file: Path = Path(ENV_FILE)) -> Optional[Dict[str, str]]:
     # Load from .env file
     config = dotenv_values(env_file)
 
-    # Add defaults for missing values
-    defaults = {
-        'WEBHOOK_PORT': '8000',
-        'LOG_LEVEL': 'INFO',
-        'LOG_OUTPUT_DIR': './logs',
-        'RETRY_ATTEMPTS': '3',
-        'RETRY_DELAY': '2',
-        'WEBHOOK_SECRET': '',
-    }
-
-    for key, default in defaults.items():
-        if key not in config or not config[key]:
-            config[key] = default
-
     return config
 
 
@@ -351,32 +337,49 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
 
     # Log level validation
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-    log_level = config.get('LOG_LEVEL', '').upper()
-    if log_level not in valid_levels:
-        warnings.append(f"LOG_LEVEL '{log_level}' is invalid (should be one of: {', '.join(valid_levels)})")
+    if not config.get('LOG_LEVEL'):
+        errors.append("LOG_LEVEL is not set (required)")
+    else:
+        log_level = config.get('LOG_LEVEL').upper()
+        if log_level not in valid_levels:
+            errors.append(f"LOG_LEVEL '{log_level}' is invalid (must be one of: {', '.join(valid_levels)})")
+
+    # Log output directory validation
+    if not config.get('LOG_OUTPUT_DIR'):
+        errors.append("LOG_OUTPUT_DIR is not set (required)")
 
     # Port validation
-    try:
-        port = int(config.get('WEBHOOK_PORT', '8000'))
-        if port < 1 or port > 65535:
-            warnings.append(f"WEBHOOK_PORT {port} is out of valid range (1-65535)")
-    except ValueError:
-        warnings.append(f"WEBHOOK_PORT '{config.get('WEBHOOK_PORT')}' is not a valid number")
+    if not config.get('WEBHOOK_PORT'):
+        errors.append("WEBHOOK_PORT is not set (required)")
+    else:
+        try:
+            port = int(config.get('WEBHOOK_PORT'))
+            if port < 1 or port > 65535:
+                errors.append(f"WEBHOOK_PORT {port} is out of valid range (1-65535)")
+        except ValueError:
+            errors.append(f"WEBHOOK_PORT '{config.get('WEBHOOK_PORT')}' is not a valid number")
 
-    # Retry validation
-    try:
-        retry_attempts = int(config.get('RETRY_ATTEMPTS', '3'))
-        if retry_attempts < 0:
-            warnings.append("RETRY_ATTEMPTS cannot be negative")
-    except ValueError:
-        warnings.append(f"RETRY_ATTEMPTS '{config.get('RETRY_ATTEMPTS')}' is not a valid number")
+    # Retry attempts validation
+    if not config.get('RETRY_ATTEMPTS'):
+        errors.append("RETRY_ATTEMPTS is not set (required)")
+    else:
+        try:
+            retry_attempts = int(config.get('RETRY_ATTEMPTS'))
+            if retry_attempts < 0:
+                errors.append("RETRY_ATTEMPTS cannot be negative")
+        except ValueError:
+            errors.append(f"RETRY_ATTEMPTS '{config.get('RETRY_ATTEMPTS')}' is not a valid number")
 
-    try:
-        retry_delay = int(config.get('RETRY_DELAY', '2'))
-        if retry_delay < 0:
-            warnings.append("RETRY_DELAY cannot be negative")
-    except ValueError:
-        warnings.append(f"RETRY_DELAY '{config.get('RETRY_DELAY')}' is not a valid number")
+    # Retry delay validation
+    if not config.get('RETRY_DELAY'):
+        errors.append("RETRY_DELAY is not set (required)")
+    else:
+        try:
+            retry_delay = int(config.get('RETRY_DELAY'))
+            if retry_delay < 0:
+                errors.append("RETRY_DELAY cannot be negative")
+        except ValueError:
+            errors.append(f"RETRY_DELAY '{config.get('RETRY_DELAY')}' is not a valid number")
 
     return errors, warnings
 
@@ -495,11 +498,13 @@ def validate_system_resources(config: Dict[str, str]) -> Tuple[List[str], List[s
         except Exception:
             pass
 
-    # Check log directory
-    log_dir = Path(config.get('LOG_OUTPUT_DIR', './logs'))
-    # Only check if directory exists - if not, it will be created on start (no warning needed)
-    if log_dir.exists() and not os.access(log_dir, os.W_OK):
-        errors.append(f"Log directory '{log_dir}' is not writable")
+    # Check log directory (only if set - validation catches missing values)
+    log_dir_str = config.get('LOG_OUTPUT_DIR')
+    if log_dir_str:
+        log_dir = Path(log_dir_str)
+        # Only check if directory exists - if not, it will be created on start (no warning needed)
+        if log_dir.exists() and not os.access(log_dir, os.W_OK):
+            errors.append(f"Log directory '{log_dir}' is not writable")
 
     return errors, warnings
 
@@ -621,12 +626,12 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     env_table = create_config_table("Configuration Review")
     env_table.add_row("GitLab URL", config.get('GITLAB_URL', '[dim]Not Set[/dim]'))
     env_table.add_row("GitLab Token", mask_value(config.get('GITLAB_TOKEN', 'Not Set'), 8))
-    env_table.add_row("Webhook Port", config.get('WEBHOOK_PORT', '8000'))
+    env_table.add_row("Webhook Port", config.get('WEBHOOK_PORT', '[dim]Not Set[/dim]'))
     env_table.add_row("Webhook Secret", mask_value(config.get('WEBHOOK_SECRET', ''), 4) if config.get('WEBHOOK_SECRET') else '[dim]Not Set[/dim]')
-    env_table.add_row("Log Level", config.get('LOG_LEVEL', 'INFO'))
-    env_table.add_row("Log Directory", config.get('LOG_OUTPUT_DIR', './logs'))
-    env_table.add_row("Retry Attempts", config.get('RETRY_ATTEMPTS', '3'))
-    env_table.add_row("Retry Delay", f"{config.get('RETRY_DELAY', '2')}s")
+    env_table.add_row("Log Level", config.get('LOG_LEVEL', '[dim]Not Set[/dim]'))
+    env_table.add_row("Log Directory", config.get('LOG_OUTPUT_DIR', '[dim]Not Set[/dim]'))
+    env_table.add_row("Retry Attempts", config.get('RETRY_ATTEMPTS', '[dim]Not Set[/dim]'))
+    env_table.add_row("Retry Delay", f"{config.get('RETRY_DELAY', '[dim]Not Set[/dim]')}s")
     console.print(env_table)
     console.print()
 
@@ -697,8 +702,12 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
 
     # System Information
     system_table = create_config_table("System Information")
-    log_dir = Path(config.get('LOG_OUTPUT_DIR', './logs'))
-    system_table.add_row("Log Directory Size", get_directory_size(log_dir))
+    log_dir_str = config.get('LOG_OUTPUT_DIR')
+    if log_dir_str:
+        log_dir = Path(log_dir_str)
+        system_table.add_row("Log Directory Size", get_directory_size(log_dir))
+    else:
+        system_table.add_row("Log Directory Size", "[dim]Not Set[/dim]")
 
     available, total, percent_used = get_disk_space(Path.cwd())
     disk_color = "green" if percent_used < 80 else ("yellow" if percent_used < 90 else "red")
@@ -791,11 +800,11 @@ def get_port_from_config() -> int:
     Get webhook port from configuration.
 
     Returns:
-        Port number (default 8000)
+        Port number (default 8000 if config missing)
     """
     config = load_config()
-    if config:
-        return int(config.get('WEBHOOK_PORT', '8000'))
+    if config and config.get('WEBHOOK_PORT'):
+        return int(config.get('WEBHOOK_PORT'))
     return 8000
 
 
@@ -959,7 +968,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         True if successful, False otherwise
     """
     try:
-        port = int(config.get('WEBHOOK_PORT', '8000'))
+        port = int(config.get('WEBHOOK_PORT'))
         logs_path = Path(LOGS_DIR)
         if not logs_path.exists():
             logs_path.mkdir(parents=True, exist_ok=True)

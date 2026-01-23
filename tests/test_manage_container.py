@@ -84,7 +84,7 @@ class TestLoadConfig(unittest.TestCase):
     @patch('manage_container.dotenv_values')
     @patch('pathlib.Path.exists')
     def test_load_config_with_defaults(self, mock_exists, mock_dotenv):
-        """Test loading config applies defaults for missing values."""
+        """Test loading config without defaults returns only provided values."""
         mock_exists.return_value = True
         mock_dotenv.return_value = {
             'GITLAB_URL': 'https://gitlab.com',
@@ -93,9 +93,10 @@ class TestLoadConfig(unittest.TestCase):
 
         result = manage_container.load_config(Path('.env'))
 
-        self.assertEqual(result['WEBHOOK_PORT'], '8000')
-        self.assertEqual(result['LOG_LEVEL'], 'INFO')
-        self.assertEqual(result['LOG_OUTPUT_DIR'], './logs')
+        # Defaults are no longer applied - config only contains what's in .env
+        self.assertNotIn('WEBHOOK_PORT', result)
+        self.assertNotIn('LOG_LEVEL', result)
+        self.assertNotIn('LOG_OUTPUT_DIR', result)
 
 
 class TestValidateConfig(unittest.TestCase):
@@ -111,6 +112,7 @@ class TestValidateConfig(unittest.TestCase):
             'WEBHOOK_PORT': '8000',
             'WEBHOOK_SECRET': 'secret',
             'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
             'RETRY_ATTEMPTS': '3',
             'RETRY_DELAY': '2',
         }
@@ -124,36 +126,50 @@ class TestValidateConfig(unittest.TestCase):
         """Test validation catches missing GITLAB_URL."""
         config = {
             'GITLAB_TOKEN': 'glpat-test123',
+            'WEBHOOK_PORT': '8000',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2',
         }
 
         errors, warnings = manage_container.validate_config(config)
 
-        self.assertEqual(len(errors), 1)
-        self.assertIn('GITLAB_URL', errors[0])
+        self.assertGreaterEqual(len(errors), 1)
+        self.assertTrue(any('GITLAB_URL' in e for e in errors))
 
     def test_validate_missing_gitlab_token(self):
         """Test validation catches missing GITLAB_TOKEN."""
         config = {
             'GITLAB_URL': 'https://gitlab.com',
+            'WEBHOOK_PORT': '8000',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2',
         }
 
         errors, warnings = manage_container.validate_config(config)
 
-        self.assertEqual(len(errors), 1)
-        self.assertIn('GITLAB_TOKEN', errors[0])
+        self.assertGreaterEqual(len(errors), 1)
+        self.assertTrue(any('GITLAB_TOKEN' in e for e in errors))
 
     def test_validate_invalid_port(self):
-        """Test validation warns about invalid port."""
+        """Test validation errors on invalid port."""
         config = {
             'GITLAB_URL': 'https://gitlab.com',
             'GITLAB_TOKEN': 'glpat-test123',
             'WEBHOOK_PORT': 'not-a-number',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2',
         }
 
         errors, warnings = manage_container.validate_config(config)
 
-        self.assertEqual(len(errors), 0)
-        self.assertTrue(any('WEBHOOK_PORT' in w for w in warnings))
+        self.assertGreaterEqual(len(errors), 1)
+        self.assertTrue(any('WEBHOOK_PORT' in e for e in errors))
 
 
 class TestConfirmAction(unittest.TestCase):
@@ -1071,9 +1087,16 @@ class TestValidationFunctions(unittest.TestCase):
 
     def test_validate_logging_config_invalid_level(self):
         """Test validation with invalid log level."""
-        config = {'LOG_LEVEL': 'INVALID'}
+        config = {
+            'LOG_LEVEL': 'INVALID',
+            'LOG_OUTPUT_DIR': './logs',
+            'WEBHOOK_PORT': '8000',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2'
+        }
         errors, warnings = manage_container.validate_logging_config(config)
-        self.assertTrue(len(warnings) > 0)
+        self.assertTrue(len(errors) > 0)
+        self.assertTrue(any('LOG_LEVEL' in str(e) and 'invalid' in str(e).lower() for e in errors))
 
     def test_validate_api_config_enabled_missing_url(self):
         """Test API validation when enabled but BFA_HOST missing."""
@@ -1103,7 +1126,7 @@ class TestValidationFunctions(unittest.TestCase):
     def test_validate_system_resources_low_space(self, mock_disk):
         """Test system validation with low disk space."""
         mock_disk.return_value = MagicMock(total=10000000000, free=500000000)  # < 1GB free
-        config = {}
+        config = {'LOG_OUTPUT_DIR': './logs'}
         errors, warnings = manage_container.validate_system_resources(config)
         self.assertTrue(any('disk space' in str(w).lower() for w in warnings))
 
@@ -1349,7 +1372,11 @@ class TestStartContainerEdgeCases(unittest.TestCase):
         mock_container = MagicMock()
         mock_client.containers.get.return_value = mock_container
 
-        config = {'GITLAB_URL': 'https://gitlab.com', 'GITLAB_TOKEN': 'token'}
+        config = {
+            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_TOKEN': 'token',
+            'WEBHOOK_PORT': '8000'
+        }
         result = manage_container.start_container(mock_client, config, skip_confirm=True)
 
         # Should start the existing container
@@ -1448,7 +1475,15 @@ class TestCmdFunctionsExtended(unittest.TestCase):
         args.env_file = '.env'
         args.yes = True
         mock_client.return_value = MagicMock()
-        mock_config.return_value = {'GITLAB_URL': 'https://gitlab.com', 'GITLAB_TOKEN': 'token'}
+        mock_config.return_value = {
+            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_TOKEN': 'token',
+            'WEBHOOK_PORT': '8000',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2'
+        }
         mock_start.return_value = True
 
         manage_container.cmd_start(args)
@@ -1692,27 +1727,51 @@ class TestValidationFunctionsEdgeCases(unittest.TestCase):
 
     def test_validate_logging_config_invalid_port(self):
         """Test logging validation with invalid port."""
-        config = {'WEBHOOK_PORT': 'abc'}
+        config = {
+            'WEBHOOK_PORT': 'abc',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2'
+        }
         errors, warnings = manage_container.validate_logging_config(config)
-        self.assertTrue(any('not a valid number' in str(w) for w in warnings))
+        self.assertTrue(any('not a valid number' in str(e) for e in errors))
 
     def test_validate_logging_config_port_out_of_range(self):
         """Test logging validation with port out of range."""
-        config = {'WEBHOOK_PORT': '70000'}
+        config = {
+            'WEBHOOK_PORT': '70000',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'RETRY_ATTEMPTS': '3',
+            'RETRY_DELAY': '2'
+        }
         errors, warnings = manage_container.validate_logging_config(config)
-        self.assertTrue(any('out of valid range' in str(w) for w in warnings))
+        self.assertTrue(any('out of valid range' in str(e) for e in errors))
 
     def test_validate_logging_config_negative_retry(self):
         """Test logging validation with negative retry attempts."""
-        config = {'RETRY_ATTEMPTS': '-1'}
+        config = {
+            'RETRY_ATTEMPTS': '-1',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'WEBHOOK_PORT': '8000',
+            'RETRY_DELAY': '2'
+        }
         errors, warnings = manage_container.validate_logging_config(config)
-        self.assertTrue(any('cannot be negative' in str(w) for w in warnings))
+        self.assertTrue(any('cannot be negative' in str(e) for e in errors))
 
     def test_validate_logging_config_invalid_retry_delay(self):
         """Test logging validation with invalid retry delay."""
-        config = {'RETRY_DELAY': 'abc'}
+        config = {
+            'RETRY_DELAY': 'abc',
+            'LOG_LEVEL': 'INFO',
+            'LOG_OUTPUT_DIR': './logs',
+            'WEBHOOK_PORT': '8000',
+            'RETRY_ATTEMPTS': '3'
+        }
         errors, warnings = manage_container.validate_logging_config(config)
-        self.assertTrue(any('not a valid number' in str(w) for w in warnings))
+        self.assertTrue(any('not a valid number' in str(e) for e in errors))
 
     def test_validate_api_config_low_timeout(self):
         """Test API validation with low timeout."""
