@@ -862,9 +862,213 @@ async def webhook_jenkins_handler(
         clear_request_id()
 
 
+def _get_jenkins_fetcher_for_build(
+    jenkins_url: Optional[str]
+) -> Optional['JenkinsLogFetcher']:
+    """
+    Get appropriate Jenkins fetcher based on URL.
+
+    Args:
+        jenkins_url: Jenkins instance URL
+
+    Returns:
+        JenkinsLogFetcher instance or None if not available
+    """
+    if not jenkins_url or not jenkins_instance_manager:
+        if jenkins_log_fetcher:
+            logger.debug("Using default Jenkins configuration from .env")
+            return jenkins_log_fetcher
+        return None
+
+    # Try to get credentials from jenkins_instances.json
+    instance = jenkins_instance_manager.get_instance(jenkins_url)
+    if instance:
+        logger.info("Using credentials for Jenkins instance: %s", jenkins_url)
+        return JenkinsLogFetcher(
+            jenkins_url=instance.jenkins_url,
+            jenkins_user=instance.jenkins_user,
+            jenkins_api_token=instance.jenkins_api_token,
+            retry_attempts=config.retry_attempts,
+            retry_delay=config.retry_delay
+        )
+
+    logger.warning("No configuration found for Jenkins URL: %s", jenkins_url)
+
+    # Fall back to global jenkins_log_fetcher
+    if jenkins_log_fetcher:
+        logger.debug("Using default Jenkins configuration from .env")
+        return jenkins_log_fetcher
+
+    return None
+
+
+def _fetch_jenkins_build_metadata(
+    fetcher: 'JenkinsLogFetcher',
+    job_name: str,
+    build_number: int,
+    build_info: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """
+    Fetch and process Jenkins build metadata.
+
+    Args:
+        fetcher: Jenkins log fetcher
+        job_name: Jenkins job name
+        build_number: Build number
+        build_info: Build info dict to update
+
+    Returns:
+        Metadata dict or None on failure
+    """
+    try:
+        metadata = fetcher.fetch_build_info(job_name, build_number)
+        build_info['duration_ms'] = metadata.get('duration', 0)
+        build_info['timestamp'] = metadata.get('timestamp')
+        build_info['result'] = metadata.get('result', build_info.get('status'))
+
+        # Extract pipeline parameters from metadata
+        parameters = {}
+        for action in metadata.get('actions', []):
+            if action.get('_class') == 'hudson.model.ParametersAction':
+                for param in action.get('parameters', []):
+                    parameters[param.get('name')] = param.get('value')
+
+        build_info['parameters'] = parameters
+        logger.debug("Extracted %d parameters from build metadata", len(parameters))
+        return metadata
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to fetch build metadata: %s", e)
+        build_info['parameters'] = {}
+        return None
+
+
+def _extract_failed_stages_with_logs(
+    blue_ocean_stages: list,
+    console_log: str
+) -> list:
+    """
+    Extract failed stages and their log content.
+
+    Args:
+        blue_ocean_stages: List of Blue Ocean stage metadata
+        console_log: Full console log content
+
+    Returns:
+        List of failed stage dicts with log content
+    """
+    # Build list of failed stages from Blue Ocean metadata
+    failed_stages = []
+    for stage in blue_ocean_stages:
+        if stage.get('status') in ['FAILED', 'FAILURE']:
+            failed_stages.append({
+                'stage_name': stage.get('name', 'Unknown'),
+                'stage_id': stage.get('id', ''),
+                'status': stage.get('status', 'UNKNOWN'),
+                'duration_ms': stage.get('durationMillis', 0)
+            })
+
+    logger.info("Found %s total stages, %s failed", len(blue_ocean_stages), len(failed_stages))
+
+    if not failed_stages:
+        return []
+
+    # Extract error context from console log for each failed stage
+    error_extractor = LogErrorExtractor(
+        lines_before=config.error_context_lines_before,
+        lines_after=config.error_context_lines_after
+    )
+
+    # For each failed stage, extract errors from console log
+    for stage in failed_stages:
+        stage_name = stage.get('stage_name')
+        error_sections = error_extractor.extract_error_sections(console_log)
+
+        if error_sections:
+            # Found error patterns, use extracted context
+            stage['log_content'] = error_sections[0]
+            logger.info(
+                "Extracted error context for stage '%s': %s bytes",
+                stage_name,
+                len(error_sections[0])
+            )
+        else:
+            # No error patterns found, use full console log
+            stage['log_content'] = console_log
+            logger.info(
+                "No error patterns found for stage '%s', using full console log: %s bytes",
+                stage_name,
+                len(console_log)
+            )
+
+    return failed_stages
+
+
+def _save_jenkins_build_to_files(
+    job_name: str,
+    build_number: int,
+    console_log: str,
+    failed_stages: list,
+    jenkins_payload: Dict[str, Any]
+) -> None:
+    """
+    Save Jenkins build logs to files.
+
+    Args:
+        job_name: Jenkins job name
+        build_number: Build number
+        console_log: Full console log
+        failed_stages: List of failed stages with logs
+        jenkins_payload: Formatted Jenkins payload
+    """
+    if not config.api_post_save_to_file or not storage_manager:
+        return
+
+    try:
+        # Save console log
+        storage_manager.save_jenkins_console_log(
+            job_name=job_name,
+            build_number=build_number,
+            console_log=console_log
+        )
+
+        # Save stage logs for failed stages
+        for stage in failed_stages:
+            stage_name = stage.get('stage_name')
+            log_content = stage.get('log_content', '')
+            if log_content:
+                storage_manager.save_jenkins_stage_log(
+                    job_name=job_name,
+                    build_number=build_number,
+                    stage_name=stage_name,
+                    log_content=log_content
+                )
+
+        # Save metadata
+        storage_manager.save_jenkins_metadata(
+            job_name=job_name,
+            build_number=build_number,
+            build_data=jenkins_payload
+        )
+
+        logger.info("Saved Jenkins build logs to files", extra={
+            'job_name': job_name,
+            'build_number': build_number,
+            'console_log_size': len(console_log),
+            'stage_logs': len(failed_stages)
+        })
+
+    except Exception as storage_error:  # pylint: disable=broad-exception-caught
+        logger.error(
+            "Failed to save Jenkins logs to files: %s",
+            storage_error,
+            exc_info=True
+        )
+
+
 def process_jenkins_build(
     build_info: Dict[str, Any], db_request_id: int, req_id: str
-):  # pylint: disable=too-many-branches,too-many-nested-blocks  # noqa: C901
+):
     """
     Process a Jenkins build: fetch logs and post to API.
 
@@ -898,57 +1102,18 @@ def process_jenkins_build(
     start_time = time.time()
     monitor.update_request(db_request_id, RequestStatus.PROCESSING)
 
-    # Get Jenkins instance credentials
-    fetcher = None
-    if jenkins_url and jenkins_instance_manager:
-        # Try to get credentials from jenkins_instances.json
-        instance = jenkins_instance_manager.get_instance(jenkins_url)
-        if instance:
-            logger.info("Using credentials for Jenkins instance: %s", jenkins_url)
-            fetcher = JenkinsLogFetcher(
-                jenkins_url=instance.jenkins_url,
-                jenkins_user=instance.jenkins_user,
-                jenkins_api_token=instance.jenkins_api_token,
-                retry_attempts=config.retry_attempts,
-                retry_delay=config.retry_delay
-            )
-        else:
-            logger.warning("No configuration found for Jenkins URL: %s", jenkins_url)
-
-    # Fall back to global jenkins_log_fetcher if no specific instance found
-    if not fetcher and jenkins_log_fetcher:
-        logger.debug("Using default Jenkins configuration from .env")
-        fetcher = jenkins_log_fetcher
-    elif not fetcher:
+    # Get Jenkins fetcher
+    fetcher = _get_jenkins_fetcher_for_build(jenkins_url)
+    if not fetcher:
         logger.error("No Jenkins configuration available for %s", jenkins_url)
         monitor.update_request(db_request_id, RequestStatus.FAILED)
         return
 
-    try:  # pylint: disable=too-many-nested-blocks
+    try:
         # Fetch build metadata
-        metadata = None  # Initialize to None for later use
-        try:
-            metadata = fetcher.fetch_build_info(job_name, build_number)
-            build_info['duration_ms'] = metadata.get('duration', 0)
-            build_info['timestamp'] = metadata.get('timestamp')
-            build_info['result'] = metadata.get('result', status)
+        metadata = _fetch_jenkins_build_metadata(fetcher, job_name, build_number, build_info)
 
-            # Extract pipeline parameters from metadata
-            parameters = {}
-            for action in metadata.get('actions', []):
-                if action.get('_class') == 'hudson.model.ParametersAction':
-                    for param in action.get('parameters', []):
-                        parameters[param.get('name')] = param.get('value')
-
-            build_info['parameters'] = parameters
-            logger.debug("Extracted %d parameters from build metadata", len(parameters))
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning("Failed to fetch build metadata: %s", e)
-            build_info['parameters'] = {}
-            metadata = None  # Ensure it's None on failure
-
-        # Fetch console log using hybrid method (tail + streaming with limits)
-        # This is memory-efficient and handles large logs gracefully
+        # Fetch console log
         log_result = fetcher.fetch_console_log_hybrid(job_name, build_number)
         console_log = log_result['log_content']
         log_method = log_result['method']
@@ -960,62 +1125,19 @@ def process_jenkins_build(
             log_method, total_lines, truncated
         )
 
-        # Fetch Blue Ocean stages metadata (single API call for all stage info)
+        # Fetch Blue Ocean stages metadata
         blue_ocean_stages = fetcher.fetch_stages(job_name, build_number)
-
         if not blue_ocean_stages:
             logger.warning("No Blue Ocean stages available, cannot process build")
             monitor.update_request(db_request_id, RequestStatus.COMPLETED)
             return
 
-        # Build list of failed stages from Blue Ocean metadata
-        failed_stages = []
-        for stage in blue_ocean_stages:
-            if stage.get('status') in ['FAILED', 'FAILURE']:
-                failed_stages.append({
-                    'stage_name': stage.get('name', 'Unknown'),
-                    'stage_id': stage.get('id', ''),
-                    'status': stage.get('status', 'UNKNOWN'),
-                    'duration_ms': stage.get('durationMillis', 0)
-                })
-
-        logger.info("Found %s total stages, %s failed", len(blue_ocean_stages), len(failed_stages))
-
+        # Extract failed stages with error context
+        failed_stages = _extract_failed_stages_with_logs(blue_ocean_stages, console_log)
         if not failed_stages:
             logger.info("No failed stages to process")
             monitor.update_request(db_request_id, RequestStatus.COMPLETED)
             return
-
-        # Extract error context from console log for each failed stage
-        error_extractor = LogErrorExtractor(
-            lines_before=config.error_context_lines_before,
-            lines_after=config.error_context_lines_after
-        )
-
-        # For each failed stage, use full console log with error extraction
-        # This is simple, fast, and works reliably without per-stage API calls
-        for stage in failed_stages:
-            stage_name = stage.get('stage_name')
-
-            # Extract errors from full console log
-            error_sections = error_extractor.extract_error_sections(console_log)
-
-            if error_sections:
-                # Found error patterns, use extracted context
-                stage['log_content'] = error_sections[0]
-                logger.info(
-                    "Extracted error context for stage '%s': %s bytes",
-                    stage_name,
-                    len(error_sections[0])
-                )
-            else:
-                # No error patterns found, use full console log
-                stage['log_content'] = console_log
-                logger.info(
-                    "No error patterns found for stage '%s', using full console log: %s bytes",
-                    stage_name,
-                    len(console_log)
-                )
 
         # Post to API if enabled
         if config.api_post_enabled and api_poster:
@@ -1031,8 +1153,8 @@ def process_jenkins_build(
                     'status': status,
                     'duration_ms': build_info.get('duration_ms', 0),
                     'timestamp': build_info.get('timestamp', ''),
-                    'parameters': build_info.get('parameters', {}),  # Pipeline parameters
-                    'stages': failed_stages  # Only send failed stages with error context
+                    'parameters': build_info.get('parameters', {}),
+                    'stages': failed_stages
                 }
 
                 api_success = api_poster.post_jenkins_logs(jenkins_payload, metadata)
@@ -1051,48 +1173,10 @@ def process_jenkins_build(
                         'build_number': build_number
                     })
 
-                # Save to files if API_POST_SAVE_TO_FILE is enabled (dual mode)
-                if config.api_post_save_to_file and storage_manager:
-                    try:
-                        # Save console log
-                        storage_manager.save_jenkins_console_log(
-                            job_name=job_name,
-                            build_number=build_number,
-                            console_log=console_log
-                        )
-
-                        # Save stage logs for failed stages
-                        for stage in failed_stages:
-                            stage_name = stage.get('stage_name')
-                            log_content = stage.get('log_content', '')
-                            if log_content:
-                                storage_manager.save_jenkins_stage_log(
-                                    job_name=job_name,
-                                    build_number=build_number,
-                                    stage_name=stage_name,
-                                    log_content=log_content
-                                )
-
-                        # Save metadata
-                        storage_manager.save_jenkins_metadata(
-                            job_name=job_name,
-                            build_number=build_number,
-                            build_data=jenkins_payload
-                        )
-
-                        logger.info("Saved Jenkins build logs to files", extra={
-                            'job_name': job_name,
-                            'build_number': build_number,
-                            'console_log_size': len(console_log),
-                            'stage_logs': len(failed_stages)
-                        })
-
-                    except Exception as storage_error:  # pylint: disable=broad-exception-caught
-                        logger.error(
-                            "Failed to save Jenkins logs to files: %s",
-                            storage_error,
-                            exc_info=True
-                        )
+                # Save to files if enabled
+                _save_jenkins_build_to_files(
+                    job_name, build_number, console_log, failed_stages, jenkins_payload
+                )
 
             except Exception as e:  # pylint: disable=broad-exception-caught
                 logger.error("Error posting to API: %s", e, exc_info=True)
@@ -1135,9 +1219,290 @@ def process_jenkins_build(
         clear_request_id()
 
 
+def _save_pipeline_metadata_if_needed(
+    pipeline_info: Dict[str, Any],
+    save_logs: bool
+) -> None:
+    """
+    Save pipeline metadata if configured.
+
+    Args:
+        pipeline_info: Pipeline information dict
+        save_logs: Whether logs will be saved
+    """
+    if not (save_logs or config.log_save_metadata_always):
+        return
+
+    project_id = pipeline_info['project_id']
+    project_name = pipeline_info.get('project_name', 'unknown')
+    pipeline_id = pipeline_info['pipeline_id']
+
+    logger.debug("Saving pipeline metadata for '%s'", project_name, extra={
+        'pipeline_id': pipeline_id,
+        'project_id': project_id,
+        'project_name': project_name
+    })
+
+    storage_manager.save_pipeline_metadata(
+        project_id=project_id,
+        project_name=project_name,
+        pipeline_id=pipeline_id,
+        pipeline_data={
+            "status": pipeline_info['status'],
+            "ref": pipeline_info['ref'],
+            "sha": pipeline_info['sha'],
+            "source": pipeline_info['source'],
+            "pipeline_type": pipeline_info['pipeline_type'],
+            "created_at": pipeline_info['created_at'],
+            "finished_at": pipeline_info['finished_at'],
+            "duration": pipeline_info['duration'],
+            "user": pipeline_info['user'],
+            "stages": pipeline_info['stages']
+        }
+    )
+    logger.debug("Pipeline metadata saved successfully")
+
+
+def _fetch_and_filter_pipeline_jobs(
+    project_id: int,
+    pipeline_id: int,
+    pipeline_info: Dict[str, Any],
+    project_name: str
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Fetch and filter jobs for a pipeline.
+
+    Args:
+        project_id: GitLab project ID
+        pipeline_id: Pipeline ID
+        pipeline_info: Pipeline information for filtering
+        project_name: Project name for logging
+
+    Returns:
+        Dictionary of job_id -> {details, log}
+    """
+    logger.info("Fetching job list for pipeline in '%s'", project_name, extra={
+        'pipeline_id': pipeline_id,
+        'project_id': project_id,
+        'project_name': project_name
+    })
+
+    fetch_start = time.time()
+    all_jobs = log_fetcher.fetch_pipeline_jobs(project_id, pipeline_id)
+
+    # Filter jobs BEFORE fetching logs (optimization)
+    jobs_to_fetch = []
+    skipped_before_fetch = 0
+
+    for job in all_jobs:
+        if should_save_job_log(job, pipeline_info):
+            jobs_to_fetch.append(job)
+        else:
+            skipped_before_fetch += 1
+
+    logger.info(
+        "Job filtering: %s jobs to fetch, %s jobs skipped by filter",
+        len(jobs_to_fetch), skipped_before_fetch, extra={
+            'pipeline_id': pipeline_id,
+            'jobs_to_fetch': len(jobs_to_fetch),
+            'jobs_skipped': skipped_before_fetch,
+            'total_jobs': len(all_jobs)
+        }
+    )
+
+    # Now fetch logs only for filtered jobs
+    all_logs = {}
+    for job in jobs_to_fetch:
+        job_id = job['id']
+        try:
+            log_content = log_fetcher.fetch_job_log(project_id, job_id)
+            all_logs[job_id] = {'details': job, 'log': log_content}
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
+            all_logs[job_id] = {'details': job, 'log': f"[Error fetching log: {str(e)}]"}
+
+    fetch_duration_ms = int((time.time() - fetch_start) * 1000)
+    logger.info("Pipeline logs fetched", extra={
+        'pipeline_id': pipeline_id,
+        'job_count': len(all_logs),
+        'duration_ms': fetch_duration_ms
+    })
+
+    return all_logs
+
+
+def _post_pipeline_logs_to_api(
+    pipeline_info: Dict[str, Any],
+    all_logs: Dict[int, Dict[str, Any]],
+    project_name: str
+) -> bool:
+    """
+    Post pipeline logs to API if enabled.
+
+    Args:
+        pipeline_info: Pipeline information
+        all_logs: Dictionary of job logs
+        project_name: Project name for logging
+
+    Returns:
+        True if API post succeeded, False otherwise
+    """
+    if not (config.api_post_enabled and api_poster):
+        return False
+
+    pipeline_id = pipeline_info['pipeline_id']
+    project_id = pipeline_info['project_id']
+
+    logger.info("Posting pipeline logs to API for '%s'", project_name)
+    api_start = time.time()
+
+    try:
+        api_post_success = api_poster.post_pipeline_logs(pipeline_info, all_logs)
+        api_duration_ms = int((time.time() - api_start) * 1000)
+
+        if api_post_success:
+            logger.info(
+                "Successfully posted pipeline %s logs to API",
+                pipeline_id,
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'api_duration_ms': api_duration_ms,
+                    'job_count': len(all_logs)
+                }
+            )
+        else:
+            logger.warning(
+                "Failed to post pipeline %s logs to API",
+                pipeline_id,
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name
+                }
+            )
+        return api_post_success
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        api_duration_ms = int((time.time() - api_start) * 1000)
+        logger.error(
+            "Unexpected error posting to API: %s",
+            e,
+            extra={
+                'pipeline_id': pipeline_id,
+                'project_id': project_id,
+                'error_type': type(e).__name__
+            },
+            exc_info=True
+        )
+        return False
+
+
+def _should_save_logs_to_files(api_post_success: bool) -> bool:
+    """
+    Determine if logs should be saved to files.
+
+    Args:
+        api_post_success: Whether API posting succeeded
+
+    Returns:
+        True if logs should be saved to files
+    """
+    if not config.api_post_enabled:
+        # API posting disabled, always save to files
+        logger.debug("Saving to files (API posting disabled)")
+        return True
+
+    if config.api_post_save_to_file:
+        # Dual mode: save to files regardless of API result
+        logger.debug("Saving to files (dual mode enabled)")
+        return True
+
+    if not api_post_success:
+        # API posting failed, fallback to file storage
+        logger.info("Saving to files as fallback (API posting failed)")
+        return True
+
+    # API posting succeeded and save_to_file is false
+    logger.info("Skipping file storage (API posting succeeded, file storage disabled)")
+    return False
+
+
+def _save_pipeline_logs_to_files(
+    pipeline_info: Dict[str, Any],
+    all_logs: Dict[int, Dict[str, Any]]
+) -> tuple[int, int]:
+    """
+    Save pipeline logs to files.
+
+    Args:
+        pipeline_info: Pipeline information
+        all_logs: Dictionary of job logs
+
+    Returns:
+        Tuple of (success_count, error_count)
+    """
+    pipeline_id = pipeline_info['pipeline_id']
+    project_id = pipeline_info['project_id']
+    project_name = pipeline_info.get('project_name', 'unknown')
+
+    logger.debug("Starting file storage")
+
+    success_count = 0
+    error_count = 0
+
+    for job_id, job_data in all_logs.items():
+        try:
+            job_details = job_data['details']
+            log_content = job_data['log']
+            log_size = len(log_content)
+
+            logger.debug("Saving job log to file", extra={
+                'pipeline_id': pipeline_id,
+                'job_id': job_id,
+                'job_name': job_details['name'],
+                'log_size_bytes': log_size
+            })
+
+            storage_manager.save_log(
+                project_id=project_id,
+                project_name=project_name,
+                pipeline_id=pipeline_id,
+                job_id=job_id,
+                job_name=job_details['name'],
+                log_content=log_content,
+                job_details={
+                    "status": job_details.get('status'),
+                    "stage": job_details.get('stage'),
+                    "created_at": job_details.get('created_at'),
+                    "started_at": job_details.get('started_at'),
+                    "finished_at": job_details.get('finished_at'),
+                    "duration": job_details.get('duration'),
+                    "ref": job_details.get('ref')
+                }
+            )
+            success_count += 1
+            logger.debug("Job log saved to file successfully", extra={
+                'job_id': job_id,
+                'job_name': job_details['name']
+            })
+
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            error_count += 1
+            logger.error("Failed to save job log to file", extra={
+                'pipeline_id': pipeline_id,
+                'job_id': job_id,
+                'error_type': type(e).__name__,
+                'error': str(e)
+            })
+
+    return success_count, error_count
+
+
 def process_pipeline_event(
     pipeline_info: Dict[str, Any], db_request_id: int, req_id: str
-):  # pylint: disable=too-many-branches  # noqa: C901
+):
     """
     Process a pipeline event: fetch and store logs.
 
@@ -1183,32 +1548,8 @@ def process_pipeline_event(
         # Check if logs should be saved based on filtering config
         save_logs = should_save_pipeline_logs(pipeline_info)
 
-        # Save metadata (always if configured, or if logs will be saved)
-        if save_logs or config.log_save_metadata_always:
-            logger.debug("Saving pipeline metadata for '%s'", project_name, extra={
-                'pipeline_id': pipeline_id,
-                'project_id': project_id,
-                'project_name': project_name
-            })
-
-            storage_manager.save_pipeline_metadata(
-                project_id=project_id,
-                project_name=project_name,
-                pipeline_id=pipeline_id,
-                pipeline_data={
-                    "status": pipeline_info['status'],
-                    "ref": pipeline_info['ref'],
-                    "sha": pipeline_info['sha'],
-                    "source": pipeline_info['source'],
-                    "pipeline_type": pipeline_info['pipeline_type'],
-                    "created_at": pipeline_info['created_at'],
-                    "finished_at": pipeline_info['finished_at'],
-                    "duration": pipeline_info['duration'],
-                    "user": pipeline_info['user'],
-                    "stages": pipeline_info['stages']
-                }
-            )
-            logger.debug("Pipeline metadata saved successfully")
+        # Save metadata if needed
+        _save_pipeline_metadata_if_needed(pipeline_info, save_logs)
 
         # Skip log fetching if filtered out
         if not save_logs:
@@ -1232,176 +1573,25 @@ def process_pipeline_event(
             )
             return
 
-        # Fetch job list first (lightweight API call)
-        logger.info("Fetching job list for pipeline in '%s'", project_name, extra={
-            'pipeline_id': pipeline_id,
-            'project_id': project_id,
-            'project_name': project_name
-        })
-
+        # Fetch and filter jobs
         fetch_start = time.time()
-        all_jobs = log_fetcher.fetch_pipeline_jobs(project_id, pipeline_id)
-
-        # Filter jobs BEFORE fetching logs (optimization)
-        jobs_to_fetch = []
-        skipped_before_fetch = 0
-
-        for job in all_jobs:
-            if should_save_job_log(job, pipeline_info):
-                jobs_to_fetch.append(job)
-            else:
-                skipped_before_fetch += 1
-
-        logger.info(
-            "Job filtering: %s jobs to fetch, %s jobs skipped by filter",
-            len(jobs_to_fetch), skipped_before_fetch, extra={
-                'pipeline_id': pipeline_id,
-                'jobs_to_fetch': len(jobs_to_fetch),
-                'jobs_skipped': skipped_before_fetch,
-                'total_jobs': len(all_jobs)
-            }
+        all_logs = _fetch_and_filter_pipeline_jobs(
+            project_id, pipeline_id, pipeline_info, project_name
         )
-
-        # Now fetch logs only for filtered jobs
-        all_logs = {}
-        for job in jobs_to_fetch:
-            job_id = job['id']
-            try:
-                log_content = log_fetcher.fetch_job_log(project_id, job_id)
-                all_logs[job_id] = {'details': job, 'log': log_content}
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
-                all_logs[job_id] = {'details': job, 'log': f"[Error fetching log: {str(e)}]"}
-
         fetch_duration_ms = int((time.time() - fetch_start) * 1000)
-
         job_count = len(all_logs)
-        logger.info("Pipeline logs fetched", extra={
-            'pipeline_id': pipeline_id,
-            'job_count': job_count,
-            'duration_ms': fetch_duration_ms
-        })
 
-        # Process logs based on API posting configuration
+        # Post to API if enabled
+        save_start = time.time()
+        api_post_success = _post_pipeline_logs_to_api(pipeline_info, all_logs, project_name)
+
+        # Determine if we should save to files and do so
         success_count = 0
         error_count = 0
         skipped_count = 0
-        save_start = time.time()
-        api_post_success = False
 
-        # Try API posting if enabled
-        if config.api_post_enabled and api_poster:
-            logger.info("Posting pipeline logs to API for '%s'", project_name)
-            api_start = time.time()
-
-            try:
-                api_post_success = api_poster.post_pipeline_logs(pipeline_info, all_logs)
-                api_duration_ms = int((time.time() - api_start) * 1000)
-
-                if api_post_success:
-                    logger.info(
-                        "Successfully posted pipeline %s logs to API",
-                        pipeline_id,
-                        extra={
-                            'pipeline_id': pipeline_id,
-                            'project_id': project_id,
-                            'project_name': project_name,
-                            'api_duration_ms': api_duration_ms,
-                            'job_count': job_count
-                        }
-                    )
-                else:
-                    logger.warning(
-                        "Failed to post pipeline %s logs to API",
-                        pipeline_id,
-                        extra={
-                            'pipeline_id': pipeline_id,
-                            'project_id': project_id,
-                            'project_name': project_name
-                        }
-                    )
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                api_duration_ms = int((time.time() - api_start) * 1000)
-                logger.error(
-                    "Unexpected error posting to API: %s",
-                    e,
-                    extra={
-                        'pipeline_id': pipeline_id,
-                        'project_id': project_id,
-                        'error_type': type(e).__name__
-                    },
-                    exc_info=True
-                )
-
-        # Determine if we should save to files
-        should_save_to_files = False
-
-        if not config.api_post_enabled:
-            # API posting disabled, always save to files
-            should_save_to_files = True
-            logger.debug("Saving to files (API posting disabled)")
-        elif config.api_post_save_to_file:
-            # Dual mode: save to files regardless of API result
-            should_save_to_files = True
-            logger.debug("Saving to files (dual mode enabled)")
-        elif not api_post_success:
-            # API posting failed, fallback to file storage
-            should_save_to_files = True
-            logger.info("Saving to files as fallback (API posting failed)")
-        else:
-            # API posting succeeded and save_to_file is false
-            should_save_to_files = False
-            logger.info("Skipping file storage (API posting succeeded, file storage disabled)")
-
-        # Save to files if needed
-        if should_save_to_files:
-            logger.debug("Starting file storage")
-
-            for job_id, job_data in all_logs.items():
-                try:
-                    job_details = job_data['details']
-                    log_content = job_data['log']
-                    log_size = len(log_content)
-
-                    # Note: Jobs are already filtered before fetching, so all jobs in all_logs should be saved
-                    logger.debug("Saving job log to file", extra={
-                        'pipeline_id': pipeline_id,
-                        'job_id': job_id,
-                        'job_name': job_details['name'],
-                        'log_size_bytes': log_size
-                    })
-
-                    storage_manager.save_log(
-                        project_id=project_id,
-                        project_name=project_name,
-                        pipeline_id=pipeline_id,
-                        job_id=job_id,
-                        job_name=job_details['name'],
-                        log_content=log_content,
-                        job_details={
-                            "status": job_details.get('status'),
-                            "stage": job_details.get('stage'),
-                            "created_at": job_details.get('created_at'),
-                            "started_at": job_details.get('started_at'),
-                            "finished_at": job_details.get('finished_at'),
-                            "duration": job_details.get('duration'),
-                            "ref": job_details.get('ref')
-                        }
-                    )
-                    success_count += 1
-                    logger.debug("Job log saved to file successfully", extra={
-                        'job_id': job_id,
-                        'job_name': job_details['name']
-                    })
-
-                except Exception as e:  # pylint: disable=broad-exception-caught
-                    error_count += 1
-                    logger.error("Failed to save job log to file", extra={
-                        'pipeline_id': pipeline_id,
-                        'job_id': job_id,
-                        'error_type': type(e).__name__,
-                        'error': str(e)
-                    })
+        if _should_save_logs_to_files(api_post_success):
+            success_count, error_count = _save_pipeline_logs_to_files(pipeline_info, all_logs)
         else:
             # API posting succeeded, count all jobs as successful
             success_count = job_count

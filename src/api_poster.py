@@ -657,9 +657,80 @@ class ApiPoster:
             logger.error("Failed to parse token response from BFA server: %s", e, exc_info=True)
             return None
 
+    def _prepare_authentication_header(self, subject: str) -> Optional[str]:
+        """
+        Prepare authentication header value based on available configuration.
+
+        Authentication Strategy:
+        1. If TokenManager available -> Generate JWT locally
+        2. Else if BFA_HOST configured -> Fetch token from BFA server
+        3. Else if BFA_SECRET_KEY -> Use raw secret key
+        4. Else -> No authentication
+
+        Args:
+            subject: Subject for JWT token (format: source_repo_pipeline_id)
+
+        Returns:
+            Authorization header value (without "Bearer " prefix) or None
+        """
+        # Strategy 1: Generate JWT locally
+        if self.token_manager:
+            try:
+                jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
+                logger.info("Generated JWT token locally for subject: %s", subject)
+                return jwt_token
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("Failed to generate JWT token: %s", e, exc_info=True)
+                # Fallback to other strategies
+                return self._prepare_fallback_authentication(subject)
+
+        # Strategy 2: Fetch token from BFA server
+        if self.config.bfa_host:
+            try:
+                fetched_token = self._fetch_token_from_bfa_server(subject)
+                if fetched_token:
+                    logger.info("Using token fetched from BFA server for subject: %s", subject)
+                    return fetched_token
+                logger.error("Failed to fetch token from BFA server, no authentication will be sent")
+                return None
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.error("Error fetching token from BFA server: %s", e, exc_info=True)
+                return None
+
+        # Strategy 3: Use raw secret key (legacy)
+        if self.config.bfa_secret_key:
+            logger.info("Using raw secret key for authentication (no TokenManager or BFA_HOST)")
+            return self.config.bfa_secret_key
+
+        # Strategy 4: No authentication
+        logger.warning("No authentication configured (no BFA_SECRET_KEY or BFA_HOST)")
+        return None
+
+    def _prepare_fallback_authentication(self, subject: str) -> Optional[str]:
+        """
+        Prepare fallback authentication when JWT generation fails.
+
+        Args:
+            subject: Subject for JWT token
+
+        Returns:
+            Authorization token or None
+        """
+        if self.config.bfa_host:
+            fetched_token = self._fetch_token_from_bfa_server(subject)
+            if fetched_token:
+                logger.warning("JWT generation failed, using token from BFA server")
+                return fetched_token
+
+        if self.config.bfa_secret_key:
+            logger.warning("JWT generation failed, using raw secret key")
+            return self.config.bfa_secret_key
+
+        return None
+
     def _post_to_api(
         self, payload: Dict[str, Any]
-    ) -> Tuple[int, str, float]:  # pylint: disable=too-many-branches  # noqa: C901
+    ) -> Tuple[int, str, float]:
         """
         Internal method to POST payload to API.
 
@@ -679,50 +750,13 @@ class ApiPoster:
         # Extract info for subject/authentication
         repo = payload.get('repo', 'unknown')
         pipeline_id = payload.get('pipeline_id', '0')
-        source = payload.get('source', 'gitlab')  # Get source from payload, default to 'gitlab'
+        source = payload.get('source', 'gitlab')
         subject = f"{source}_{repo}_{pipeline_id}"
 
-        # Authentication Strategy:
-        # 1. If TokenManager available -> Generate JWT locally
-        # 2. Else if BFA_HOST configured -> Fetch token from BFA server
-        # 3. Else if BFA_SECRET_KEY -> Use raw secret key
-        # 4. Else -> No authentication (will likely fail with 401)
-
-        if self.token_manager:
-            # Strategy 1: Generate JWT locally
-            try:
-                jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
-                headers["Authorization"] = f"Bearer {jwt_token}"
-                logger.info("Generated JWT token locally for subject: %s", subject)
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Failed to generate JWT token: %s", e, exc_info=True)
-                # Fallback to fetching from BFA server
-                if self.config.bfa_host:
-                    fetched_token = self._fetch_token_from_bfa_server(subject)
-                    if fetched_token:
-                        headers["Authorization"] = f"Bearer {fetched_token}"
-                        logger.warning("JWT generation failed, using token from BFA server")
-                elif self.config.bfa_secret_key:
-                    headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
-                    logger.warning("JWT generation failed, using raw secret key")
-        elif self.config.bfa_host:
-            # Strategy 2: Fetch token from BFA server
-            try:
-                fetched_token = self._fetch_token_from_bfa_server(subject)
-                if fetched_token:
-                    headers["Authorization"] = f"Bearer {fetched_token}"
-                    logger.info("Using token fetched from BFA server for subject: %s", subject)
-                else:
-                    logger.error("Failed to fetch token from BFA server, no authentication will be sent")
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Error fetching token from BFA server: %s", e, exc_info=True)
-        elif self.config.bfa_secret_key:
-            # Strategy 3: Use raw secret key (legacy)
-            headers["Authorization"] = f"Bearer {self.config.bfa_secret_key}"
-            logger.info("Using raw secret key for authentication (no TokenManager or BFA_HOST)")
-        else:
-            # Strategy 4: No authentication
-            logger.warning("No authentication configured (no BFA_SECRET_KEY or BFA_HOST)")
+        # Prepare authentication
+        auth_token = self._prepare_authentication_header(subject)
+        if auth_token:
+            headers["Authorization"] = f"Bearer {auth_token}"
 
         start_time = time.time()
 

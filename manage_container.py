@@ -1402,11 +1402,134 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
         return False
 
 
+def _get_removal_choice(
+    container_exists_flag: bool,
+    image_exists_flag: bool,
+    logs_dir: str
+) -> tuple[bool, bool]:
+    """
+    Get user's choice for what to remove.
+
+    Args:
+        container_exists_flag: Whether container exists
+        image_exists_flag: Whether image exists
+        logs_dir: Path to logs directory
+
+    Returns:
+        Tuple of (should_proceed, should_remove_image)
+    """
+    console.print(
+        f"[bold yellow]What would you like to remove? (Logs preserved in {logs_dir})[/bold yellow]"
+    )
+
+    if container_exists_flag and image_exists_flag:
+        console.print(
+            "[cyan]1.[/cyan] Container only\n"
+            "[cyan]2.[/cyan] Container and image\n"
+            "[cyan]3.[/cyan] Cancel"
+        )
+        choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="3")
+        if choice == "3":
+            console.print("[blue]Cancelled.[/blue]")
+            return False, False
+        return True, (choice == "2")
+
+    if container_exists_flag:
+        if not confirm_action("Remove container?", False):
+            console.print("[blue]Cancelled.[/blue]")
+            return False, False
+        return True, False
+
+    if image_exists_flag:
+        if not confirm_action("Remove image?", False):
+            console.print("[blue]Cancelled.[/blue]")
+            return False, False
+        return True, False
+
+    return True, False
+
+
+def _remove_container_resource(
+    client: docker.DockerClient,
+    config: dict,
+    force_remove: bool
+) -> bool:
+    """
+    Remove Docker container.
+
+    Args:
+        client: Docker client
+        config: Configuration dictionary
+        force_remove: If True, force remove even if running
+
+    Returns:
+        True if successful, raises exception otherwise
+    """
+    container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
+    console.print(f"[blue]Removing container: {container_name}[/blue]")
+
+    container = client.containers.get(get_container_name())
+
+    if not force_remove and container.status in ['running', 'restarting']:
+        try:
+            console.print("[blue]Stopping container first...[/blue]")
+            container.stop(timeout=10)
+            console.print(f"[dim]Shell equivalent: docker stop {container_name}[/dim]")
+        except Exception as e:
+            console.print(
+                f"[yellow]!  Could not stop: {e}. Attempting force removal...[/yellow]"
+            )
+            force_remove = True
+
+    container.remove(force=force_remove)
+    console.print("[bold green][OK] Container removed![/bold green]")
+
+    if force_remove:
+        console.print(f"[dim]Shell equivalent: docker rm -f {container_name}[/dim]")
+    else:
+        console.print(f"[dim]Shell equivalent: docker rm {container_name}[/dim]")
+
+    return True
+
+
+def _remove_image_resource(
+    client: docker.DockerClient,
+    image_name: str,
+    force_remove: bool
+) -> bool:
+    """
+    Remove Docker image.
+
+    Args:
+        client: Docker client
+        image_name: Name of the image
+        force_remove: If True, force remove
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        console.print(f"[blue]Removing image: {image_name}:latest[/blue]")
+        client.images.remove(f"{image_name}:latest", force=force_remove)
+        console.print("[bold green][OK] Image removed![/bold green]")
+
+        if force_remove:
+            console.print(f"[dim]Shell equivalent: docker rmi -f {image_name}:latest[/dim]")
+        else:
+            console.print(f"[dim]Shell equivalent: docker rmi {image_name}:latest[/dim]")
+        return True
+    except APIError as e:
+        console.print(f"[bold red][X] Failed to remove image: {str(e)}[/bold red]")
+        if not force_remove:
+            console.print("[yellow][TIP] Tip: Try --force-remove flag[/yellow]")
+        return False
+
+
 def remove_container(
     client: docker.DockerClient,
     force: bool = False,
     force_remove: bool = False
-) -> bool:  # noqa: C901
+) -> bool:
     """
     Remove container and optionally image with user confirmation.
 
@@ -1422,11 +1545,15 @@ def remove_container(
         # Load config to get image/container/logs names (required)
         config = load_config()
         if not config:
-            console.print("[bold red][X] .env file not found. Cannot determine Docker settings.[/bold red]")
+            console.print(
+                "[bold red][X] .env file not found. Cannot determine Docker settings.[/bold red]"
+            )
             return False
+
         image_name = config.get('DOCKER_IMAGE_NAME')
         logs_dir = config.get('DOCKER_LOGS_DIR')
 
+        # Check what exists
         container_exists_flag = container_exists(client)
         try:
             client.images.get(f"{image_name}:latest")
@@ -1438,72 +1565,30 @@ def remove_container(
             console.print("[yellow]!  Neither container nor image exist.[/yellow]")
             return True
 
+        # Get user confirmation
         remove_image = False
         if not force:
-            console.print(f"[bold yellow]What would you like to remove? (Logs preserved in {logs_dir})[/bold yellow]")
-            if container_exists_flag and image_exists_flag:
-                console.print(
-                    "[cyan]1.[/cyan] Container only\n"
-                    "[cyan]2.[/cyan] Container and image\n"
-                    "[cyan]3.[/cyan] Cancel"
-                )
-                choice = Prompt.ask("Select option", choices=["1", "2", "3"], default="3")
-                if choice == "3":
-                    console.print("[blue]Cancelled.[/blue]")
-                    return False
-                remove_image = (choice == "2")
-            elif container_exists_flag:
-                if not confirm_action("Remove container?", False):
-                    console.print("[blue]Cancelled.[/blue]")
-                    return False
-            elif image_exists_flag:
-                if not confirm_action("Remove image?", False):
-                    console.print("[blue]Cancelled.[/blue]")
-                    return False
-
-        if container_exists_flag:
-            if config:
-                container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
-            else:
-                container_name = get_container_name()
-            console.print(f"[blue]Removing container: {container_name}[/blue]")
-            container = client.containers.get(get_container_name())
-            stopped_first = False
-            if not force_remove and container.status in ['running', 'restarting']:
-                try:
-                    console.print("[blue]Stopping container first...[/blue]")
-                    container.stop(timeout=10)
-                    console.print(f"[dim]Shell equivalent: docker stop {container_name}[/dim]")
-                    stopped_first = True
-                except Exception as e:
-                    console.print(f"[yellow]!  Could not stop: {e}. Attempting force removal...[/yellow]")
-                    force_remove = True
-            container.remove(force=force_remove)
-            console.print("[bold green][OK] Container removed![/bold green]")
-            if force_remove:
-                console.print(f"[dim]Shell equivalent: docker rm -f {container_name}[/dim]")
-            elif stopped_first:
-                console.print(f"[dim]Shell equivalent: docker rm {container_name}[/dim]")
-            else:
-                console.print(f"[dim]Shell equivalent: docker rm {container_name}[/dim]")
-
-        if remove_image and image_exists_flag:
-            try:
-                console.print(f"[blue]Removing image: {image_name}:latest[/blue]")
-                client.images.remove(f"{image_name}:latest", force=force_remove)
-                console.print("[bold green][OK] Image removed![/bold green]")
-                if force_remove:
-                    console.print(f"[dim]Shell equivalent: docker rmi -f {image_name}:latest[/dim]")
-                else:
-                    console.print(f"[dim]Shell equivalent: docker rmi {image_name}:latest[/dim]")
-            except APIError as e:
-                console.print(f"[bold red][X] Failed to remove image: {str(e)}[/bold red]")
-                if not force_remove:
-                    console.print("[yellow][TIP] Tip: Try --force-remove flag[/yellow]")
+            should_proceed, remove_image = _get_removal_choice(
+                container_exists_flag, image_exists_flag, logs_dir
+            )
+            if not should_proceed:
                 return False
+
+        # Remove container if exists
+        if container_exists_flag:
+            _remove_container_resource(client, config, force_remove)
+
+        # Remove image if requested and exists
+        if remove_image and image_exists_flag:
+            return _remove_image_resource(client, image_name, force_remove)
+
         return True
+
     except NotFound:
-        container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name()) if config else get_container_name()
+        container_name = (
+            config.get('DOCKER_CONTAINER_NAME', get_container_name())
+            if config else get_container_name()
+        )
         console.print(f"[yellow]!  Container '{container_name}' does not exist.[/yellow]")
         return True
     except APIError as e:
