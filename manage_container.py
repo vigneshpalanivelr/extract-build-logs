@@ -66,18 +66,45 @@ except ImportError:
     pass
 
 
-# Constants (defaults - can be overridden via .env)
-IMAGE_NAME = "bfa-gitlab-pipeline-extractor"
-CONTAINER_NAME = "bfa-gitlab-pipeline-extractor"
-LOGS_DIR = "./logs"
+# Constants
 ENV_FILE = ".env"
 
-# Exit codes
+# Exit codes - These must remain in Python code (not in .env)
+# They are used by sys.exit() to communicate process exit status to the shell
 EXIT_SUCCESS = 0
 EXIT_ERROR = 1
 EXIT_CONFIG_ERROR = 2
 EXIT_DOCKER_ERROR = 3
 EXIT_CANCELLED = 4
+
+# Default values for Docker settings (used when .env is not available)
+_DEFAULT_IMAGE_NAME = "bfa-gitlab-pipeline-extractor"
+_DEFAULT_CONTAINER_NAME = "bfa-gitlab-pipeline-extractor"
+_DEFAULT_LOGS_DIR = "./logs"
+
+
+def get_image_name() -> str:
+    """Get Docker image name from config or use default."""
+    config = load_config()
+    if config and config.get('DOCKER_IMAGE_NAME'):
+        return config.get('DOCKER_IMAGE_NAME')
+    return _DEFAULT_IMAGE_NAME
+
+
+def get_container_name() -> str:
+    """Get Docker container name from config or use default."""
+    config = load_config()
+    if config and config.get('DOCKER_CONTAINER_NAME'):
+        return config.get('DOCKER_CONTAINER_NAME')
+    return _DEFAULT_CONTAINER_NAME
+
+
+def get_logs_dir() -> str:
+    """Get Docker logs directory from config or use default."""
+    config = load_config()
+    if config and config.get('DOCKER_LOGS_DIR'):
+        return config.get('DOCKER_LOGS_DIR')
+    return _DEFAULT_LOGS_DIR
 
 
 # Simple console wrapper that works with or without rich
@@ -698,9 +725,9 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
 
     # Container Configuration
     container_table = create_config_table("Container Settings")
-    container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME)
-    image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME)
-    logs_dir = config.get('DOCKER_LOGS_DIR', LOGS_DIR)
+    container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
+    image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME)
+    logs_dir = config.get('DOCKER_LOGS_DIR', _DEFAULT_LOGS_DIR)
     container_table.add_row("Container Name", container_name)
     container_table.add_row("Image Name", image_name)
     container_table.add_row("Logs Volume", f"{Path.cwd()}/{logs_dir}")
@@ -830,7 +857,7 @@ def build_image(client: docker.DockerClient) -> bool:
     try:
         # Load config to get image name (if available)
         config = load_config()
-        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME) if config else IMAGE_NAME
+        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME) if config else _DEFAULT_IMAGE_NAME
 
         # Get USER_UID and USER_GID from environment or use defaults
         user_uid = os.environ.get('USER_UID', os.getuid() if hasattr(os, 'getuid') else '1000')
@@ -943,7 +970,7 @@ def container_exists(client: docker.DockerClient) -> bool:
         True if container exists, False otherwise
     """
     try:
-        client.containers.get(CONTAINER_NAME)
+        client.containers.get(get_container_name())
         return True
     except NotFound:
         return False
@@ -960,7 +987,7 @@ def container_running(client: docker.DockerClient) -> bool:
         True if container is running, False otherwise
     """
     try:
-        container = client.containers.get(CONTAINER_NAME)
+        container = client.containers.get(get_container_name())
         return container.status == 'running'
     except NotFound:
         return False
@@ -980,9 +1007,9 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
     """
     try:
         port = int(config.get('WEBHOOK_PORT'))
-        container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME)
-        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME)
-        logs_dir = config.get('DOCKER_LOGS_DIR', LOGS_DIR)
+        container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
+        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME)
+        logs_dir = config.get('DOCKER_LOGS_DIR', _DEFAULT_LOGS_DIR)
 
         logs_path = Path(logs_dir)
         if not logs_path.exists():
@@ -997,7 +1024,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
                 console.print("[yellow]!  Container is already running. Use 'restart' to restart it.[/yellow]")
                 return True
             console.print(f"[blue]Starting existing container: {container_name}[/blue]")
-            client.containers.get(CONTAINER_NAME).start()
+            client.containers.get(get_container_name()).start()
             console.print("[bold green][OK] Container started![/bold green]")
             console.print(f"[dim]Shell equivalent: docker start {container_name}[/dim]\n")
             show_endpoints(port)
@@ -1055,7 +1082,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         show_endpoints(port)
         return True
     except ImageNotFound:
-        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME)
+        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME)
         console.print(f"[bold red][X] Image '{image_name}:latest' not found. Run 'build' command first.[/bold red]")
         return False
     except APIError as e:
@@ -1102,15 +1129,15 @@ def stop_container(client: docker.DockerClient) -> bool:
             console.print("[yellow]!  Container is not running.[/yellow]")
             return True
 
-        console.print(f"[blue]Stopping container:[/blue] {CONTAINER_NAME}")
-        container = client.containers.get(CONTAINER_NAME)
+        console.print(f"[blue]Stopping container:[/blue] {get_container_name()}")
+        container = client.containers.get(get_container_name())
         container.stop()
         console.print("[bold green][OK] Container stopped![/bold green]")
-        console.print(f"[dim]Shell equivalent: docker stop {CONTAINER_NAME}[/dim]")
+        console.print(f"[dim]Shell equivalent: docker stop {get_container_name()}[/dim]")
         return True
 
     except NotFound:
-        console.print(f"[yellow]!  Container '{CONTAINER_NAME}' does not exist.[/yellow]")
+        console.print(f"[yellow]!  Container '{get_container_name()}' does not exist.[/yellow]")
         return True
     except APIError as e:
         console.print(f"[bold red][X] Failed to stop container:[/bold red] {str(e)}", style="red")
@@ -1130,7 +1157,7 @@ def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bo
     """
     # Check if container exists first
     if not container_exists(client):
-        console.print(f"[bold red][X] Container '{CONTAINER_NAME}' does not exist.[/bold red]")
+        console.print(f"[bold red][X] Container '{get_container_name()}' does not exist.[/bold red]")
         console.print("[yellow]Use 'start' command to create and start the container.[/yellow]")
         return False
 
@@ -1140,9 +1167,9 @@ def restart_container(client: docker.DockerClient, config: Dict[str, str]) -> bo
         console.print("[yellow]Use 'start' command to start it.[/yellow]")
         return False
 
-    console.print(f"[bold blue]Restarting container:[/bold blue] {CONTAINER_NAME}")
-    console.print(f"[dim]Shell equivalent: docker restart {CONTAINER_NAME}[/dim]")
-    console.print(f"[dim]Or: docker stop {CONTAINER_NAME} && docker start {CONTAINER_NAME}[/dim]\n")
+    console.print(f"[bold blue]Restarting container:[/bold blue] {get_container_name()}")
+    console.print(f"[dim]Shell equivalent: docker restart {get_container_name()}[/dim]")
+    console.print(f"[dim]Or: docker stop {get_container_name()} && docker start {get_container_name()}[/dim]\n")
 
     if not stop_container(client):
         return False
@@ -1165,17 +1192,17 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
     """
     try:
         if not container_exists(client):
-            console.print(f"[bold red][X] Container '{CONTAINER_NAME}' does not exist.[/bold red]")
+            console.print(f"[bold red][X] Container '{get_container_name()}' does not exist.[/bold red]")
             return False
 
-        console.print(f"[blue]Showing logs for:[/blue] {CONTAINER_NAME}")
+        console.print(f"[blue]Showing logs for:[/blue] {get_container_name()}")
         if follow:
             console.print("[dim]Press Ctrl+C to exit[/dim]")
-            console.print(f"[dim]Shell equivalent: docker logs -f {CONTAINER_NAME}[/dim]\n")
+            console.print(f"[dim]Shell equivalent: docker logs -f {get_container_name()}[/dim]\n")
         else:
-            console.print(f"[dim]Shell equivalent: docker logs {CONTAINER_NAME}[/dim]\n")
+            console.print(f"[dim]Shell equivalent: docker logs {get_container_name()}[/dim]\n")
 
-        container = client.containers.get(CONTAINER_NAME)
+        container = client.containers.get(get_container_name())
 
         if follow:
             try:
@@ -1194,7 +1221,7 @@ def show_logs(client: docker.DockerClient, follow: bool = True) -> bool:
         console.print("\n[yellow]Stopped following logs.[/yellow]")
         return True
     except NotFound:
-        console.print(f"[bold red][X] Container '{CONTAINER_NAME}' not found.[/bold red]")
+        console.print(f"[bold red][X] Container '{get_container_name()}' not found.[/bold red]")
         return False
     except APIError as e:
         console.print(f"[bold red][X] Failed to get logs:[/bold red] {str(e)}", style="red")
@@ -1217,7 +1244,7 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
         return True
 
     try:
-        container = client.containers.get(CONTAINER_NAME)
+        container = client.containers.get(get_container_name())
         if container.status == 'running':
             console.print("[bold green][OK] Container is RUNNING[/bold green]\n")
 
@@ -1309,7 +1336,7 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
             console.print("Use 'start' command to start it.")
         return True
     except NotFound:
-        console.print(f"[bold red][X] Container '{CONTAINER_NAME}' not found.[/bold red]")
+        console.print(f"[bold red][X] Container '{get_container_name()}' not found.[/bold red]")
         return False
     except APIError as e:
         console.print(f"[bold red][X] Failed to get status:[/bold red] {str(e)}", style="red")
@@ -1331,8 +1358,8 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
     try:
         # Load config to get image/container/logs names (if available)
         config = load_config()
-        image_name = config.get('DOCKER_IMAGE_NAME', IMAGE_NAME) if config else IMAGE_NAME
-        logs_dir = config.get('DOCKER_LOGS_DIR', LOGS_DIR) if config else LOGS_DIR
+        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME) if config else _DEFAULT_IMAGE_NAME
+        logs_dir = config.get('DOCKER_LOGS_DIR', _DEFAULT_LOGS_DIR) if config else _DEFAULT_LOGS_DIR
 
         container_exists_flag = container_exists(client)
         try:
@@ -1365,9 +1392,9 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
                     return False
 
         if container_exists_flag:
-            container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME) if config else CONTAINER_NAME
+            container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name()) if config else get_container_name()
             console.print(f"[blue]Removing container: {container_name}[/blue]")
-            container = client.containers.get(CONTAINER_NAME)
+            container = client.containers.get(get_container_name())
             stopped_first = False
             if not force_remove and container.status in ['running', 'restarting']:
                 try:
@@ -1403,7 +1430,7 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
                 return False
         return True
     except NotFound:
-        container_name = config.get('DOCKER_CONTAINER_NAME', CONTAINER_NAME) if config else CONTAINER_NAME
+        container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name()) if config else get_container_name()
         console.print(f"[yellow]!  Container '{container_name}' does not exist.[/yellow]")
         return True
     except APIError as e:
@@ -1432,7 +1459,7 @@ def show_monitor(client: docker.DockerClient, args: List[str]) -> bool:
         console.print("[blue]Opening monitoring dashboard...[/blue]\n")
 
         # Run scripts/monitor_dashboard.py inside container
-        container = client.containers.get(CONTAINER_NAME)
+        container = client.containers.get(get_container_name())
         cmd = ['python', 'scripts/monitor_dashboard.py'] + args
 
         result = container.exec_run(cmd, stream=True, tty=True)
