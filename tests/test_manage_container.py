@@ -109,6 +109,9 @@ class TestValidateConfig(unittest.TestCase):
         config = {
             'GITLAB_URL': 'https://gitlab.com',
             'GITLAB_TOKEN': 'glpat-test123',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs',
             'WEBHOOK_PORT': '8000',
             'WEBHOOK_SECRET': 'secret',
             'LOG_LEVEL': 'INFO',
@@ -126,6 +129,9 @@ class TestValidateConfig(unittest.TestCase):
         """Test validation catches missing GITLAB_URL."""
         config = {
             'GITLAB_TOKEN': 'glpat-test123',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs',
             'WEBHOOK_PORT': '8000',
             'LOG_LEVEL': 'INFO',
             'LOG_OUTPUT_DIR': './logs',
@@ -142,6 +148,9 @@ class TestValidateConfig(unittest.TestCase):
         """Test validation catches missing GITLAB_TOKEN."""
         config = {
             'GITLAB_URL': 'https://gitlab.com',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs',
             'WEBHOOK_PORT': '8000',
             'LOG_LEVEL': 'INFO',
             'LOG_OUTPUT_DIR': './logs',
@@ -159,6 +168,9 @@ class TestValidateConfig(unittest.TestCase):
         config = {
             'GITLAB_URL': 'https://gitlab.com',
             'GITLAB_TOKEN': 'glpat-test123',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs',
             'WEBHOOK_PORT': 'not-a-number',
             'LOG_LEVEL': 'INFO',
             'LOG_OUTPUT_DIR': './logs',
@@ -249,13 +261,21 @@ class TestGetPortFromConfig(unittest.TestCase):
 class TestBuildImage(unittest.TestCase):
     """Test cases for build_image function."""
 
+    @patch('manage_container.load_config')
     @patch('manage_container.subprocess.run')
     @patch('manage_container.Progress')
     @patch('manage_container.os.environ.get')
     @patch('manage_container.os.path.abspath')
     @patch('manage_container.console')
-    def test_build_image_success(self, mock_console, mock_abspath, mock_env_get, mock_progress, mock_subprocess):
+    def test_build_image_success(self, mock_console, mock_abspath, mock_env_get, mock_progress, mock_subprocess, mock_load_config):
         """Test successful image build using subprocess (SDK has user namespace issue)."""
+        # Mock load_config to return config with Docker settings
+        mock_load_config.return_value = {
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
+
         # Mock os.path.abspath to return current directory
         mock_abspath.return_value = '/current/dir'
 
@@ -397,7 +417,7 @@ class TestStartContainer(unittest.TestCase):
         mock_exists.return_value = True
         mock_running.return_value = True
         mock_client = MagicMock()
-        config = {'WEBHOOK_PORT': '8000'}
+        config = {'WEBHOOK_PORT': '8000', 'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_LOGS_DIR': './logs'}
 
         # Mock Path instance
         mock_path_instance = MagicMock()
@@ -417,7 +437,7 @@ class TestStartContainer(unittest.TestCase):
         """Test starting new container with host network and user namespace."""
         mock_exists.return_value = False
         mock_client = MagicMock()
-        config = {'WEBHOOK_PORT': '8000'}
+        config = {'WEBHOOK_PORT': '8000', 'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_LOGS_DIR': './logs'}
 
         # Mock Path instance
         mock_path_instance = MagicMock()
@@ -484,7 +504,7 @@ class TestRestartContainer(unittest.TestCase):
         mock_stop.return_value = True
         mock_start.return_value = True
         mock_client = MagicMock()
-        config = {'WEBHOOK_PORT': '8000'}
+        config = {'WEBHOOK_PORT': '8000', 'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor', 'DOCKER_LOGS_DIR': './logs'}
 
         result = manage_container.restart_container(mock_client, config)
 
@@ -676,11 +696,16 @@ class TestOpenShell(unittest.TestCase):
 class TestRemoveContainer(unittest.TestCase):
     """Test cases for remove_container function."""
 
+    @patch('manage_container.load_config')
     @patch('manage_container.stop_container')
     @patch('manage_container.console')
     @patch('manage_container.container_exists')
-    def test_remove_container_with_force(self, mock_exists, mock_console, mock_stop):
+    def test_remove_container_with_force(self, mock_exists, mock_console, mock_stop, mock_load_config):
         """Test removing container with force flag."""
+        mock_load_config.return_value = {
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
         mock_exists.return_value = True
         mock_client = MagicMock()
         mock_container = MagicMock()
@@ -1375,6 +1400,9 @@ class TestStartContainerEdgeCases(unittest.TestCase):
         config = {
             'GITLAB_URL': 'https://gitlab.com',
             'GITLAB_TOKEN': 'token',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs',
             'WEBHOOK_PORT': '8000'
         }
         result = manage_container.start_container(mock_client, config, skip_confirm=True)
@@ -1411,10 +1439,15 @@ class TestShowLogsEdgeCases(unittest.TestCase):
 class TestRemoveContainerEdgeCases(unittest.TestCase):
     """Test edge cases for remove_container function."""
 
+    @patch('manage_container.load_config')
     @patch('manage_container.container_exists')
     @patch('manage_container.console')
-    def test_remove_container_force_running(self, mock_console, mock_exists):
+    def test_remove_container_force_running(self, mock_console, mock_exists, mock_load_config):
         """Test removing running container with force."""
+        mock_load_config.return_value = {
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
         mock_exists.return_value = True
         mock_client = MagicMock()
         mock_container = MagicMock()
@@ -1427,11 +1460,16 @@ class TestRemoveContainerEdgeCases(unittest.TestCase):
         mock_container.remove.assert_called_once_with(force=True)
         self.assertTrue(result)
 
+    @patch('manage_container.load_config')
     @patch('manage_container.Prompt')
     @patch('manage_container.container_exists')
     @patch('manage_container.console')
-    def test_remove_container_stop_fails(self, mock_console, mock_exists, mock_prompt):
+    def test_remove_container_stop_fails(self, mock_console, mock_exists, mock_prompt, mock_load_config):
         """Test removing container when stop fails."""
+        mock_load_config.return_value = {
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs'
+        }
         mock_exists.return_value = True
         mock_prompt.ask.return_value = "1"  # Choose force remove option
         mock_client = MagicMock()
@@ -1478,6 +1516,9 @@ class TestCmdFunctionsExtended(unittest.TestCase):
         mock_config.return_value = {
             'GITLAB_URL': 'https://gitlab.com',
             'GITLAB_TOKEN': 'token',
+            'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
+            'DOCKER_LOGS_DIR': './logs',
             'WEBHOOK_PORT': '8000',
             'LOG_LEVEL': 'INFO',
             'LOG_OUTPUT_DIR': './logs',

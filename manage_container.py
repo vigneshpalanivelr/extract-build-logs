@@ -77,34 +77,29 @@ EXIT_CONFIG_ERROR = 2
 EXIT_DOCKER_ERROR = 3
 EXIT_CANCELLED = 4
 
-# Default values for Docker settings (used when .env is not available)
-_DEFAULT_IMAGE_NAME = "bfa-gitlab-pipeline-extractor"
-_DEFAULT_CONTAINER_NAME = "bfa-gitlab-pipeline-extractor"
-_DEFAULT_LOGS_DIR = "./logs"
-
 
 def get_image_name() -> str:
-    """Get Docker image name from config or use default."""
+    """Get Docker image name from config (required field)."""
     config = load_config()
-    if config and config.get('DOCKER_IMAGE_NAME'):
+    if config:
         return config.get('DOCKER_IMAGE_NAME')
-    return _DEFAULT_IMAGE_NAME
+    return None
 
 
 def get_container_name() -> str:
-    """Get Docker container name from config or use default."""
+    """Get Docker container name from config (required field)."""
     config = load_config()
-    if config and config.get('DOCKER_CONTAINER_NAME'):
+    if config:
         return config.get('DOCKER_CONTAINER_NAME')
-    return _DEFAULT_CONTAINER_NAME
+    return None
 
 
 def get_logs_dir() -> str:
-    """Get Docker logs directory from config or use default."""
+    """Get Docker logs directory from config (required field)."""
     config = load_config()
-    if config and config.get('DOCKER_LOGS_DIR'):
+    if config:
         return config.get('DOCKER_LOGS_DIR')
-    return _DEFAULT_LOGS_DIR
+    return None
 
 
 # Simple console wrapper that works with or without rich
@@ -365,6 +360,14 @@ def validate_logging_config(config: Dict[str, str]) -> Tuple[List[str], List[str
     """Validate logging and retry configuration."""
     errors = []
     warnings = []
+
+    # Docker settings validation
+    if not config.get('DOCKER_IMAGE_NAME'):
+        errors.append("DOCKER_IMAGE_NAME is not set (required)")
+    if not config.get('DOCKER_CONTAINER_NAME'):
+        errors.append("DOCKER_CONTAINER_NAME is not set (required)")
+    if not config.get('DOCKER_LOGS_DIR'):
+        errors.append("DOCKER_LOGS_DIR is not set (required)")
 
     # Log level validation
     valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
@@ -726,8 +729,8 @@ def show_config_table(config: Dict[str, str], quiet: bool = False) -> None:
     # Container Configuration
     container_table = create_config_table("Container Settings")
     container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
-    image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME)
-    logs_dir = config.get('DOCKER_LOGS_DIR', _DEFAULT_LOGS_DIR)
+    image_name = config.get('DOCKER_IMAGE_NAME')
+    logs_dir = config.get('DOCKER_LOGS_DIR')
     container_table.add_row("Container Name", container_name)
     container_table.add_row("Image Name", image_name)
     container_table.add_row("Logs Volume", f"{Path.cwd()}/{logs_dir}")
@@ -855,9 +858,12 @@ def build_image(client: docker.DockerClient) -> bool:
     import time
 
     try:
-        # Load config to get image name (if available)
+        # Load config to get image name (required)
         config = load_config()
-        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME) if config else _DEFAULT_IMAGE_NAME
+        if not config:
+            console.print("[bold red][X] .env file not found. Cannot build without configuration.[/bold red]")
+            return False
+        image_name = config.get('DOCKER_IMAGE_NAME')
 
         # Get USER_UID and USER_GID from environment or use defaults
         user_uid = os.environ.get('USER_UID', os.getuid() if hasattr(os, 'getuid') else '1000')
@@ -1008,8 +1014,8 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
     try:
         port = int(config.get('WEBHOOK_PORT'))
         container_name = config.get('DOCKER_CONTAINER_NAME', get_container_name())
-        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME)
-        logs_dir = config.get('DOCKER_LOGS_DIR', _DEFAULT_LOGS_DIR)
+        image_name = config.get('DOCKER_IMAGE_NAME')
+        logs_dir = config.get('DOCKER_LOGS_DIR')
 
         logs_path = Path(logs_dir)
         if not logs_path.exists():
@@ -1082,7 +1088,7 @@ def start_container(client: docker.DockerClient, config: Dict[str, str], skip_co
         show_endpoints(port)
         return True
     except ImageNotFound:
-        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME)
+        image_name = config.get('DOCKER_IMAGE_NAME')
         console.print(f"[bold red][X] Image '{image_name}:latest' not found. Run 'build' command first.[/bold red]")
         return False
     except APIError as e:
@@ -1356,10 +1362,13 @@ def remove_container(client: docker.DockerClient, force: bool = False, force_rem
         True if successful, False otherwise
     """
     try:
-        # Load config to get image/container/logs names (if available)
+        # Load config to get image/container/logs names (required)
         config = load_config()
-        image_name = config.get('DOCKER_IMAGE_NAME', _DEFAULT_IMAGE_NAME) if config else _DEFAULT_IMAGE_NAME
-        logs_dir = config.get('DOCKER_LOGS_DIR', _DEFAULT_LOGS_DIR) if config else _DEFAULT_LOGS_DIR
+        if not config:
+            console.print("[bold red][X] .env file not found. Cannot determine Docker settings.[/bold red]")
+            return False
+        image_name = config.get('DOCKER_IMAGE_NAME')
+        logs_dir = config.get('DOCKER_LOGS_DIR')
 
         container_exists_flag = container_exists(client)
         try:
