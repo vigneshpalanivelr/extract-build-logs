@@ -539,5 +539,175 @@ class TestConfigLoader(unittest.TestCase):
         self.assertIn('jenkins_instances.json', error_msg)
 
 
+class TestConfigLoaderHelpers(unittest.TestCase):
+    """Test cases for ConfigLoader helper methods."""
+
+    def setUp(self):
+        """Set up test fixtures - save and clear environment variables."""
+        self.original_env = os.environ.copy()
+        # Clear all relevant environment variables
+        for key in list(os.environ.keys()):
+            if key.startswith(('GITLAB_', 'WEBHOOK_', 'LOG_', 'API_POST_',
+                               'JENKINS_', 'BFA_', 'RETRY_', 'ERROR_',
+                               'MAX_', 'TAIL_', 'STREAM_')):
+                del os.environ[key]
+
+    def tearDown(self):
+        """Clean up test fixtures - restore environment variables."""
+        os.environ.clear()
+        os.environ.update(self.original_env)
+
+    def test_load_basic_settings_with_defaults(self):
+        """Test _load_basic_settings with default values."""
+        result = ConfigLoader._load_basic_settings()
+
+        self.assertEqual(result['webhook_port'], 8000)
+        self.assertIsNone(result['webhook_secret'])
+        self.assertEqual(result['log_output_dir'], './logs/pipeline-logs')
+        self.assertEqual(result['retry_attempts'], 3)
+        self.assertEqual(result['retry_delay'], 2)
+        self.assertEqual(result['log_level'], 'INFO')
+
+    def test_load_basic_settings_with_custom_values(self):
+        """Test _load_basic_settings with custom environment variables."""
+        os.environ['WEBHOOK_PORT'] = '9000'
+        os.environ['WEBHOOK_SECRET'] = 'secret123'
+        os.environ['LOG_OUTPUT_DIR'] = '/custom/logs'
+        os.environ['RETRY_ATTEMPTS'] = '5'
+        os.environ['RETRY_DELAY'] = '3'
+        os.environ['LOG_LEVEL'] = 'debug'
+
+        result = ConfigLoader._load_basic_settings()
+
+        self.assertEqual(result['webhook_port'], 9000)
+        self.assertEqual(result['webhook_secret'], 'secret123')
+        self.assertEqual(result['log_output_dir'], '/custom/logs')
+        self.assertEqual(result['retry_attempts'], 5)
+        self.assertEqual(result['retry_delay'], 3)
+        self.assertEqual(result['log_level'], 'DEBUG')
+
+    def test_load_log_filtering_with_defaults(self):
+        """Test _load_log_filtering with default values."""
+        result = ConfigLoader._load_log_filtering()
+
+        self.assertEqual(result['log_save_pipeline_status'], ['all'])
+        self.assertEqual(result['log_save_projects'], [])
+        self.assertEqual(result['log_exclude_projects'], [])
+        self.assertEqual(result['log_save_job_status'], ['all'])
+        self.assertTrue(result['log_save_metadata_always'])
+
+    def test_load_log_filtering_with_custom_values(self):
+        """Test _load_log_filtering with custom filter settings."""
+        os.environ['LOG_SAVE_PIPELINE_STATUS'] = 'failed,success'
+        os.environ['LOG_SAVE_PROJECTS'] = 'project1, project2'
+        os.environ['LOG_EXCLUDE_PROJECTS'] = 'test-project'
+        os.environ['LOG_SAVE_JOB_STATUS'] = 'failed'
+        os.environ['LOG_SAVE_METADATA_ALWAYS'] = 'false'
+
+        result = ConfigLoader._load_log_filtering()
+
+        self.assertEqual(result['log_save_pipeline_status'], ['failed', 'success'])
+        self.assertEqual(result['log_save_projects'], ['project1', 'project2'])
+        self.assertEqual(result['log_exclude_projects'], ['test-project'])
+        self.assertEqual(result['log_save_job_status'], ['failed'])
+        self.assertFalse(result['log_save_metadata_always'])
+
+    def test_load_api_config_with_defaults(self):
+        """Test _load_api_config with default values."""
+        result = ConfigLoader._load_api_config()
+
+        self.assertFalse(result['api_post_enabled'])
+        self.assertEqual(result['api_post_timeout'], 30)
+        self.assertTrue(result['api_post_retry_enabled'])
+        self.assertFalse(result['api_post_save_to_file'])
+
+    def test_load_api_config_enabled(self):
+        """Test _load_api_config when API posting is enabled."""
+        os.environ['API_POST_ENABLED'] = 'true'
+        os.environ['API_POST_TIMEOUT'] = '60'
+        os.environ['API_POST_RETRY_ENABLED'] = 'false'
+        os.environ['API_POST_SAVE_TO_FILE'] = '1'
+
+        result = ConfigLoader._load_api_config()
+
+        self.assertTrue(result['api_post_enabled'])
+        self.assertEqual(result['api_post_timeout'], 60)
+        self.assertFalse(result['api_post_retry_enabled'])
+        self.assertTrue(result['api_post_save_to_file'])
+
+    def test_load_jenkins_config_disabled(self):
+        """Test _load_jenkins_config when Jenkins is disabled."""
+        result = ConfigLoader._load_jenkins_config()
+
+        self.assertFalse(result['jenkins_enabled'])
+        self.assertIsNone(result['jenkins_url'])
+        self.assertIsNone(result['jenkins_user'])
+        self.assertIsNone(result['jenkins_api_token'])
+        self.assertIsNone(result['jenkins_webhook_secret'])
+
+    def test_load_jenkins_config_enabled(self):
+        """Test _load_jenkins_config with full Jenkins configuration."""
+        os.environ['JENKINS_ENABLED'] = 'yes'
+        os.environ['JENKINS_URL'] = 'https://jenkins.example.com/'
+        os.environ['JENKINS_USER'] = 'admin'
+        os.environ['JENKINS_API_TOKEN'] = 'token123'
+        os.environ['JENKINS_WEBHOOK_SECRET'] = 'webhook_secret'
+
+        result = ConfigLoader._load_jenkins_config()
+
+        self.assertTrue(result['jenkins_enabled'])
+        # URL should have trailing slash removed
+        self.assertEqual(result['jenkins_url'], 'https://jenkins.example.com')
+        self.assertEqual(result['jenkins_user'], 'admin')
+        self.assertEqual(result['jenkins_api_token'], 'token123')
+        self.assertEqual(result['jenkins_webhook_secret'], 'webhook_secret')
+
+    def test_load_bfa_config_not_set(self):
+        """Test _load_bfa_config when BFA is not configured."""
+        result = ConfigLoader._load_bfa_config()
+
+        self.assertIsNone(result['bfa_host'])
+        self.assertIsNone(result['bfa_secret_key'])
+        self.assertIsNone(result['api_post_url'])
+
+    def test_load_bfa_config_with_host(self):
+        """Test _load_bfa_config with BFA host configured."""
+        os.environ['BFA_HOST'] = '192.168.1.100'
+        os.environ['BFA_SECRET_KEY'] = 'secret_key_123'
+
+        result = ConfigLoader._load_bfa_config()
+
+        self.assertEqual(result['bfa_host'], '192.168.1.100')
+        self.assertEqual(result['bfa_secret_key'], 'secret_key_123')
+        # API URL should be auto-constructed
+        self.assertEqual(result['api_post_url'], 'http://192.168.1.100:8000/api/analyze')
+
+    def test_load_log_limits_with_defaults(self):
+        """Test _load_log_limits with default values."""
+        result = ConfigLoader._load_log_limits()
+
+        self.assertEqual(result['error_context_lines_before'], 50)
+        self.assertEqual(result['error_context_lines_after'], 10)
+        self.assertEqual(result['max_log_lines'], 100000)
+        self.assertEqual(result['tail_log_lines'], 5000)
+        self.assertEqual(result['stream_chunk_size'], 8192)
+
+    def test_load_log_limits_with_custom_values(self):
+        """Test _load_log_limits with custom values."""
+        os.environ['ERROR_CONTEXT_LINES_BEFORE'] = '100'
+        os.environ['ERROR_CONTEXT_LINES_AFTER'] = '20'
+        os.environ['MAX_LOG_LINES'] = '200000'
+        os.environ['TAIL_LOG_LINES'] = '10000'
+        os.environ['STREAM_CHUNK_SIZE'] = '16384'
+
+        result = ConfigLoader._load_log_limits()
+
+        self.assertEqual(result['error_context_lines_before'], 100)
+        self.assertEqual(result['error_context_lines_after'], 20)
+        self.assertEqual(result['max_log_lines'], 200000)
+        self.assertEqual(result['tail_log_lines'], 10000)
+        self.assertEqual(result['stream_chunk_size'], 16384)
+
+
 if __name__ == '__main__':
     unittest.main()
