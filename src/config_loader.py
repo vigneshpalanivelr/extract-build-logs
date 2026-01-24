@@ -13,7 +13,7 @@ Invokes: None
 """
 
 import os
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 
 
@@ -101,7 +101,131 @@ class ConfigLoader:
     """
 
     @staticmethod
-    def load() -> Config:  # pylint: disable=too-many-branches,too-many-locals
+    def _load_basic_settings() -> Dict[str, Any]:
+        """Load basic webhook and logging settings."""
+        webhook_port = int(os.getenv('WEBHOOK_PORT', '8000'))
+        webhook_secret = os.getenv('WEBHOOK_SECRET')
+        log_output_dir = os.getenv('LOG_OUTPUT_DIR', './logs/pipeline-logs')
+        retry_attempts = int(os.getenv('RETRY_ATTEMPTS', '3'))
+        retry_delay = int(os.getenv('RETRY_DELAY', '2'))
+        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
+
+        return {
+            'webhook_port': webhook_port,
+            'webhook_secret': webhook_secret,
+            'log_output_dir': log_output_dir,
+            'retry_attempts': retry_attempts,
+            'retry_delay': retry_delay,
+            'log_level': log_level
+        }
+
+    @staticmethod
+    def _load_log_filtering() -> Dict[str, Any]:
+        """Load log filtering configuration."""
+        log_save_pipeline_status_str = os.getenv('LOG_SAVE_PIPELINE_STATUS', 'all')
+        log_save_pipeline_status = [
+            s.strip().lower() for s in log_save_pipeline_status_str.split(',') if s.strip()
+        ]
+
+        log_save_projects_str = os.getenv('LOG_SAVE_PROJECTS', '')
+        log_save_projects = [s.strip() for s in log_save_projects_str.split(',') if s.strip()]
+
+        log_exclude_projects_str = os.getenv('LOG_EXCLUDE_PROJECTS', '')
+        log_exclude_projects = [s.strip() for s in log_exclude_projects_str.split(',') if s.strip()]
+
+        log_save_job_status_str = os.getenv('LOG_SAVE_JOB_STATUS', 'all')
+        log_save_job_status = [
+            s.strip().lower() for s in log_save_job_status_str.split(',') if s.strip()
+        ]
+
+        log_save_metadata_always_str = os.getenv('LOG_SAVE_METADATA_ALWAYS', 'true').lower()
+        log_save_metadata_always = log_save_metadata_always_str in ['true', '1', 'yes', 'on']
+
+        return {
+            'log_save_pipeline_status': log_save_pipeline_status,
+            'log_save_projects': log_save_projects,
+            'log_exclude_projects': log_exclude_projects,
+            'log_save_job_status': log_save_job_status,
+            'log_save_metadata_always': log_save_metadata_always
+        }
+
+    @staticmethod
+    def _load_api_config() -> Dict[str, Any]:
+        """Load API POST configuration."""
+        api_post_enabled_str = os.getenv('API_POST_ENABLED', 'false').lower()
+        api_post_enabled = api_post_enabled_str in ['true', '1', 'yes', 'on']
+
+        api_post_timeout = int(os.getenv('API_POST_TIMEOUT', '30'))
+
+        api_post_retry_enabled_str = os.getenv('API_POST_RETRY_ENABLED', 'true').lower()
+        api_post_retry_enabled = api_post_retry_enabled_str in ['true', '1', 'yes', 'on']
+
+        api_post_save_to_file_str = os.getenv('API_POST_SAVE_TO_FILE', 'false').lower()
+        api_post_save_to_file = api_post_save_to_file_str in ['true', '1', 'yes', 'on']
+
+        return {
+            'api_post_enabled': api_post_enabled,
+            'api_post_timeout': api_post_timeout,
+            'api_post_retry_enabled': api_post_retry_enabled,
+            'api_post_save_to_file': api_post_save_to_file
+        }
+
+    @staticmethod
+    def _load_jenkins_config() -> Dict[str, Any]:
+        """Load Jenkins configuration."""
+        jenkins_enabled_str = os.getenv('JENKINS_ENABLED', 'false').lower()
+        jenkins_enabled = jenkins_enabled_str in ['true', '1', 'yes', 'on']
+
+        jenkins_url = os.getenv('JENKINS_URL')
+        if jenkins_url:
+            jenkins_url = jenkins_url.rstrip('/')
+
+        jenkins_user = os.getenv('JENKINS_USER')
+        jenkins_api_token = os.getenv('JENKINS_API_TOKEN')
+        jenkins_webhook_secret = os.getenv('JENKINS_WEBHOOK_SECRET')
+
+        return {
+            'jenkins_enabled': jenkins_enabled,
+            'jenkins_url': jenkins_url,
+            'jenkins_user': jenkins_user,
+            'jenkins_api_token': jenkins_api_token,
+            'jenkins_webhook_secret': jenkins_webhook_secret
+        }
+
+    @staticmethod
+    def _load_bfa_config() -> Dict[str, Any]:
+        """Load BFA JWT configuration."""
+        bfa_host = os.getenv('BFA_HOST')
+        bfa_secret_key = os.getenv('BFA_SECRET_KEY')
+
+        # Auto-construct API POST URL from BFA_HOST
+        api_post_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else None
+
+        return {
+            'bfa_host': bfa_host,
+            'bfa_secret_key': bfa_secret_key,
+            'api_post_url': api_post_url
+        }
+
+    @staticmethod
+    def _load_log_limits() -> Dict[str, Any]:
+        """Load error context and log handling limits."""
+        error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
+        error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
+        max_log_lines = int(os.getenv('MAX_LOG_LINES', '100000'))
+        tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))
+        stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))
+
+        return {
+            'error_context_lines_before': error_context_lines_before,
+            'error_context_lines_after': error_context_lines_after,
+            'max_log_lines': max_log_lines,
+            'tail_log_lines': tail_log_lines,
+            'stream_chunk_size': stream_chunk_size
+        }
+
+    @staticmethod
+    def load() -> Config:  # pylint: disable=too-many-branches
         """
         Load configuration from environment variables.
 
@@ -136,111 +260,62 @@ class ConfigLoader:
         # Remove trailing slash from GitLab URL if present
         gitlab_url = gitlab_url.rstrip('/')
 
-        # Optional settings with defaults
-        webhook_port = int(os.getenv('WEBHOOK_PORT', '8000'))
-        webhook_secret = os.getenv('WEBHOOK_SECRET')
-        log_output_dir = os.getenv('LOG_OUTPUT_DIR', './logs/pipeline-logs')
-        retry_attempts = int(os.getenv('RETRY_ATTEMPTS', '3'))
-        retry_delay = int(os.getenv('RETRY_DELAY', '2'))
-        log_level = os.getenv('LOG_LEVEL', 'INFO').upper()
-
-        # Log filtering settings
-        log_save_pipeline_status_str = os.getenv('LOG_SAVE_PIPELINE_STATUS', 'all')
-        log_save_pipeline_status = [s.strip().lower() for s in log_save_pipeline_status_str.split(',') if s.strip()]
-
-        log_save_projects_str = os.getenv('LOG_SAVE_PROJECTS', '')
-        log_save_projects = [s.strip() for s in log_save_projects_str.split(',') if s.strip()]
-
-        log_exclude_projects_str = os.getenv('LOG_EXCLUDE_PROJECTS', '')
-        log_exclude_projects = [s.strip() for s in log_exclude_projects_str.split(',') if s.strip()]
-
-        log_save_job_status_str = os.getenv('LOG_SAVE_JOB_STATUS', 'all')
-        log_save_job_status = [s.strip().lower() for s in log_save_job_status_str.split(',') if s.strip()]
-
-        log_save_metadata_always_str = os.getenv('LOG_SAVE_METADATA_ALWAYS', 'true').lower()
-        log_save_metadata_always = log_save_metadata_always_str in ['true', '1', 'yes', 'on']
-
-        # API POST configuration
-        api_post_enabled_str = os.getenv('API_POST_ENABLED', 'false').lower()
-        api_post_enabled = api_post_enabled_str in ['true', '1', 'yes', 'on']
-
-        api_post_timeout = int(os.getenv('API_POST_TIMEOUT', '30'))
-
-        api_post_retry_enabled_str = os.getenv('API_POST_RETRY_ENABLED', 'true').lower()
-        api_post_retry_enabled = api_post_retry_enabled_str in ['true', '1', 'yes', 'on']
-
-        api_post_save_to_file_str = os.getenv('API_POST_SAVE_TO_FILE', 'false').lower()
-        api_post_save_to_file = api_post_save_to_file_str in ['true', '1', 'yes', 'on']
-
-        # Jenkins configuration
-        jenkins_enabled_str = os.getenv('JENKINS_ENABLED', 'false').lower()
-        jenkins_enabled = jenkins_enabled_str in ['true', '1', 'yes', 'on']
-
-        jenkins_url = os.getenv('JENKINS_URL')
-        if jenkins_url:
-            jenkins_url = jenkins_url.rstrip('/')
-
-        jenkins_user = os.getenv('JENKINS_USER')
-        jenkins_api_token = os.getenv('JENKINS_API_TOKEN')
-        jenkins_webhook_secret = os.getenv('JENKINS_WEBHOOK_SECRET')
-
-        # BFA JWT configuration
-        # BFA_HOST: Hostname/IP of BFA server (used to construct http://BFA_HOST:8000/api/analyze)
-        # BFA_SECRET_KEY: Required for JWT token generation (no fallback to GITLAB_TOKEN)
-        bfa_host = os.getenv('BFA_HOST')
-        bfa_secret_key = os.getenv('BFA_SECRET_KEY')
-
-        # Auto-construct API POST URL from BFA_HOST
-        api_post_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else None
-
-        # Error context extraction settings
-        error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
-        error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
-
-        # Log handling limits (for memory management with large logs)
-        max_log_lines = int(os.getenv('MAX_LOG_LINES', '100000'))  # Max lines to process
-        tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))  # Tail lines to try first
-        stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))  # Streaming chunk size
+        # Load configuration groups
+        basic = ConfigLoader._load_basic_settings()
+        log_filtering = ConfigLoader._load_log_filtering()
+        api_config = ConfigLoader._load_api_config()
+        jenkins = ConfigLoader._load_jenkins_config()
+        bfa = ConfigLoader._load_bfa_config()
+        log_limits = ConfigLoader._load_log_limits()
 
         # Validate port number
-        if not 1 <= webhook_port <= 65535:
-            raise ValueError(f"Invalid WEBHOOK_PORT: {webhook_port}. Must be between 1 and 65535")
+        if not 1 <= basic['webhook_port'] <= 65535:
+            raise ValueError(
+                f"Invalid WEBHOOK_PORT: {basic['webhook_port']}. Must be between 1 and 65535"
+            )
 
         # Validate log level
         valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
-        if log_level not in valid_levels:
-            raise ValueError(f"Invalid LOG_LEVEL: {log_level}. Must be one of {valid_levels}")
+        if basic['log_level'] not in valid_levels:
+            raise ValueError(
+                f"Invalid LOG_LEVEL: {basic['log_level']}. Must be one of {valid_levels}"
+            )
 
         # Validate API POST configuration
-        if api_post_enabled:
-            if not bfa_host:
+        if api_config['api_post_enabled']:
+            if not bfa['bfa_host']:
                 raise ValueError("BFA_HOST is required when API_POST_ENABLED is true")
-            if api_post_timeout < 1 or api_post_timeout > 300:
-                raise ValueError(f"Invalid API_POST_TIMEOUT: {api_post_timeout}. Must be between 1 and 300 seconds")
+            if api_config['api_post_timeout'] < 1 or api_config['api_post_timeout'] > 300:
+                raise ValueError(
+                    f"Invalid API_POST_TIMEOUT: {api_config['api_post_timeout']}. "
+                    "Must be between 1 and 300 seconds"
+                )
 
         # Validate Jenkins configuration
         # Note: When JENKINS_ENABLED=true, credentials can come from either:
         #   1. .env file (jenkins_url, jenkins_user, jenkins_api_token) - for single instance
         #   2. jenkins_instances.json file - for multiple instances
         # If jenkins_instances.json exists, .env credentials are optional (checked at runtime)
-        if jenkins_enabled:
+        if jenkins['jenkins_enabled']:
             # Check if jenkins_instances.json exists
             jenkins_instances_file = "jenkins_instances.json"
             has_instances_file = os.path.isfile(jenkins_instances_file)
 
             # If no jenkins_instances.json, require .env credentials
             if not has_instances_file:
-                if not jenkins_url:
+                if not jenkins['jenkins_url']:
                     raise ValueError(
                         "JENKINS_URL is required when JENKINS_ENABLED is true. "
-                        "Either set JENKINS_URL in .env or create jenkins_instances.json for multi-instance support."
+                        "Either set JENKINS_URL in .env or create jenkins_instances.json "
+                        "for multi-instance support."
                     )
-                if not jenkins_user:
+                if not jenkins['jenkins_user']:
                     raise ValueError(
                         "JENKINS_USER is required when JENKINS_ENABLED is true. "
-                        "Either set JENKINS_USER in .env or create jenkins_instances.json for multi-instance support."
+                        "Either set JENKINS_USER in .env or create jenkins_instances.json "
+                        "for multi-instance support."
                     )
-                if not jenkins_api_token:
+                if not jenkins['jenkins_api_token']:
                     raise ValueError(
                         "JENKINS_API_TOKEN is required when JENKINS_ENABLED is true. "
                         "Either set JENKINS_API_TOKEN in .env or create jenkins_instances.json "
@@ -248,40 +323,43 @@ class ConfigLoader:
                     )
 
             # Validate jenkins_url format if provided (optional with jenkins_instances.json)
-            if jenkins_url and not jenkins_url.startswith(('http://', 'https://')):
-                raise ValueError(f"Invalid JENKINS_URL: {jenkins_url}. Must start with http:// or https://")
+            if jenkins['jenkins_url'] and not jenkins['jenkins_url'].startswith(('http://', 'https://')):
+                raise ValueError(
+                    f"Invalid JENKINS_URL: {jenkins['jenkins_url']}. "
+                    "Must start with http:// or https://"
+                )
 
         return Config(
             gitlab_url=gitlab_url,
             gitlab_token=gitlab_token,
-            webhook_port=webhook_port,
-            webhook_secret=webhook_secret,
-            log_output_dir=log_output_dir,
-            retry_attempts=retry_attempts,
-            retry_delay=retry_delay,
-            log_level=log_level,
-            log_save_pipeline_status=log_save_pipeline_status,
-            log_save_projects=log_save_projects,
-            log_exclude_projects=log_exclude_projects,
-            log_save_job_status=log_save_job_status,
-            log_save_metadata_always=log_save_metadata_always,
-            api_post_enabled=api_post_enabled,
-            api_post_url=api_post_url,
-            api_post_timeout=api_post_timeout,
-            api_post_retry_enabled=api_post_retry_enabled,
-            api_post_save_to_file=api_post_save_to_file,
-            jenkins_enabled=jenkins_enabled,
-            jenkins_url=jenkins_url,
-            jenkins_user=jenkins_user,
-            jenkins_api_token=jenkins_api_token,
-            jenkins_webhook_secret=jenkins_webhook_secret,
-            bfa_host=bfa_host,
-            bfa_secret_key=bfa_secret_key,
-            error_context_lines_before=error_context_lines_before,
-            error_context_lines_after=error_context_lines_after,
-            max_log_lines=max_log_lines,
-            tail_log_lines=tail_log_lines,
-            stream_chunk_size=stream_chunk_size
+            webhook_port=basic['webhook_port'],
+            webhook_secret=basic['webhook_secret'],
+            log_output_dir=basic['log_output_dir'],
+            retry_attempts=basic['retry_attempts'],
+            retry_delay=basic['retry_delay'],
+            log_level=basic['log_level'],
+            log_save_pipeline_status=log_filtering['log_save_pipeline_status'],
+            log_save_projects=log_filtering['log_save_projects'],
+            log_exclude_projects=log_filtering['log_exclude_projects'],
+            log_save_job_status=log_filtering['log_save_job_status'],
+            log_save_metadata_always=log_filtering['log_save_metadata_always'],
+            api_post_enabled=api_config['api_post_enabled'],
+            api_post_url=bfa['api_post_url'],
+            api_post_timeout=api_config['api_post_timeout'],
+            api_post_retry_enabled=api_config['api_post_retry_enabled'],
+            api_post_save_to_file=api_config['api_post_save_to_file'],
+            jenkins_enabled=jenkins['jenkins_enabled'],
+            jenkins_url=jenkins['jenkins_url'],
+            jenkins_user=jenkins['jenkins_user'],
+            jenkins_api_token=jenkins['jenkins_api_token'],
+            jenkins_webhook_secret=jenkins['jenkins_webhook_secret'],
+            bfa_host=bfa['bfa_host'],
+            bfa_secret_key=bfa['bfa_secret_key'],
+            error_context_lines_before=log_limits['error_context_lines_before'],
+            error_context_lines_after=log_limits['error_context_lines_after'],
+            max_log_lines=log_limits['max_log_lines'],
+            tail_log_lines=log_limits['tail_log_lines'],
+            stream_chunk_size=log_limits['stream_chunk_size']
         )
 
     @staticmethod
