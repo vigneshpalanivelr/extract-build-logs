@@ -114,19 +114,19 @@ class ErrorHandler:
                     logger.info("Success on attempt %s for %s", attempt + 1, func.__name__)
                 return result
 
-            except exceptions as e:  # pylint: disable=redefined-outer-name
-                last_exception = e
+            except exceptions as error:  # pylint: disable=redefined-outer-name
+                last_exception = error
                 if attempt < self.max_retries:
                     delay = self._calculate_delay(attempt)
                     logger.warning(
                         "Attempt %d failed for %s: %s. Retrying in %.2f seconds...",
-                        attempt + 1, func.__name__, str(e), delay
+                        attempt + 1, func.__name__, str(error), delay
                     )
                     time.sleep(delay)
                 else:
                     logger.error(
                         "All %d attempts failed for %s. Last error: %s",
-                        self.max_retries + 1, func.__name__, str(e)
+                        self.max_retries + 1, func.__name__, str(error)
                     )
 
         raise RetryExhaustedError(self.max_retries + 1, last_exception)
@@ -250,9 +250,9 @@ class CircuitBreaker:
             result = func(*args, **kwargs)  # pylint: disable=redefined-outer-name
             self._on_success()
             return result
-        except Exception as e:  # pylint: disable=redefined-outer-name,broad-exception-caught
+        except Exception as error:  # pylint: disable=redefined-outer-name,broad-exception-caught
             self._on_failure()
-            raise e
+            raise error
 
     def _should_attempt_reset(self) -> bool:
         """Check if enough time has passed to attempt recovery."""
@@ -302,5 +302,5 @@ if __name__ == "__main__":
     try:
         result = unreliable_function(3)  # pylint: disable=redefined-outer-name
         print(result)
-    except RetryExhaustedError as e:  # pylint: disable=redefined-outer-name
-        print(f"Function failed: {e}")
+    except RetryExhaustedError as error:  # pylint: disable=redefined-outer-name
+        print(f"Function failed: {error}")

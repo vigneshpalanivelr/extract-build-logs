@@ -170,8 +170,8 @@ class StorageManager:
 
         # Save log content
         try:
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write(log_content)
+            with open(log_path, 'w', encoding='utf-8') as file_handle:
+                file_handle.write(log_content)
 
             logger.info("Saved log for job %s (%s) to %s", job_id, job_name, log_path)
 
@@ -187,8 +187,8 @@ class StorageManager:
 
             return log_path
 
-        except IOError as e:
-            logger.error("Failed to save log for job %s: %s", job_id, str(e))
+        except IOError as error:
+            logger.error("Failed to save log for job %s: %s", job_id, str(error))
             raise
 
     def save_pipeline_metadata(
@@ -228,8 +228,8 @@ class StorageManager:
         try:
             # Load existing metadata if it exists
             if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
+                with open(metadata_path, 'r', encoding='utf-8') as file_handle:
+                    metadata = json.load(file_handle)
             else:
                 metadata = {
                     "pipeline_id": pipeline_id,
@@ -246,13 +246,13 @@ class StorageManager:
             metadata["last_updated"] = datetime.utcnow().isoformat()
 
             # Save metadata
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            with open(metadata_path, 'w', encoding='utf-8') as file_handle:
+                json.dump(metadata, file_handle, indent=2, ensure_ascii=False)
 
             logger.info("Saved pipeline metadata to %s", metadata_path)
 
-        except IOError as e:
-            logger.error("Failed to save pipeline metadata: %s", str(e))
+        except IOError as error:
+            logger.error("Failed to save pipeline metadata: %s", str(error))
             raise
 
     def _update_job_metadata(
@@ -278,8 +278,8 @@ class StorageManager:
         try:
             # Load existing metadata
             if metadata_path.exists():
-                with open(metadata_path, 'r', encoding='utf-8') as f:
-                    metadata = json.load(f)
+                with open(metadata_path, 'r', encoding='utf-8') as file_handle:
+                    metadata = json.load(file_handle)
             else:
                 metadata = {"jobs": {}}
 
@@ -293,13 +293,13 @@ class StorageManager:
             }
 
             # Save updated metadata
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata, f, indent=2, ensure_ascii=False)
+            with open(metadata_path, 'w', encoding='utf-8') as file_handle:
+                json.dump(metadata, file_handle, indent=2, ensure_ascii=False)
 
             logger.debug("Updated metadata for job %s", job_id)
 
-        except IOError as e:
-            logger.error("Failed to update job metadata: %s", str(e))
+        except IOError as error:
+            logger.error("Failed to update job metadata: %s", str(error))
 
     def get_pipeline_metadata(
         self,
@@ -324,11 +324,11 @@ class StorageManager:
             return None
 
         try:
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                metadata = json.load(f)
+            with open(metadata_path, 'r', encoding='utf-8') as file_handle:
+                metadata = json.load(file_handle)
             return metadata
-        except (IOError, json.JSONDecodeError) as e:
-            logger.error("Failed to read pipeline metadata: %s", str(e))
+        except (IOError, json.JSONDecodeError) as error:
+            logger.error("Failed to read pipeline metadata: %s", str(error))
             return None
 
     def list_stored_pipelines(self, project_id: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -367,8 +367,8 @@ class StorageManager:
                 metadata_path = pipeline_dir / "metadata.json"
                 if metadata_path.exists():
                     try:
-                        with open(metadata_path, 'r', encoding='utf-8') as f:
-                            metadata = json.load(f)
+                        with open(metadata_path, 'r', encoding='utf-8') as file_handle:
+                            metadata = json.load(file_handle)
                         pipelines.append({
                             "project_id": metadata.get("project_id"),
                             "pipeline_id": metadata.get("pipeline_id"),
@@ -378,8 +378,8 @@ class StorageManager:
                             "job_count": len(metadata.get("jobs", {})),
                             "path": str(pipeline_dir)
                         })
-                    except (IOError, json.JSONDecodeError) as e:
-                        logger.error("Failed to read metadata from %s: %s", metadata_path, str(e))
+                    except (IOError, json.JSONDecodeError) as error:
+                        logger.error("Failed to read metadata from %s: %s", metadata_path, str(error))
 
         return pipelines
 
@@ -484,8 +484,8 @@ class StorageManager:
         console_log_path = build_dir / "console.log"
 
         try:
-            with open(console_log_path, 'w', encoding='utf-8') as f:
-                f.write(console_log)
+            with open(console_log_path, 'w', encoding='utf-8') as file_handle:
+                file_handle.write(console_log)
 
             logger.info(
                 "Saved Jenkins console log for %s #%s to %s",
@@ -495,12 +495,12 @@ class StorageManager:
             )
             return console_log_path
 
-        except IOError as e:
+        except IOError as error:
             logger.error(
                 "Failed to save Jenkins console log for %s #%s: %s",
                 job_name,
                 build_number,
-                str(e)
+                str(error)
             )
             raise
 
@@ -534,8 +534,8 @@ class StorageManager:
         stage_log_path = build_dir / log_filename
 
         try:
-            with open(stage_log_path, 'w', encoding='utf-8') as f:
-                f.write(log_content)
+            with open(stage_log_path, 'w', encoding='utf-8') as file_handle:
+                file_handle.write(log_content)
 
             logger.info(
                 "Saved Jenkins stage log for %s #%s stage '%s' to %s",
@@ -546,13 +546,13 @@ class StorageManager:
             )
             return stage_log_path
 
-        except IOError as e:
+        except IOError as error:
             logger.error(
                 "Failed to save Jenkins stage log for %s #%s stage '%s': %s",
                 job_name,
                 build_number,
                 stage_name,
-                str(e)
+                str(error)
             )
             raise
 
@@ -599,8 +599,8 @@ class StorageManager:
             build_data["last_updated"] = datetime.utcnow().isoformat()
 
             # Save metadata
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(build_data, f, indent=2, ensure_ascii=False)
+            with open(metadata_path, 'w', encoding='utf-8') as file_handle:
+                json.dump(build_data, file_handle, indent=2, ensure_ascii=False)
 
             logger.info(
                 "Saved Jenkins build metadata for %s #%s to %s",
@@ -609,12 +609,12 @@ class StorageManager:
                 metadata_path
             )
 
-        except IOError as e:
+        except IOError as error:
             logger.error(
                 "Failed to save Jenkins build metadata for %s #%s: %s",
                 job_name,
                 build_number,
-                str(e)
+                str(error)
             )
             raise
 

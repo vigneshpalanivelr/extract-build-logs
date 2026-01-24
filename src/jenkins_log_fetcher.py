@@ -119,10 +119,10 @@ class JenkinsLogFetcher:
             )
             return build_info
 
-        except RetryExhaustedError as e:
+        except RetryExhaustedError as error:
             logger.error(
                 "Failed to fetch build info for job %s #%s after retries: %s",
-                job_name, build_number, e
+                job_name, build_number, error
             )
             raise
 
@@ -159,10 +159,10 @@ class JenkinsLogFetcher:
             )
             return console_log
 
-        except RetryExhaustedError as e:
+        except RetryExhaustedError as error:
             logger.error(
                 "Failed to fetch console log for job %s #%s after retries: %s",
-                job_name, build_number, e
+                job_name, build_number, error
             )
             raise
 
@@ -218,10 +218,10 @@ class JenkinsLogFetcher:
 
             return tail_log
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException as error:
             logger.error(
                 "Failed to fetch console log tail for job %s #%s: %s",
-                job_name, build_number, e
+                job_name, build_number, error
             )
             raise
 
@@ -284,10 +284,10 @@ class JenkinsLogFetcher:
                 'total_lines': line_count
             }
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException as error:
             logger.error(
                 "Failed to stream console log for job %s #%s: %s",
-                job_name, build_number, e
+                job_name, build_number, error
             )
             raise
 
@@ -331,10 +331,10 @@ class JenkinsLogFetcher:
 
             logger.info("No errors in tail for job %s #%s, streaming full log", job_name, build_number)
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "Tail fetch failed for job %s #%s: %s, falling back to streaming",
-                job_name, build_number, e
+                job_name, build_number, error
             )
 
         # Fall back to streaming full log
@@ -378,10 +378,10 @@ class JenkinsLogFetcher:
             )
             return stages
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException as error:
             logger.debug(
                 "Failed to fetch Blue Ocean stages for job %s #%s (non-critical): %s",
-                job_name, build_number, e
+                job_name, build_number, error
             )
             return None
 
@@ -426,8 +426,8 @@ class JenkinsLogFetcher:
                 # Not JSON, treat as plain text log
                 return response.text
 
-        except requests.exceptions.RequestException as e:
-            logger.warning("Failed to fetch stage log (non-critical): %s", e)
+        except requests.exceptions.RequestException as error:
+            logger.warning("Failed to fetch stage log (non-critical): %s", error)
             return None
 
     def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:

@@ -65,8 +65,8 @@ class ApiPoster:
             try:
                 self.token_manager = TokenManager(config.bfa_secret_key)
                 logger.debug("6. TokenManager initialized for JWT authentication")
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("6. Failed to initialize TokenManager: %s", e, exc_info=True)
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.error("6. Failed to initialize TokenManager: %s", error, exc_info=True)
                 logger.warning("6. JWT authentication will be disabled, using raw secret key")
         elif config.bfa_host:
             logger.debug("6. BFA_SECRET_KEY not set, will fetch tokens from BFA server: %s", config.bfa_host)
@@ -345,10 +345,10 @@ class ApiPoster:
             logger.debug("Found project ID %d for %s", project_id, project_path)
             return project_id
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "Failed to fetch GitLab project ID for %s/%s: %s",
-                namespace, repo_name, e
+                namespace, repo_name, error
             )
             return None
 
@@ -385,10 +385,10 @@ class ApiPoster:
 
             return None
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "Failed to fetch MR !%d from project %d: %s",
-                mr_iid, project_id, e
+                mr_iid, project_id, error
             )
             return None
 
@@ -434,10 +434,10 @@ class ApiPoster:
 
             return None
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "Failed to fetch commit %s from project %d: %s",
-                commit_sha[:8], project_id, e
+                commit_sha[:8], project_id, error
             )
             return None
 
@@ -475,10 +475,10 @@ class ApiPoster:
 
             return None
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "Failed to fetch branch '%s' from project %d: %s",
-                branch_name, project_id, e
+                branch_name, project_id, error
             )
             return None
 
@@ -509,8 +509,8 @@ class ApiPoster:
             logger.debug("No UserIdCause found in Jenkins metadata")
             return None
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            logger.warning("Failed to extract Jenkins user from metadata: %s", e)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to extract Jenkins user from metadata: %s", error)
             return None
 
     def _determine_jenkins_triggered_by(
@@ -572,8 +572,8 @@ class ApiPoster:
                 gitlab_username = self._get_user_from_merge_request(project_id, mr_iid_int)
                 if gitlab_username:
                     logger.info("Determined Jenkins pipeline triggered by MR author: %s", gitlab_username)
-            except (ValueError, TypeError) as e:
-                logger.warning("Invalid MR IID '%s': %s", mr_iid, e)
+            except (ValueError, TypeError) as error:
+                logger.warning("Invalid MR IID '%s': %s", mr_iid, error)
 
         # Strategy 2: Build pipeline with commit SHA
         if not gitlab_username:
@@ -650,11 +650,11 @@ class ApiPoster:
             logger.info("Successfully fetched token from BFA server for subject: %s", subject)
             return token
 
-        except RequestException as e:
-            logger.error("Failed to fetch token from BFA server: %s", e, exc_info=True)
+        except RequestException as error:
+            logger.error("Failed to fetch token from BFA server: %s", error, exc_info=True)
             return None
-        except (ValueError, KeyError) as e:
-            logger.error("Failed to parse token response from BFA server: %s", e, exc_info=True)
+        except (ValueError, KeyError) as error:
+            logger.error("Failed to parse token response from BFA server: %s", error, exc_info=True)
             return None
 
     def _prepare_authentication_header(  # pylint: disable=too-many-return-statements
@@ -681,8 +681,8 @@ class ApiPoster:
                 jwt_token = self.token_manager.generate_token(subject, expires_in_minutes=60)
                 logger.info("Generated JWT token locally for subject: %s", subject)
                 return jwt_token
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Failed to generate JWT token: %s", e, exc_info=True)
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.error("Failed to generate JWT token: %s", error, exc_info=True)
                 # Fallback to other strategies
                 return self._prepare_fallback_authentication(subject)
 
@@ -695,8 +695,8 @@ class ApiPoster:
                     return fetched_token
                 logger.error("Failed to fetch token from BFA server, no authentication will be sent")
                 return None
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Error fetching token from BFA server: %s", e, exc_info=True)
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.error("Error fetching token from BFA server: %s", error, exc_info=True)
                 return None
 
         # Strategy 3: Use raw secret key (legacy)
@@ -821,21 +821,21 @@ class ApiPoster:
                 f"API returned status '{response_status}' (expected 'ok') after {duration_ms}ms"
             )
 
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.HTTPError as error:
             # HTTP error (4xx, 5xx)
             duration_ms = int((time.time() - start_time) * 1000)
-            error_msg = str(e)[:1000]
+            error_msg = str(error)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
-            ) from e
+            ) from error
 
-        except RequestException as e:
+        except RequestException as error:
             # Other request errors (timeout, connection, etc.) - just re-raise
             duration_ms = int((time.time() - start_time) * 1000)
-            error_msg = str(e)[:1000]
+            error_msg = str(error)[:1000]
             raise RequestException(
                 f"API request failed after {duration_ms}ms: {error_msg}"
-            ) from e
+            ) from error
 
     def _log_api_request(
         self,
@@ -878,10 +878,10 @@ class ApiPoster:
 
         # Write to file
         try:
-            with open(self.api_log_file, 'a', encoding='utf-8') as f:
-                f.write(log_entry)
-        except IOError as e:
-            logger.error("Failed to write to API log file: %s", e)
+            with open(self.api_log_file, 'a', encoding='utf-8') as file_handle:
+                file_handle.write(log_entry)
+        except IOError as io_error:
+            logger.error("Failed to write to API log file: %s", io_error)
 
     def post_pipeline_logs(self, pipeline_info: Dict[str, Any], all_logs: Dict[int, Dict[str, Any]]) -> bool:
         """
@@ -941,15 +941,15 @@ class ApiPoster:
             # Log full payload in DEBUG mode for troubleshooting
             logger.debug("Full API payload:\n%s", payload_json)
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.error(
                 "Failed to format API payload for pipeline %s: %s",
-                pipeline_id, e,
+                pipeline_id, error,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
                     'project_name': project_name,
-                    'error_type': type(e).__name__
+                    'error_type': type(error).__name__
                 },
                 exc_info=True
             )
@@ -958,7 +958,10 @@ class ApiPoster:
             logger.error("Pipeline info that caused formatting error: %s",
                          json.dumps(pipeline_info, indent=2, default=str))
 
-            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Payload formatting failed: {str(e)}")
+            self._log_api_request(
+                pipeline_id, project_id, None, "", 0,
+                error=f"Payload formatting failed: {str(error)}"
+            )
             return False
 
         # POST to API (with retry if enabled)
@@ -999,16 +1002,16 @@ class ApiPoster:
 
             return True
 
-        except RetryExhaustedError as e:
+        except RetryExhaustedError as error:
             logger.error(
                 "Failed to post pipeline %s logs after retries: %s",
-                pipeline_id, e,
+                pipeline_id, error,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
                     'project_name': project_name,
                     'error_type': 'RetryExhaustedError',
-                    'error_message': str(e)
+                    'error_message': str(error)
                 },
                 exc_info=True
             )
@@ -1016,20 +1019,20 @@ class ApiPoster:
             # Log the payload that failed after all retries
             logger.error("Payload that failed after all retries:\n%s", json.dumps(payload, indent=2))
 
-            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Retry exhausted: {str(e)}")
+            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"Retry exhausted: {str(error)}")
 
             return False
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.error(
                 "Unexpected error posting pipeline %s logs: %s",
-                pipeline_id, e,
+                pipeline_id, error,
                 extra={
                     'pipeline_id': pipeline_id,
                     'project_id': project_id,
                     'project_name': project_name,
-                    'error_type': type(e).__name__,
-                    'error_message': str(e)
+                    'error_type': type(error).__name__,
+                    'error_message': str(error)
                 },
                 exc_info=True
             )
@@ -1037,7 +1040,7 @@ class ApiPoster:
             # Log the payload that caused the unexpected error
             logger.error("Payload that caused unexpected error:\n%s", json.dumps(payload, indent=2))
 
-            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"{type(e).__name__}: {str(e)}")
+            self._log_api_request(pipeline_id, project_id, None, "", 0, error=f"{type(error).__name__}: {str(error)}")
 
             return False
 
@@ -1098,8 +1101,8 @@ class ApiPoster:
                         payload,
                         exceptions=(RequestException,)
                     )
-                except RetryExhaustedError as e:
-                    logger.error("Retry exhausted posting Jenkins logs to API: %s", e)
+                except RetryExhaustedError as error:
+                    logger.error("Retry exhausted posting Jenkins logs to API: %s", error)
 
                     # Log the payload that failed after all retries
                     logger.error("Payload that failed after all retries:\n%s", json.dumps(payload, indent=2))
@@ -1111,9 +1114,9 @@ class ApiPoster:
                         pipeline_id=pipeline_id,
                         project_id=project_id,
                         status_code=None,
-                        response_body=str(e),
+                        response_body=str(error),
                         duration_ms=0,
-                        error=str(e)
+                        error=str(error)
                     )
                     return False
             else:
@@ -1163,15 +1166,15 @@ class ApiPoster:
             )
             return False
 
-        except Exception as e:  # pylint: disable=broad-exception-caught
+        except Exception as error:  # pylint: disable=broad-exception-caught
             logger.error(
                 "Unexpected error posting Jenkins logs to API: %s",
-                e,
+                error,
                 extra={
                     'job_name': jenkins_payload.get('job_name', 'unknown'),
                     'build_number': jenkins_payload.get('build_number', 0),
-                    'error_type': type(e).__name__,
-                    'error': str(e)
+                    'error_type': type(error).__name__,
+                    'error': str(error)
                 },
                 exc_info=True
             )
@@ -1188,7 +1191,7 @@ class ApiPoster:
                 status_code=None,
                 response_body="",
                 duration_ms=0,
-                error=f"{type(e).__name__}: {str(e)}"
+                error=f"{type(error).__name__}: {str(error)}"
             )
             return False
 

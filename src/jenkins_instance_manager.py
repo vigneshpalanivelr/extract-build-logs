@@ -85,8 +85,8 @@ class JenkinsInstanceManager:
         logger.info("Loading Jenkins instances from: %s", self.config_file)
 
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
+            with open(self.config_file, 'r', encoding='utf-8') as file_handle:
+                config = json.load(file_handle)
 
             instances_list = config.get('instances', [])
 
@@ -106,9 +106,9 @@ class JenkinsInstanceManager:
 
             logger.info("Successfully loaded %d Jenkins instance(s)", len(self.instances))
 
-        except (json.JSONDecodeError, KeyError) as e:
-            logger.error("Failed to load Jenkins instances: %s", e)
-            raise ValueError(f"Invalid Jenkins instances configuration file: {e}") from e
+        except (json.JSONDecodeError, KeyError) as error:
+            logger.error("Failed to load Jenkins instances: %s", error)
+            raise ValueError(f"Invalid Jenkins instances configuration file: {error}") from error
 
     def _normalize_url(self, url: str) -> str:
         """

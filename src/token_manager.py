@@ -119,8 +119,8 @@ class TokenManager:
             return payload
         except jwt.ExpiredSignatureError as exc:
             raise jwt.InvalidTokenError("Token has expired") from exc
-        except jwt.InvalidTokenError as e:
-            raise jwt.InvalidTokenError(f"Invalid token: {str(e)}")
+        except jwt.InvalidTokenError as error:
+            raise jwt.InvalidTokenError(f"Invalid token: {str(error)}")
 
     def decode_token_unsafe(self, token: str) -> Dict:
         """

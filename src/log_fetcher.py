@@ -257,9 +257,9 @@ class LogFetcher:
             try:
                 log_content = self.fetch_job_log(project_id, job_id)
                 all_logs[job_id] = {'details': job, 'log': log_content}
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.error("Failed to fetch log for job %s: %s", job_id, str(e))
-                all_logs[job_id] = {'details': job, 'log': f"[Error fetching log: {str(e)}]"}
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.error("Failed to fetch log for job %s: %s", job_id, str(error))
+                all_logs[job_id] = {'details': job, 'log': f"[Error fetching log: {str(error)}]"}
 
         logger.info("Successfully fetched logs for %s jobs", len(all_logs))
         return all_logs

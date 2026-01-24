@@ -142,8 +142,8 @@ class PipelineMonitor:
                 ON requests(event_type)
             """)
 
-        except sqlite3.Error as e:
-            logger.error("Failed to initialize SQLite database: %s", e, exc_info=True)
+        except sqlite3.Error as error:
+            logger.error("Failed to initialize SQLite database: %s", error, exc_info=True)
             raise
 
     def _execute(self, query: str, params: tuple = None):
@@ -159,8 +159,8 @@ class PipelineMonitor:
         """
         try:
             return self.conn.execute(query, params or ())
-        except sqlite3.Error as e:
-            logger.error("SQLite query failed: %s - Query: %s", e, query, exc_info=True)
+        except sqlite3.Error as error:
+            logger.error("SQLite query failed: %s - Query: %s", error, query, exc_info=True)
             raise
 
     def __enter__(self):
