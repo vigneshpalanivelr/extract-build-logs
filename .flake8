@@ -16,9 +16,8 @@ exclude =
     htmlcov
 
 # Error codes to ignore
-# W503: Line break before binary operator (conflicts with PEP 8 update - now preferred style)
 # E402: Module level import not at top of file (needed in test files for sys.path modification)
-ignore = W503,E402
+ignore = E402
 
 # Maximum complexity
 max-complexity = 15

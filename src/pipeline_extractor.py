@@ -282,13 +282,14 @@ class PipelineExtractor:
         for job in builds:
             status = job.get("status", "").lower()
 
-            should_include = (
-                (status == "success" and include_success)
-                or (status == "failed" and include_failed)
-                or (status == "canceled" and include_canceled)
-                or (status == "skipped" and include_skipped)
-            )
-            if should_include:
+            # Check if job should be included based on status filters
+            status_checks = [
+                (status == "success" and include_success),
+                (status == "failed" and include_failed),
+                (status == "canceled" and include_canceled),
+                (status == "skipped" and include_skipped)
+            ]
+            if any(status_checks):
                 filtered_jobs.append(job)
 
         logger.info(
