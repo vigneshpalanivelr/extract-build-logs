@@ -101,7 +101,7 @@ class ConfigLoader:
     """
 
     @staticmethod
-    def load() -> Config:  # pylint: disable=too-many-branches
+    def load() -> Config:  # pylint: disable=too-many-branches,too-many-locals
         """
         Load configuration from environment variables.
 
