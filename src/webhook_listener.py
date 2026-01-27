@@ -952,6 +952,70 @@ def _fetch_jenkins_build_metadata(
         return None
 
 
+def _extract_step_logs_from_console(
+    console_log: str,
+    step_name: str,
+    stage_name: str
+) -> Optional[str]:
+    """
+    Extract log content for a specific step from the console log.
+
+    Parses console log to find the step boundaries and extracts only that step's logs.
+
+    Jenkins console log patterns:
+        [Pipeline] { (StepName)
+        ... step log content ...
+        [Pipeline] } // StepName  OR  [Pipeline] }
+
+    Args:
+        console_log: Full console log content
+        step_name: Name of the step to extract logs for
+        stage_name: Name of the stage (for logging context)
+
+    Returns:
+        String containing only that step's log content, or None if not found
+    """
+    if not console_log or not step_name:
+        return None
+
+    lines = console_log.split('\n')
+    step_lines = []
+    in_target_step = False
+
+    # Build patterns to match step boundaries
+    # Pattern 1: [Pipeline] { (step_name)
+    step_start_pattern = f'[Pipeline] {{ ({step_name}'
+    # Pattern 2: For steps that might have variations
+    step_start_alt = f'{{ ({step_name}'
+
+    for line in lines:
+        # Check if we're entering our target step
+        if step_start_pattern in line or step_start_alt in line:
+            in_target_step = True
+            logger.debug("Found start of step '%s' in stage '%s'", step_name, stage_name)
+            continue
+
+        # Check if we're exiting the step
+        if in_target_step and '[Pipeline] }' in line:
+            # Step ended
+            logger.debug("Found end of step '%s', extracted %d lines", step_name, len(step_lines))
+            break
+
+        # Collect lines while inside target step
+        if in_target_step:
+            step_lines.append(line)
+
+    if not step_lines:
+        logger.warning(
+            "Could not find logs for step '%s' in stage '%s' "
+            "in console log - falling back to error extraction",
+            step_name, stage_name
+        )
+        return None
+
+    return '\n'.join(step_lines)
+
+
 def _analyze_failed_steps(stage: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Analyze steps (flowNodes) within a failed stage to identify the real failure.
@@ -1075,24 +1139,56 @@ def _extract_failed_stages_with_logs(
     # For each failed stage, extract errors from console log
     for stage in failed_stages:
         stage_name = stage.get('stage_name')
-        error_sections = error_extractor.extract_error_sections(console_log)
+        failed_step_info = stage.get('failed_step_info')
 
-        if error_sections:
-            # Found error patterns, use extracted context
-            stage['log_content'] = error_sections[0]
+        # If we identified a specific failed step, extract ONLY that step's logs
+        if failed_step_info and failed_step_info.get('step_name'):
+            step_name = failed_step_info['step_name']
             logger.info(
-                "Extracted error context for stage '%s': %s bytes",
-                stage_name,
-                len(error_sections[0])
+                "Attempting to extract logs for specific failed step '%s' in stage '%s'",
+                step_name, stage_name
             )
+
+            # Extract logs for just this specific step
+            step_logs = _extract_step_logs_from_console(console_log, step_name, stage_name)
+
+            if step_logs:
+                # Successfully extracted step-specific logs
+                stage['log_content'] = step_logs
+                logger.info(
+                    "Extracted logs for failed step '%s' in stage '%s': %d bytes",
+                    step_name, stage_name, len(step_logs)
+                )
+            else:
+                # Failed to parse step logs, fall back to error extraction
+                logger.warning(
+                    "Could not extract step-specific logs for '%s', "
+                    "falling back to error pattern extraction",
+                    step_name
+                )
+                error_sections = error_extractor.extract_error_sections(console_log)
+                stage['log_content'] = error_sections[0] if error_sections else console_log
         else:
-            # No error patterns found, use full console log
-            stage['log_content'] = console_log
-            logger.info(
-                "No error patterns found for stage '%s', using full console log: %s bytes",
-                stage_name,
-                len(console_log)
-            )
+            # No step-level filtering, extract errors from full console log
+            logger.debug("No step-level info for stage '%s', extracting errors from full log", stage_name)
+            error_sections = error_extractor.extract_error_sections(console_log)
+
+            if error_sections:
+                # Found error patterns, use extracted context
+                stage['log_content'] = error_sections[0]
+                logger.info(
+                    "Extracted error context for stage '%s': %d bytes",
+                    stage_name,
+                    len(error_sections[0])
+                )
+            else:
+                # No error patterns found, use full console log
+                stage['log_content'] = console_log
+                logger.info(
+                    "No error patterns found for stage '%s', using full console log: %d bytes",
+                    stage_name,
+                    len(console_log)
+                )
 
     return failed_stages
 
