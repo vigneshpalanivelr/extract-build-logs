@@ -959,25 +959,95 @@ def _extract_failed_stages_with_logs(
     """
     Extract failed stages and their log content.
 
+    This function filters out "handled failures" (stages that failed but were caught
+    with try-catch/fallback mechanisms) and only returns "real failures" (stages that
+    failed and stopped the pipeline).
+
+    Logic: If a stage fails but there are subsequent stages that executed successfully,
+    then the failure was handled. Only failures with no successful stages after them
+    are considered real failures.
+
     Args:
         blue_ocean_stages: List of Blue Ocean stage metadata
         console_log: Full console log content
 
     Returns:
-        List of failed stage dicts with log content
+        List of failed stage dicts with log content (only real failures)
     """
-    # Build list of failed stages from Blue Ocean metadata
-    failed_stages = []
-    for stage in blue_ocean_stages:
+    # Build list of all failed stages with their indices
+    all_failed_stages = []
+    for idx, stage in enumerate(blue_ocean_stages):
         if stage.get('status') in ['FAILED', 'FAILURE']:
-            failed_stages.append({
+            all_failed_stages.append({
+                'index': idx,
                 'stage_name': stage.get('name', 'Unknown'),
                 'stage_id': stage.get('id', ''),
                 'status': stage.get('status', 'UNKNOWN'),
                 'duration_ms': stage.get('durationMillis', 0)
             })
 
-    logger.info("Found %s total stages, %s failed", len(blue_ocean_stages), len(failed_stages))
+    logger.info(
+        "Found %s total stages, %s failed (before filtering)",
+        len(blue_ocean_stages), len(all_failed_stages)
+    )
+
+    if not all_failed_stages:
+        return []
+
+    # Filter out "handled failures" if enabled in configuration
+    if config.jenkins_filter_handled_failures:
+        logger.info("Jenkins handled failure filtering is ENABLED")
+
+        # Filter out "handled failures" - keep only stages where the pipeline stopped
+        # A failure is "handled" if there are successful stages AFTER it
+        real_failed_stages = []
+        for failed_stage in all_failed_stages:
+            failed_idx = failed_stage['index']
+
+            # Check if any subsequent stages executed successfully
+            has_successful_stages_after = False
+            for subsequent_stage in blue_ocean_stages[failed_idx + 1:]:
+                subsequent_status = subsequent_stage.get('status', 'UNKNOWN')
+                # Consider SUCCESS, SKIPPED as indicators that pipeline continued
+                if subsequent_status in ['SUCCESS', 'SKIPPED']:
+                    has_successful_stages_after = True
+                    break
+
+            # If no successful stages after this failure, it's a real failure
+            if not has_successful_stages_after:
+                real_failed_stages.append(failed_stage)
+                logger.info(
+                    "Stage '%s' identified as REAL failure (no successful stages after)",
+                    failed_stage['stage_name']
+                )
+            else:
+                logger.info(
+                    "Stage '%s' identified as HANDLED failure (pipeline continued after)",
+                    failed_stage['stage_name']
+                )
+
+        # Remove the index field as it's no longer needed
+        failed_stages = []
+        for stage in real_failed_stages:
+            stage_copy = stage.copy()
+            stage_copy.pop('index', None)
+            failed_stages.append(stage_copy)
+
+        logger.info(
+            "After filtering: %s real failures (excluded %s handled failures)",
+            len(failed_stages), len(all_failed_stages) - len(failed_stages)
+        )
+    else:
+        logger.info("Jenkins handled failure filtering is DISABLED, reporting all failed stages")
+
+        # No filtering - return all failed stages
+        failed_stages = []
+        for stage in all_failed_stages:
+            stage_copy = stage.copy()
+            stage_copy.pop('index', None)
+            failed_stages.append(stage_copy)
+
+        logger.info("Reporting %s failed stages without filtering", len(failed_stages))
 
     if not failed_stages:
         return []

@@ -14,7 +14,7 @@ Invokes: None
 
 import os
 from typing import Optional, List, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -45,17 +45,18 @@ class Config:  # pylint: disable=too-many-instance-attributes
         api_post_retry_enabled      -> (bool)          -> Enable API retry
         api_post_save_to_file       -> (bool)          -> Save to file when posting
         jenkins_enabled             -> (bool)          -> Enable Jenkins support
-        jenkins_url                 -> (Optional[str]) -> Jenkins instance URL
-        jenkins_user                -> (Optional[str]) -> Jenkins username
-        jenkins_api_token           -> (Optional[str]) -> Jenkins API token
-        jenkins_webhook_secret      -> (Optional[str]) -> Jenkins webhook secret
-        bfa_host                    -> (Optional[str]) -> BFA server hostname
-        bfa_secret_key              -> (Optional[str]) -> BFA JWT secret key
-        error_context_lines_before  -> (int)           -> Error context lines before
-        error_context_lines_after   -> (int)           -> Error context lines after
-        max_log_lines               -> (int)           -> Max lines to process per log
-        tail_log_lines              -> (int)           -> Lines to fetch from tail first
-        stream_chunk_size           -> (int)           -> Bytes per chunk when streaming
+        jenkins_url                      -> (Optional[str]) -> Jenkins instance URL
+        jenkins_user                     -> (Optional[str]) -> Jenkins username
+        jenkins_api_token                -> (Optional[str]) -> Jenkins API token
+        jenkins_webhook_secret           -> (Optional[str]) -> Jenkins webhook secret
+        bfa_host                         -> (Optional[str]) -> BFA server hostname
+        bfa_secret_key                   -> (Optional[str]) -> BFA JWT secret key
+        error_context_lines_before       -> (int)           -> Error context lines before
+        error_context_lines_after        -> (int)           -> Error context lines after
+        max_log_lines                    -> (int)           -> Max lines to process per log
+        tail_log_lines                   -> (int)           -> Lines to fetch from tail first
+        stream_chunk_size                -> (int)           -> Bytes per chunk when streaming
+        jenkins_filter_handled_failures  -> (bool)          -> Filter out handled failures (default: True)
     """
     gitlab_url: str
     gitlab_token: str
@@ -87,6 +88,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     max_log_lines: int
     tail_log_lines: int
     stream_chunk_size: int
+    jenkins_filter_handled_failures: bool = field(default=True)
 
 
 class ConfigLoader:
@@ -184,12 +186,17 @@ class ConfigLoader:
         jenkins_api_token = os.getenv('JENKINS_API_TOKEN')
         jenkins_webhook_secret = os.getenv('JENKINS_WEBHOOK_SECRET')
 
+        # Filter handled failures (failures with try-catch that continued pipeline)
+        jenkins_filter_handled_failures_str = os.getenv('JENKINS_FILTER_HANDLED_FAILURES', 'true').lower()
+        jenkins_filter_handled_failures = jenkins_filter_handled_failures_str in ['true', '1', 'yes', 'on']
+
         return {
             'jenkins_enabled': jenkins_enabled,
             'jenkins_url': jenkins_url,
             'jenkins_user': jenkins_user,
             'jenkins_api_token': jenkins_api_token,
-            'jenkins_webhook_secret': jenkins_webhook_secret
+            'jenkins_webhook_secret': jenkins_webhook_secret,
+            'jenkins_filter_handled_failures': jenkins_filter_handled_failures
         }
 
     @staticmethod
@@ -353,6 +360,7 @@ class ConfigLoader:
             jenkins_user=jenkins['jenkins_user'],
             jenkins_api_token=jenkins['jenkins_api_token'],
             jenkins_webhook_secret=jenkins['jenkins_webhook_secret'],
+            jenkins_filter_handled_failures=jenkins['jenkins_filter_handled_failures'],
             bfa_host=bfa['bfa_host'],
             bfa_secret_key=bfa['bfa_secret_key'],
             error_context_lines_before=log_limits['error_context_lines_before'],
