@@ -53,6 +53,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         bfa_secret_key                   -> (Optional[str]) -> BFA JWT secret key
         error_context_lines_before       -> (int)           -> Error context lines before
         error_context_lines_after        -> (int)           -> Error context lines after
+        error_ignore_patterns            -> (List[str])     -> Patterns to ignore as errors
         max_log_lines                    -> (int)           -> Max lines to process per log
         tail_log_lines                   -> (int)           -> Lines to fetch from tail first
         stream_chunk_size                -> (int)           -> Bytes per chunk when streaming
@@ -85,6 +86,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     bfa_secret_key: Optional[str]
     error_context_lines_before: int
     error_context_lines_after: int
+    error_ignore_patterns: List[str]
     max_log_lines: int
     tail_log_lines: int
     stream_chunk_size: int
@@ -223,9 +225,16 @@ class ConfigLoader:
         tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))
         stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))
 
+        # Load ignore patterns (comma-separated, case-insensitive matching)
+        error_ignore_patterns_str = os.getenv('ERROR_IGNORE_PATTERNS', '')
+        error_ignore_patterns = [
+            s.strip().lower() for s in error_ignore_patterns_str.split(',') if s.strip()
+        ]
+
         return {
             'error_context_lines_before': error_context_lines_before,
             'error_context_lines_after': error_context_lines_after,
+            'error_ignore_patterns': error_ignore_patterns,
             'max_log_lines': max_log_lines,
             'tail_log_lines': tail_log_lines,
             'stream_chunk_size': stream_chunk_size
@@ -365,6 +374,7 @@ class ConfigLoader:
             bfa_secret_key=bfa['bfa_secret_key'],
             error_context_lines_before=log_limits['error_context_lines_before'],
             error_context_lines_after=log_limits['error_context_lines_after'],
+            error_ignore_patterns=log_limits['error_ignore_patterns'],
             max_log_lines=log_limits['max_log_lines'],
             tail_log_lines=log_limits['tail_log_lines'],
             stream_chunk_size=log_limits['stream_chunk_size']

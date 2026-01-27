@@ -32,7 +32,12 @@ class LogErrorExtractor:
         'compilation error', 'build failed'
     ]
 
-    def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000):
+    # Ignore patterns - lines matching these are NOT considered errors even if they match ERROR_PATTERNS
+    # This filters out false positives (case-insensitive)
+    IGNORE_PATTERNS: List[str] = []
+
+    def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000,
+                 ignore_patterns: List[str] = None):
         """
         Initialize the error extractor.
 
@@ -40,10 +45,13 @@ class LogErrorExtractor:
             lines_before: Number of context lines to include before each error (default: 50)
             lines_after: Number of context lines to include after each error (default: 10)
             max_line_length: Maximum length of individual lines before truncation (default: 1000)
+            ignore_patterns: List of patterns to ignore - lines matching these won't be considered
+                           errors even if they match ERROR_PATTERNS (default: None)
         """
         self.lines_before = lines_before
         self.lines_after = lines_after
         self.max_line_length = max_line_length
+        self.ignore_patterns = ignore_patterns if ignore_patterns is not None else self.IGNORE_PATTERNS
 
     def extract_error_sections(self, log_content: str) -> List[str]:
         """
@@ -119,7 +127,11 @@ class LogErrorExtractor:
 
     def _find_error_lines(self, lines: List[str]) -> List[int]:
         """
-        Find all line indices that contain error patterns.
+        Find all line indices that contain error patterns but not ignore patterns.
+
+        A line is considered an error if:
+        - It matches at least one ERROR_PATTERN, AND
+        - It does NOT match any IGNORE_PATTERN
 
         Args:
             lines: List of cleaned log lines
@@ -134,7 +146,12 @@ class LogErrorExtractor:
                 continue
 
             line_lower = line.lower()
+
+            # Check if line matches any error pattern
             if any(pattern in line_lower for pattern in self.ERROR_PATTERNS):
+                # Check if line should be ignored (matches any ignore pattern)
+                if self.ignore_patterns and any(ignore in line_lower for ignore in self.ignore_patterns):
+                    continue  # Skip this line - it matches an ignore pattern
                 error_indices.append(idx)
 
         return error_indices
@@ -211,7 +228,8 @@ class LogErrorExtractor:
         return merged
 
 
-def extract_error_sections(log_content: str, lines_before: int = 50, lines_after: int = 10) -> List[str]:
+def extract_error_sections(log_content: str, lines_before: int = 50, lines_after: int = 10,
+                           ignore_patterns: List[str] = None) -> List[str]:
     """
     Convenience function to extract error sections from log content.
 
@@ -219,9 +237,12 @@ def extract_error_sections(log_content: str, lines_before: int = 50, lines_after
         log_content: Raw log content as string
         lines_before: Number of context lines before each error (default: 50)
         lines_after: Number of context lines after each error (default: 10)
+        ignore_patterns: List of patterns to ignore - lines matching these won't be considered
+                       errors even if they match ERROR_PATTERNS (default: None)
 
     Returns:
         List with single string element containing all error lines with context, joined by newlines
     """
-    extractor = LogErrorExtractor(lines_before=lines_before, lines_after=lines_after)
+    extractor = LogErrorExtractor(lines_before=lines_before, lines_after=lines_after,
+                                  ignore_patterns=ignore_patterns)
     return extractor.extract_error_sections(log_content)
