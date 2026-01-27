@@ -448,5 +448,177 @@ Line 5"""
             self.assertIn(pattern, result[0].lower())
 
 
+class TestIgnorePatterns(unittest.TestCase):
+    """Test cases for IGNORE_PATTERNS functionality."""
+
+    def test_initialization_with_ignore_patterns(self):
+        """Test LogErrorExtractor initialization with custom ignore_patterns."""
+        ignore_patterns = ['error: tag', '0 errors']
+        extractor = LogErrorExtractor(ignore_patterns=ignore_patterns)
+
+        self.assertEqual(extractor.ignore_patterns, ignore_patterns)
+
+    def test_initialization_default_ignore_patterns(self):
+        """Test that default ignore_patterns is empty list."""
+        extractor = LogErrorExtractor()
+
+        self.assertEqual(extractor.ignore_patterns, [])
+
+    def test_ignore_pattern_filters_false_positive(self):
+        """Test that ignore pattern filters out false positive errors."""
+        extractor = LogErrorExtractor(ignore_patterns=['error: tag'])
+        lines = [
+            "Building image with error: tag latest",
+            "Real ERROR: something failed"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Should only detect the real error, not the "error: tag" false positive
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 1)
+
+    def test_ignore_pattern_case_insensitive(self):
+        """Test that ignore patterns are case-insensitive."""
+        extractor = LogErrorExtractor(ignore_patterns=['error: tag'])
+        lines = [
+            "ERROR: TAG latest",
+            "error: tag latest",
+            "Real error message"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Only the real error should be detected
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 2)
+
+    def test_ignore_pattern_0_errors_success_message(self):
+        """Test filtering success message containing 'error' word."""
+        extractor = LogErrorExtractor(ignore_patterns=['0 errors'])
+        lines = [
+            "Build completed: 0 errors, 5 warnings",
+            "Compilation error: missing semicolon"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Should only detect the real error
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 1)
+
+    def test_multiple_ignore_patterns(self):
+        """Test with multiple ignore patterns."""
+        extractor = LogErrorExtractor(ignore_patterns=['error: tag', '0 errors', 'warning treated as error'])
+        lines = [
+            "Docker error: tag myimage",
+            "Build: 0 errors found",
+            "-Werror: warning treated as error",
+            "Real FATAL error occurred"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Only the real error should be detected
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 3)
+
+    def test_empty_ignore_patterns_no_filtering(self):
+        """Test that empty ignore_patterns list doesn't filter anything."""
+        extractor = LogErrorExtractor(ignore_patterns=[])
+        lines = [
+            "error: tag latest",
+            "Real error message"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Both lines should be detected as errors
+        self.assertEqual(len(error_indices), 2)
+
+    def test_ignore_patterns_none_uses_class_default(self):
+        """Test that None ignore_patterns uses class default (empty list)."""
+        extractor = LogErrorExtractor(ignore_patterns=None)
+        lines = [
+            "error: tag latest",
+            "Real error message"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Both lines should be detected as errors (no filtering)
+        self.assertEqual(len(error_indices), 2)
+
+    def test_extract_error_sections_with_ignore_patterns(self):
+        """Test full extraction with ignore patterns."""
+        extractor = LogErrorExtractor(lines_before=1, lines_after=1, ignore_patterns=['error: tag'])
+        log_content = """
+Line 1
+Docker error: tag myimage
+Line 3
+Real ERROR: build failed
+Line 5
+"""
+
+        result = extractor.extract_error_sections(log_content)
+
+        # Should only contain the real error section
+        self.assertEqual(len(result), 1)
+        self.assertIn('Real ERROR: build failed', result[0])
+        self.assertNotIn('error: tag', result[0])
+
+    def test_convenience_function_with_ignore_patterns(self):
+        """Test convenience function accepts ignore_patterns."""
+        # Create log where only "error: tag" line has error pattern (no other errors)
+        log_content = """
+Line 1
+error: tag latest
+Line 3
+"""
+        # With ignore_patterns=['error: tag'], no errors should be detected
+        result = extract_error_sections(log_content, ignore_patterns=['error: tag'])
+        self.assertEqual(result, [])  # No errors detected
+
+        # Test with a real error and ignore pattern
+        log_content2 = """
+error: tag latest
+Real ERROR: something failed
+"""
+        result2 = extract_error_sections(log_content2, lines_before=0, lines_after=0,
+                                         ignore_patterns=['error: tag'])
+        self.assertEqual(len(result2), 1)
+        self.assertIn('Real ERROR', result2[0])
+        # With lines_before=0, the "error: tag" line won't be included as context
+        self.assertNotIn('error: tag', result2[0])
+
+    def test_ignore_pattern_partial_match(self):
+        """Test that ignore pattern works with partial match."""
+        extractor = LogErrorExtractor(ignore_patterns=['failed to create optional'])
+        lines = [
+            "Operation failed to create optional cache - continuing",
+            "Build FAILED: missing dependencies"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Should only detect the real failure
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 1)
+
+    def test_line_matching_error_but_also_ignore(self):
+        """Test that line matching both error and ignore is filtered out."""
+        extractor = LogErrorExtractor(ignore_patterns=['build failed successfully'])
+        lines = [
+            "Previous build failed successfully recovered",
+            "Current build FAILED"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Only the current failure should be detected
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 1)
+
+
 if __name__ == '__main__':
     unittest.main()
