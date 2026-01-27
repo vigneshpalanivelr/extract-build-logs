@@ -13,6 +13,7 @@ Invokes: config_loader, error_handler
 
 import json
 import logging
+import os
 from typing import Dict, Any, Optional, List
 
 import requests
@@ -183,7 +184,7 @@ class JenkinsLogFetcher:
             requests.exceptions.RequestException: If API request fails
         """
         if tail_lines is None:
-            tail_lines = self.config.tail_log_lines if self.config else 5000
+            tail_lines = self.config.tail_log_lines if self.config else int(os.getenv('TAIL_LOG_LINES', '5000'))
 
         url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
         logger.info("Fetching console log tail (last %d lines) for job %s #%s", tail_lines, job_name, build_number)
@@ -243,7 +244,7 @@ class JenkinsLogFetcher:
             requests.exceptions.RequestException: If API request fails
         """
         if max_lines is None:
-            max_lines = self.config.max_log_lines if self.config else 100000
+            max_lines = self.config.max_log_lines if self.config else int(os.getenv('MAX_LOG_LINES', '100000'))
 
         url = f"{self.jenkins_url}/job/{job_name}/{build_number}/consoleText"
         logger.info("Streaming console log for job %s #%s (max %d lines)", job_name, build_number, max_lines)
