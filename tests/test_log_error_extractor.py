@@ -78,14 +78,14 @@ class TestLogErrorExtractor(unittest.TestCase):
         """Test extraction of single error with context."""
         log_content = """Line 1
 Line 2
-Line 3 with ERROR message
+Line 3 with exception message
 Line 4
 Line 5"""
 
         result = self.extractor.extract_error_sections(log_content)
 
         self.assertEqual(len(result), 1)
-        self.assertIn('ERROR', result[0])
+        self.assertIn('exception', result[0])
         # Check that all lines are included in output
         self.assertIn('Line 1', result[0])
         self.assertIn('Line 5', result[0])
@@ -95,12 +95,12 @@ Line 5"""
         extractor = LogErrorExtractor(lines_before=1, lines_after=1)
         log_content = """
         Line 1
-        Line 2 ERROR first
+        Line 2 exception first
         Line 3
         Line 4
         Line 5
         Line 6
-        Line 7 FAILED second
+        Line 7 build failed second
         Line 8
         """
 
@@ -108,58 +108,58 @@ Line 5"""
 
         self.assertEqual(len(result), 1)
         # Should contain both error sections with separator
-        self.assertIn('ERROR first', result[0])
-        self.assertIn('FAILED second', result[0])
+        self.assertIn('exception first', result[0])
+        self.assertIn('build failed second', result[0])
         self.assertIn('--- Next Error Section ---', result[0])
 
     def test_clean_line_removes_ansi_codes(self):
         """Test that ANSI color codes are removed."""
-        line_with_ansi = "\x1b[31mERROR\x1b[0m: Something failed"
+        line_with_ansi = "\x1b[31mException\x1b[0m: Something failed"
 
         cleaned = self.extractor._clean_line(line_with_ansi)
 
         self.assertNotIn('\x1b', cleaned)
-        self.assertIn('ERROR', cleaned)
+        self.assertIn('Exception', cleaned)
         self.assertIn('Something failed', cleaned)
 
     def test_clean_line_removes_timestamps(self):
         """Test that timestamp patterns are removed."""
         # ISO timestamp
-        line1 = "2025-01-01 12:34:56.789 ERROR: Test error"
+        line1 = "2025-01-01 12:34:56.789 exception: Test error"
         cleaned1 = self.extractor._clean_line(line1)
         self.assertNotIn('2025-01-01', cleaned1)
-        self.assertIn('ERROR', cleaned1)
+        self.assertIn('exception', cleaned1)
 
         # Bracket timestamp
-        line2 = "[12:34:56] Build failed"
+        line2 = "[12:34:56] build failed"
         cleaned2 = self.extractor._clean_line(line2)
         self.assertNotIn('[12:34:56]', cleaned2)
-        self.assertIn('Build failed', cleaned2)
+        self.assertIn('build failed', cleaned2)
 
     def test_clean_line_removes_non_ascii(self):
         """Test that non-ASCII characters are removed."""
-        line_with_unicode = "Error: Test failed ✗"
+        line_with_unicode = "Exception: Test traceback ✗"
 
         cleaned = self.extractor._clean_line(line_with_unicode)
 
         # Unicode checkmark should be replaced with space
         self.assertNotIn('✗', cleaned)
-        self.assertIn('Error', cleaned)
+        self.assertIn('Exception', cleaned)
 
     def test_clean_line_collapses_multiple_spaces(self):
         """Test that multiple spaces are collapsed."""
-        line_with_spaces = "ERROR:     Multiple    spaces    here"
+        line_with_spaces = "exception:     Multiple    spaces    here"
 
         cleaned = self.extractor._clean_line(line_with_spaces)
 
         # Should have single spaces only
         self.assertNotIn('  ', cleaned)
-        self.assertEqual(cleaned, "ERROR: Multiple spaces here")
+        self.assertEqual(cleaned, "exception: Multiple spaces here")
 
     def test_clean_line_truncates_long_lines(self):
         """Test that long lines are truncated."""
         extractor = LogErrorExtractor(max_line_length=50)
-        long_line = "ERROR: " + "A" * 100
+        long_line = "exception: " + "A" * 100
 
         cleaned = extractor._clean_line(long_line)
 
@@ -175,11 +175,10 @@ Line 5"""
     def test_find_error_lines_all_patterns(self):
         """Test that all error patterns are detected."""
         patterns_to_test = [
-            'error', 'err!', 'failed', 'failure', 'exception', 'traceback',
-            'syntaxerror', 'typeerror', 'assertionerror', 'valueerror',
-            'fatal', 'critical', 'exit code', 'tests failed',
-            'assertion failed', 'could not resolve', 'eresolve',
-            'compilation error', 'build failed'
+            'make: ***', 'Sending interrupt signal to process', 'Killed by signal', 'Git clone failed',
+            'subprocess.CalledProcessError: Command', 'unknown: Bad credentials', 'npm ERR! EBUSY: resource busy',
+            'build-packetlogic2/packages/buildenv/11_llvm:', 'docker.errors', 'aseline.tar.lzma: Unexpected end of input',
+            'err!', 'exception', 'traceback', 'could not resolve', 'compilation error', 'build failed'
         ]
 
         for pattern in patterns_to_test:
@@ -193,9 +192,9 @@ Line 5"""
         """Test that error detection is case-insensitive."""
         lines = [
             "Normal line",
-            "ERROR in uppercase",
-            "error in lowercase",
-            "ErRoR in mixed case"
+            "EXCEPTION in uppercase",
+            "exception in lowercase",
+            "ExCePtIoN in mixed case"
         ]
 
         error_indices = self.extractor._find_error_lines(lines)
@@ -205,7 +204,7 @@ Line 5"""
 
     def test_find_error_lines_skips_empty_lines(self):
         """Test that empty lines are skipped."""
-        lines = ["", "ERROR line", "", ""]
+        lines = ["", "exception line", "", ""]
 
         error_indices = self.extractor._find_error_lines(lines)
 
@@ -215,39 +214,39 @@ Line 5"""
     def test_extract_sections_with_context_basic(self):
         """Test basic context extraction around error."""
         extractor = LogErrorExtractor(lines_before=2, lines_after=2)
-        lines = ["line1", "line2", "line3 ERROR", "line4", "line5"]
+        lines = ["line1", "line2", "line3 exception", "line4", "line5"]
         error_indices = [2]
 
         sections = extractor._extract_sections_with_context(lines, error_indices)
 
         # Should extract lines 1-5 (index 0-4)
         self.assertIn("Line 1: line1", sections)
-        self.assertIn("Line 3: line3 ERROR", sections)
+        self.assertIn("Line 3: line3 exception", sections)
         self.assertIn("Line 5: line5", sections)
 
     def test_extract_sections_with_context_at_start(self):
         """Test context extraction when error is at start of log."""
         extractor = LogErrorExtractor(lines_before=5, lines_after=2)
-        lines = ["ERROR at start", "line2", "line3"]
+        lines = ["exception at start", "line2", "line3"]
         error_indices = [0]
 
         sections = extractor._extract_sections_with_context(lines, error_indices)
 
         # Should extract from line 1 (can't go before start)
-        self.assertIn("Line 1: ERROR at start", sections)
+        self.assertIn("Line 1: exception at start", sections)
         self.assertIn("Line 3: line3", sections)
 
     def test_extract_sections_with_context_at_end(self):
         """Test context extraction when error is at end of log."""
         extractor = LogErrorExtractor(lines_before=2, lines_after=5)
-        lines = ["line1", "line2", "ERROR at end"]
+        lines = ["line1", "line2", "exception at end"]
         error_indices = [2]
 
         sections = extractor._extract_sections_with_context(lines, error_indices)
 
         # Should extract to end (can't go past end)
         self.assertIn("Line 1: line1", sections)
-        self.assertIn("Line 3: ERROR at end", sections)
+        self.assertIn("Line 3: exception at end", sections)
 
     def test_extract_sections_with_context_empty_indices(self):
         """Test extraction with no error indices."""
@@ -318,7 +317,7 @@ Line 5"""
     def test_extract_error_sections_line_numbers_1_indexed(self):
         """Test that line numbers in output are 1-indexed."""
         extractor = LogErrorExtractor(lines_before=0, lines_after=0)
-        log_content = "Line with ERROR"
+        log_content = "Line with exception"
 
         result = extractor.extract_error_sections(log_content)
 
@@ -328,40 +327,40 @@ Line 5"""
     def test_extract_error_sections_skips_empty_lines_in_output(self):
         """Test that empty lines are skipped in formatted output."""
         extractor = LogErrorExtractor(lines_before=1, lines_after=1)
-        log_content = "\nLine with ERROR\n"
+        log_content = "\nLine with exception\n"
 
         result = extractor.extract_error_sections(log_content)
 
         # Should only contain the non-empty line
         lines_in_output = [line for line in result[0].split('\n') if line.startswith('Line ')]
         self.assertEqual(len(lines_in_output), 1)
-        self.assertIn('ERROR', lines_in_output[0])
+        self.assertIn('exception', lines_in_output[0])
 
     def test_convenience_function(self):
         """Test the convenience function extract_error_sections."""
         log_content = """
         Line 1
-        Line 2 ERROR here
+        Line 2 exception here
         Line 3
         """
 
         result = extract_error_sections(log_content, lines_before=1, lines_after=1)
 
         self.assertEqual(len(result), 1)
-        self.assertIn('ERROR', result[0])
+        self.assertIn('exception', result[0])
 
     def test_convenience_function_default_parameters(self):
         """Test convenience function with default parameters."""
-        log_content = "ERROR line"
+        log_content = "exception line"
 
         result = extract_error_sections(log_content)
 
         self.assertEqual(len(result), 1)
-        self.assertIn('ERROR', result[0])
+        self.assertIn('exception', result[0])
 
     def test_extract_error_sections_returns_single_string(self):
         """Test that extract_error_sections returns list with single string."""
-        log_content = "ERROR line"
+        log_content = "exception line"
 
         result = self.extractor.extract_error_sections(log_content)
 
@@ -371,22 +370,22 @@ Line 5"""
 
     def test_error_pattern_in_middle_of_word(self):
         """Test that error patterns are detected even in middle of words."""
-        log_content = "GeneratorError: Something went wrong"
+        log_content = "RuntimeException: Something went wrong"
 
         result = self.extractor.extract_error_sections(log_content)
 
-        # Should detect 'error' within 'GeneratorError'
+        # Should detect 'exception' within 'RuntimeException'
         self.assertEqual(len(result), 1)
-        self.assertIn('GeneratorError', result[0])
+        self.assertIn('RuntimeException', result[0])
 
     def test_multiple_errors_close_together_merged(self):
         """Test that close errors are merged into single section."""
         extractor = LogErrorExtractor(lines_before=2, lines_after=2)
         log_content = """
         Line 1
-        Line 2 ERROR first
+        Line 2 exception first
         Line 3
-        Line 4 FAILED second
+        Line 4 build failed second
         Line 5
         """
 
@@ -401,12 +400,12 @@ Line 5"""
         extractor = LogErrorExtractor(lines_before=1, lines_after=1)
         log_content = """
         Line 1
-        Line 2 ERROR first
+        Line 2 exception first
         Line 3
         Line 4
         Line 5
         Line 6
-        Line 7 FAILED second
+        Line 7 build failed second
         Line 8
         """
 
@@ -419,32 +418,24 @@ Line 5"""
     def test_extract_with_all_error_patterns(self):
         """Integration test with all error patterns in single log."""
         log_content = '\n'.join([
-            "error detected",
+            "make: *** Error",
             "err! Something went wrong",
-            "test failed completely",
-            "failure in module",
+            "Killed by signal 9",
+            "Git clone failed",
             "exception occurred",
             "traceback found",
-            "syntaxerror in code",
-            "typeerror raised",
-            "assertionerror found",
-            "valueerror detected",
-            "fatal error",
-            "critical issue",
-            "exit code 1",
-            "tests failed",
-            "assertion failed",
-            "could not resolve",
-            "eresolve problem",
-            "compilation error",
-            "build failed"
+            "could not resolve dependency",
+            "compilation error in code",
+            "build failed completely",
+            "docker.errors.APIError",
+            "subprocess.CalledProcessError: Command failed"
         ])
 
         result = self.extractor.extract_error_sections(log_content)
 
         # Should detect all patterns
         self.assertEqual(len(result), 1)
-        for pattern in ['error', 'failed', 'exception', 'fatal']:
+        for pattern in ['err!', 'exception', 'traceback', 'build failed']:
             self.assertIn(pattern, result[0].lower())
 
 
@@ -466,25 +457,25 @@ class TestIgnorePatterns(unittest.TestCase):
 
     def test_ignore_pattern_filters_false_positive(self):
         """Test that ignore pattern filters out false positive errors."""
-        extractor = LogErrorExtractor(ignore_patterns=['error: tag'])
+        extractor = LogErrorExtractor(ignore_patterns=['docker.errors.tag'])
         lines = [
-            "Building image with error: tag latest",
-            "Real ERROR: something failed"
+            "Building image with docker.errors.tag latest",
+            "Real exception: something failed"
         ]
 
         error_indices = extractor._find_error_lines(lines)
 
-        # Should only detect the real error, not the "error: tag" false positive
+        # Should only detect the real error, not the "docker.errors.tag" false positive
         self.assertEqual(len(error_indices), 1)
         self.assertEqual(error_indices[0], 1)
 
     def test_ignore_pattern_case_insensitive(self):
         """Test that ignore patterns are case-insensitive."""
-        extractor = LogErrorExtractor(ignore_patterns=['error: tag'])
+        extractor = LogErrorExtractor(ignore_patterns=['docker.errors.tag'])
         lines = [
-            "ERROR: TAG latest",
-            "error: tag latest",
-            "Real error message"
+            "DOCKER.ERRORS.TAG latest",
+            "docker.errors.tag latest",
+            "Real exception message"
         ]
 
         error_indices = extractor._find_error_lines(lines)
@@ -495,11 +486,11 @@ class TestIgnorePatterns(unittest.TestCase):
 
     def test_ignore_pattern_uppercase_pattern(self):
         """Test that ignore patterns work when provided in uppercase."""
-        extractor = LogErrorExtractor(ignore_patterns=['ERROR: TAG'])
+        extractor = LogErrorExtractor(ignore_patterns=['DOCKER.ERRORS.TAG'])
         lines = [
-            "error: tag latest",
-            "ERROR: TAG latest",
-            "Real error message"
+            "docker.errors.tag latest",
+            "DOCKER.ERRORS.TAG latest",
+            "Real exception message"
         ]
 
         error_indices = extractor._find_error_lines(lines)
@@ -524,12 +515,12 @@ class TestIgnorePatterns(unittest.TestCase):
 
     def test_multiple_ignore_patterns(self):
         """Test with multiple ignore patterns."""
-        extractor = LogErrorExtractor(ignore_patterns=['error: tag', '0 errors', 'warning treated as error'])
+        extractor = LogErrorExtractor(ignore_patterns=['docker.errors.tag', 'err! skipped', 'traceback ignored'])
         lines = [
-            "Docker error: tag myimage",
-            "Build: 0 errors found",
-            "-Werror: warning treated as error",
-            "Real FATAL error occurred"
+            "Docker docker.errors.tag myimage",
+            "Build: err! skipped",
+            "Test traceback ignored",
+            "Real exception occurred"
         ]
 
         error_indices = extractor._find_error_lines(lines)
@@ -542,8 +533,8 @@ class TestIgnorePatterns(unittest.TestCase):
         """Test that empty ignore_patterns list doesn't filter anything."""
         extractor = LogErrorExtractor(ignore_patterns=[])
         lines = [
-            "error: tag latest",
-            "Real error message"
+            "docker.errors.tag latest",
+            "Real exception message"
         ]
 
         error_indices = extractor._find_error_lines(lines)
@@ -555,8 +546,8 @@ class TestIgnorePatterns(unittest.TestCase):
         """Test that None ignore_patterns uses class default (empty list)."""
         extractor = LogErrorExtractor(ignore_patterns=None)
         lines = [
-            "error: tag latest",
-            "Real error message"
+            "docker.errors.tag latest",
+            "Real exception message"
         ]
 
         error_indices = extractor._find_error_lines(lines)
@@ -566,12 +557,12 @@ class TestIgnorePatterns(unittest.TestCase):
 
     def test_extract_error_sections_with_ignore_patterns(self):
         """Test full extraction with ignore patterns."""
-        extractor = LogErrorExtractor(lines_before=1, lines_after=1, ignore_patterns=['error: tag'])
+        extractor = LogErrorExtractor(lines_before=1, lines_after=1, ignore_patterns=['docker.errors.tag'])
         log_content = """
 Line 1
-Docker error: tag myimage
+Docker docker.errors.tag myimage
 Line 3
-Real ERROR: build failed
+Real exception: build failed
 Line 5
 """
 
@@ -579,32 +570,32 @@ Line 5
 
         # Should only contain the real error section
         self.assertEqual(len(result), 1)
-        self.assertIn('Real ERROR: build failed', result[0])
-        self.assertNotIn('error: tag', result[0])
+        self.assertIn('Real exception: build failed', result[0])
+        self.assertNotIn('docker.errors.tag', result[0])
 
     def test_convenience_function_with_ignore_patterns(self):
         """Test convenience function accepts ignore_patterns."""
-        # Create log where only "error: tag" line has error pattern (no other errors)
+        # Create log where only "docker.errors.tag" line has error pattern (no other errors)
         log_content = """
 Line 1
-error: tag latest
+docker.errors.tag latest
 Line 3
 """
-        # With ignore_patterns=['error: tag'], no errors should be detected
-        result = extract_error_sections(log_content, ignore_patterns=['error: tag'])
+        # With ignore_patterns=['docker.errors.tag'], no errors should be detected
+        result = extract_error_sections(log_content, ignore_patterns=['docker.errors.tag'])
         self.assertEqual(result, [])  # No errors detected
 
         # Test with a real error and ignore pattern
         log_content2 = """
-error: tag latest
-Real ERROR: something failed
+docker.errors.tag latest
+Real exception: something failed
 """
         result2 = extract_error_sections(log_content2, lines_before=0, lines_after=0,
-                                         ignore_patterns=['error: tag'])
+                                         ignore_patterns=['docker.errors.tag'])
         self.assertEqual(len(result2), 1)
-        self.assertIn('Real ERROR', result2[0])
-        # With lines_before=0, the "error: tag" line won't be included as context
-        self.assertNotIn('error: tag', result2[0])
+        self.assertIn('Real exception', result2[0])
+        # With lines_before=0, the "docker.errors.tag" line won't be included as context
+        self.assertNotIn('docker.errors.tag', result2[0])
 
     def test_ignore_pattern_partial_match(self):
         """Test that ignore pattern works with partial match."""
