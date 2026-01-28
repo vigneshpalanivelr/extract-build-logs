@@ -150,7 +150,7 @@ class LogErrorExtractor:
             # Check if line matches any error pattern
             if any(pattern in line_lower for pattern in self.ERROR_PATTERNS):
                 # Check if line should be ignored (matches any ignore pattern)
-                if self.ignore_patterns and any(ignore in line_lower for ignore in self.ignore_patterns):
+                if self.ignore_patterns and any(ignore.lower() in line_lower for ignore in self.ignore_patterns):
                     continue  # Skip this line - it matches an ignore pattern
                 error_indices.append(idx)
 
