@@ -1,26 +1,48 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bfapython
+# -*- coding: utf-8 -*-
 """
 Pipeline Monitoring Dashboard
 
 A command-line dashboard for viewing GitLab pipeline request statistics,
 processing status, and exporting data for analysis.
 
+Compatible with Python 3.6+
+
 Usage:
-    python monitor_dashboard.py                     # Show dashboard
-    python monitor_dashboard.py --recent 100        # Show recent 100 requests
-    python monitor_dashboard.py --export output.csv  # Export to CSV
-    python monitor_dashboard.py --pipeline 12345    # Show specific pipeline
+    bfapython scripts/monitor_dashboard.py                     # Show dashboard
+    bfapython scripts/monitor_dashboard.py --recent 100        # Show recent 100 requests
+    bfapython scripts/monitor_dashboard.py --export output.csv # Export to CSV
+    bfapython scripts/monitor_dashboard.py --pipeline 12345    # Show specific pipeline
 """
 
 import sys
 import argparse
 from pathlib import Path
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent / 'src'))
+# Add src to path (go up from scripts/ to project root, then into src/)
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
-from monitoring import PipelineMonitor
-from tabulate import tabulate
+try:
+    from monitoring import PipelineMonitor
+except ImportError as e:
+    print("Error: Could not import monitoring module.")
+    print("Make sure you're running from the project root directory:")
+    print("  bfapython scripts/monitor_dashboard.py")
+    print("\nOriginal error: {}".format(e))
+    sys.exit(1)
+
+try:
+    from tabulate import tabulate
+except ImportError:
+    # Fallback for environments without tabulate
+    def tabulate(data, headers=None, tablefmt=None):
+        """Simple fallback table formatter."""
+        if headers:
+            print("  ".join(str(h) for h in headers))
+            print("-" * 60)
+        for row in data:
+            print("  ".join(str(cell) for cell in row))
+        return ""
 
 
 def print_summary(monitor: PipelineMonitor, hours: int = 24):
