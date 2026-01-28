@@ -1140,6 +1140,20 @@ ERROR: BFA_HOST required when API_POST_ENABLED is true
 
 ## 3.2 GitLab Webhook Setup
 
+```mermaid
+sequenceDiagram
+    participant G as GitLab
+    participant W as Webhook Server
+    participant API as GitLab API
+    participant S as Storage/BFA
+
+    G->>W: Pipeline Event Webhook
+    W->>API: Fetch Job Logs
+    API-->>W: Return Logs
+    W->>W: Extract Error Sections
+    W->>S: Post/Store Extracted Errors
+```
+
 ### Setup Steps
 
 **1. Navigate to Webhook Settings**
@@ -1220,6 +1234,20 @@ GitLab sends a JSON payload like this:
 ### Overview
 
 Jenkins integration allows extracting build logs including parallel execution blocks.
+
+```mermaid
+sequenceDiagram
+    participant J as Jenkins
+    participant W as Webhook Server
+    participant API as Jenkins API
+    participant S as Storage/BFA
+
+    J->>W: POST /webhook/jenkins (build info)
+    W->>API: Fetch Console Log
+    API-->>W: Return Build Logs
+    W->>W: Extract Error Sections
+    W->>S: Post/Store Extracted Errors
+```
 
 ### Configuration
 
@@ -3582,21 +3610,6 @@ The Jenkins integration provides:
 - Console log parsing to identify stages and parallel execution
 - Blue Ocean API support for better stage information
 - Structured log data posting to your API endpoint
-
-**Architecture Flow:**
-```
-Jenkins Pipeline Completes
-    ↓
-Jenkinsfile post{} block sends webhook via curl
-    ↓
-Log Extractor receives webhook at /webhook/jenkins
-    ↓
-Fetches console log via Jenkins REST API
-    ↓
-Parses parallel blocks from console log
-    ↓
-Posts structured data to your API
-```
 
 ## A.2 Detailed Jenkins Configuration
 
