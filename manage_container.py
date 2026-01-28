@@ -1777,7 +1777,8 @@ def _test_jenkins_webhook(host: str, port: int, jenkins_url: str = None) -> bool
         # Final fallback to example URL
         if not test_jenkins_url:
             test_jenkins_url = "https://jenkins.example.com"
-            console.print("[dim]Using example Jenkins URL (configure JENKINS_URL in .env or jenkins_instances.json)[/dim]\n")
+            console.print("[dim]Using example Jenkins URL "
+                          "(configure JENKINS_URL in .env or jenkins_instances.json)[/dim]\n")
 
     # Sample Jenkins build webhook payload
     sample_payload = {
