@@ -72,6 +72,7 @@ class TestApiPoster(unittest.TestCase):
             # Error context extraction
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -234,6 +235,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,  # No auth
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1018,6 +1020,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1077,6 +1080,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="secret123",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1133,6 +1137,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="raw_secret_key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1187,6 +1192,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1278,6 +1284,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-secret-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1328,6 +1335,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1376,6 +1384,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1478,6 +1487,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1534,6 +1544,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1580,6 +1591,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1631,6 +1643,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1683,6 +1696,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1729,6 +1743,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1780,6 +1795,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1833,6 +1849,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1885,6 +1902,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1931,6 +1949,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -1982,6 +2001,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2041,6 +2061,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2087,6 +2108,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2192,6 +2214,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2253,6 +2276,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2332,6 +2356,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2411,6 +2436,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2493,6 +2519,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2557,6 +2584,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2609,6 +2637,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2662,6 +2691,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2730,6 +2760,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key=None,  # No secret key
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
@@ -2811,6 +2842,7 @@ class TestApiPoster(unittest.TestCase):
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
+            error_ignore_patterns=[],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
