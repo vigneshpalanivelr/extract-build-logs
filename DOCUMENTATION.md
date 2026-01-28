@@ -130,6 +130,17 @@ flowchart TD
 - [6.3 FAQ](#63-faq)
 - [6.4 API Design History](#64-api-design-history)
 
+**[7. Debugging and Validation](#7-debugging-and-validation)**
+- [7.1 Container Debugging](#71-container-debugging)
+- [7.2 Inside Container Debugging](#72-inside-container-debugging)
+- [7.3 Log File Analysis](#73-log-file-analysis)
+- [7.4 GitLab-Specific Debugging](#74-gitlab-specific-debugging)
+- [7.5 Jenkins-Specific Debugging](#75-jenkins-specific-debugging)
+- [7.6 Monitoring Dashboard Debugging](#76-monitoring-dashboard-debugging)
+- [7.7 Configuration Validation](#77-configuration-validation)
+- [7.8 Common Issues and Solutions](#78-common-issues-and-solutions)
+- [7.9 Performance Debugging](#79-performance-debugging)
+
 ---
 
 # 1. System Overview
@@ -510,21 +521,22 @@ graph TB
 
 ### Core Application Files
 
-| File | Purpose | Key Responsibilities |
-|------|---------|---------------------|
-| `webhook_listener.py` | Main server | FastAPI server, dual webhook endpoints, background processing |
-| `pipeline_extractor.py` | GitLab parsing | Parse GitLab payloads, identify pipeline types, filter jobs |
-| `jenkins_extractor.py` | Jenkins parsing | Parse Jenkins payloads, fetch Blue Ocean metadata, stage extraction |
-| `log_fetcher.py` | GitLab API client | Fetch GitLab pipeline logs, handle authentication |
-| `jenkins_log_fetcher.py` | Jenkins API client | Memory-efficient log streaming, multi-instance support |
-| `log_error_extractor.py` | Error extraction | Pattern matching, context extraction, error summarization |
-| `storage_manager.py` | File storage | Create directories for GitLab/Jenkins, save logs, manage metadata |
-| `api_poster.py` | API integration | User determination, JWT auth, POST logs to BFA API, dual mode |
-| `monitoring.py` | Tracking | SQLite database, webhook statistics, reporting |
-| `error_handler.py` | Error handling | Retry logic, circuit breaker, error tracking |
-| `config_loader.py` | Configuration | Load .env + jenkins_instances.json, validate settings |
-| `logging_config.py` | Logging | Configure logging, format output, mask secrets |
-| `token_manager.py` | Authentication | JWT token generation and management |
+| File | Purpose | Key Classes/Functions | Key Responsibilities |
+|------|---------|----------------------|---------------------|
+| `webhook_listener.py` | Main server | `init_app()`, `process_pipeline_event()`, `process_jenkins_build()` | FastAPI server, dual webhook endpoints (/webhook/gitlab, /webhook/jenkins), background task processing, job filtering |
+| `pipeline_extractor.py` | GitLab parsing | `PipelineExtractor`, `PipelineType` | Parse GitLab webhook payloads, identify pipeline types (merge_request, branch, tag, scheduled), filter jobs by status |
+| `jenkins_extractor.py` | Jenkins parsing | `JenkinsExtractor` | Parse Jenkins webhook payloads, fetch Blue Ocean metadata, extract failed stages and steps |
+| `log_fetcher.py` | GitLab API client | `LogFetcher`, `GitLabAPIError` | Fetch GitLab job logs via API, handle authentication, retry on failures |
+| `jenkins_log_fetcher.py` | Jenkins API client | `JenkinsLogFetcher` | Memory-efficient log streaming, hybrid fetch (tail-first), multi-instance support |
+| `jenkins_instance_manager.py` | Jenkins multi-instance | `JenkinsInstance`, `JenkinsInstanceManager` | Load jenkins_instances.json, match URLs to credentials, validate configuration |
+| `log_error_extractor.py` | Error extraction | `LogErrorExtractor`, `extract_error_sections()` | Pattern matching (ERROR_PATTERNS), ignore patterns, context extraction (lines before/after), line cleaning |
+| `storage_manager.py` | File storage | `StorageManager` | Create directory structure for GitLab/Jenkins, save logs and metadata JSON files |
+| `api_poster.py` | API integration | `ApiPoster` | Determine triggered user, JWT authentication, POST logs to BFA API, dual mode (API + file) |
+| `monitoring.py` | Tracking | `PipelineMonitor`, `RequestStatus` | SQLite database for webhook statistics, request tracking, CSV export |
+| `error_handler.py` | Error handling | `ErrorHandler`, `CircuitBreaker`, `retry_on_failure()` | Retry logic with exponential backoff, circuit breaker pattern, error tracking |
+| `config_loader.py` | Configuration | `Config`, `ConfigLoader` | Load .env file, load jenkins_instances.json, validate all settings |
+| `logging_config.py` | Logging | `LoggingConfig`, `SensitiveDataFilter`, `PipeDelimitedFormatter` | Configure loggers, pipe-delimited format, mask sensitive data (tokens), request ID tracking |
+| `token_manager.py` | Authentication | `TokenManager` | JWT token generation and caching for BFA API authentication |
 
 ## 1.4 Project Structure
 
@@ -544,7 +556,8 @@ extract-build-logs/
 │   ├── config_loader.py          # Configuration management
 │   ├── error_handler.py          # Retry logic and error handling
 │   ├── logging_config.py         # Logging configuration
-│   └── token_manager.py          # JWT token management
+│   ├── token_manager.py          # JWT token management
+│   └── jenkins_instance_manager.py  # Jenkins multi-instance support
 │
 ├── tests/                        # Comprehensive test suite
 │   ├── test_webhook_listener.py
@@ -3049,6 +3062,513 @@ pip install pytest pytest-cov flake8 pylint
 ```bash
 # With auto-reload
 uvicorn src.webhook_listener:app --reload --host 0.0.0.0 --port 8000
+```
+
+---
+
+# 7. Debugging and Validation
+
+This section provides comprehensive debugging techniques for troubleshooting the Log Extractor system, covering container operations, log analysis, and both GitLab and Jenkins integrations.
+
+## 7.1 Container Debugging
+
+### Check Container Status
+
+```bash
+# Quick status check
+bfapython manage_container.py status
+
+# Detailed Docker status
+docker ps -a | grep bfa-gitlab-pipeline-extractor
+
+# Check container health
+docker inspect bfa-gitlab-pipeline-extractor --format='{{.State.Status}}'
+
+# View container resource usage
+docker stats bfa-gitlab-pipeline-extractor --no-stream
+```
+
+### Container Logs
+
+```bash
+# Follow live logs
+bfapython manage_container.py logs
+
+# View logs without following
+bfapython manage_container.py logs --no-follow
+
+# View last N lines
+docker logs --tail 100 bfa-gitlab-pipeline-extractor
+
+# View logs with timestamps
+docker logs --timestamps bfa-gitlab-pipeline-extractor
+
+# View logs since specific time
+docker logs --since "2024-01-01T10:00:00" bfa-gitlab-pipeline-extractor
+
+# Filter container logs for errors
+docker logs bfa-gitlab-pipeline-extractor 2>&1 | grep -i error
+```
+
+### Container Restart and Recovery
+
+```bash
+# Graceful restart
+bfapython manage_container.py restart
+
+# Force stop and start
+bfapython manage_container.py stop
+bfapython manage_container.py start --yes
+
+# Remove and rebuild (nuclear option)
+bfapython manage_container.py remove --force
+bfapython manage_container.py build
+bfapython manage_container.py start --yes
+```
+
+### Container Network Debugging
+
+```bash
+# Check container port bindings
+docker port bfa-gitlab-pipeline-extractor
+
+# Test webhook endpoint from host
+curl -X POST http://localhost:8000/webhook/gitlab \
+  -H "Content-Type: application/json" \
+  -d '{"test": "payload"}'
+
+# Test health endpoint
+curl http://localhost:8000/health
+
+# Check container network settings
+docker inspect bfa-gitlab-pipeline-extractor --format='{{.NetworkSettings.Ports}}'
+```
+
+## 7.2 Inside Container Debugging
+
+### Access Container Shell
+
+```bash
+# Enter running container
+docker exec -it bfa-gitlab-pipeline-extractor /bin/bash
+
+# Run command in container
+docker exec bfa-gitlab-pipeline-extractor ls -la /app/logs
+
+# Check Python environment
+docker exec bfa-gitlab-pipeline-extractor python --version
+docker exec bfa-gitlab-pipeline-extractor pip list
+```
+
+### Check Configuration Inside Container
+
+```bash
+# View loaded environment variables
+docker exec bfa-gitlab-pipeline-extractor env | grep -E "GITLAB|JENKINS|BFA|LOG|API"
+
+# Verify .env file is mounted
+docker exec bfa-gitlab-pipeline-extractor cat /app/.env
+
+# Check jenkins_instances.json (if using multi-instance)
+docker exec bfa-gitlab-pipeline-extractor cat /app/jenkins_instances.json 2>/dev/null || echo "Not configured"
+```
+
+### Test API Connectivity from Container
+
+```bash
+# Test GitLab API connectivity
+docker exec bfa-gitlab-pipeline-extractor curl -s -o /dev/null -w "%{http_code}" \
+  -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "$GITLAB_URL/api/v4/projects"
+
+# Test Jenkins API connectivity
+docker exec bfa-gitlab-pipeline-extractor curl -s -o /dev/null -w "%{http_code}" \
+  -u "$JENKINS_USER:$JENKINS_API_TOKEN" \
+  "$JENKINS_URL/api/json"
+
+# Test BFA API connectivity
+docker exec bfa-gitlab-pipeline-extractor curl -s -o /dev/null -w "%{http_code}" \
+  "http://$BFA_HOST:8000/health"
+```
+
+### Check Disk Usage Inside Container
+
+```bash
+# Check logs directory size
+docker exec bfa-gitlab-pipeline-extractor du -sh /app/logs/
+
+# List log files by size
+docker exec bfa-gitlab-pipeline-extractor find /app/logs -type f -name "*.log" -exec ls -lh {} \; | sort -k5 -h
+
+# Check available disk space
+docker exec bfa-gitlab-pipeline-extractor df -h /app/logs
+```
+
+## 7.3 Log File Analysis
+
+### Application Log Locations
+
+| Log File | Description | Location |
+|----------|-------------|----------|
+| `application.log` | Main application logs | `logs/application.log` |
+| `api-requests.log` | API request/response logs | `logs/api-requests.log` |
+| `monitoring.db` | SQLite tracking database | `logs/monitoring.db` |
+
+### Log Format Understanding
+
+The application uses pipe-delimited format:
+```
+TIMESTAMP | LEVEL | MODULE | REQUEST_ID | MESSAGE | key=value pairs
+```
+
+Example:
+```
+2024-01-15 10:30:45.123 | INFO  | src.webhook_listener | a1b2c3d4 | Webhook received | event=Pipeline Hook
+```
+
+### Filtering Application Logs
+
+```bash
+# View all ERROR level logs
+grep "| ERROR |" logs/application.log
+
+# View WARNING and above
+grep -E "\| (WARNING|ERROR|CRITICAL) \|" logs/application.log
+
+# Filter by specific module
+grep "src.jenkins_log_fetcher" logs/application.log
+
+# Filter by request ID
+grep "a1b2c3d4" logs/application.log
+
+# View logs from specific time range
+awk '/2024-01-15 10:30/,/2024-01-15 10:45/' logs/application.log
+
+# Count errors by module
+grep "| ERROR |" logs/application.log | awk -F'|' '{print $3}' | sort | uniq -c | sort -rn
+```
+
+### Finding Specific Pipeline Logs
+
+```bash
+# Find all logs for a specific pipeline ID
+grep "pipeline_id=12345" logs/application.log
+
+# Find all logs for a specific project
+grep "project=my-project" logs/application.log
+# Or by project ID
+grep "project_id=789" logs/application.log
+
+# Find all failed pipeline processing
+grep "status=error" logs/application.log | grep "pipeline"
+
+# List all pipeline directories
+ls -la logs/ | grep -E "^d.*_[0-9]+$"
+
+# Find specific pipeline log files
+find logs/ -type d -name "pipeline_12345" -exec ls -la {} \;
+```
+
+### Finding Jenkins Build Logs
+
+```bash
+# Find all Jenkins build logs
+ls -la logs/jenkins-builds/
+
+# Find specific job logs
+find logs/jenkins-builds/ -type d -name "my-job-name"
+
+# Find all failed stage logs
+find logs/jenkins-builds/ -name "stage_*.log"
+
+# View Jenkins build metadata
+find logs/jenkins-builds/ -name "metadata.json" -exec cat {} \; | jq .
+```
+
+### API Request Log Analysis
+
+```bash
+# View all API requests
+cat logs/api-requests.log
+
+# Filter by response status code
+grep "response_status=200" logs/api-requests.log
+grep "response_status=5" logs/api-requests.log  # 5xx errors
+
+# Filter by endpoint
+grep "/webhook/gitlab" logs/api-requests.log
+grep "/webhook/jenkins" logs/api-requests.log
+
+# Check API post failures
+grep "API post failed" logs/application.log
+```
+
+## 7.4 GitLab-Specific Debugging
+
+### Validate GitLab Webhook Configuration
+
+```bash
+# Test GitLab token permissions
+curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "$GITLAB_URL/api/v4/user" | jq '.username'
+
+# List accessible projects
+curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "$GITLAB_URL/api/v4/projects?membership=true&per_page=5" | jq '.[].name'
+
+# Test fetching a specific pipeline
+curl -s -H "PRIVATE-TOKEN: $GITLAB_TOKEN" \
+  "$GITLAB_URL/api/v4/projects/123/pipelines/456" | jq .
+```
+
+### Test GitLab Webhook Endpoint
+
+```bash
+# Send test webhook (GitLab format)
+bfapython manage_container.py test
+
+# Manual test with curl
+curl -X POST http://localhost:8000/webhook/gitlab \
+  -H "Content-Type: application/json" \
+  -H "X-Gitlab-Event: Pipeline Hook" \
+  -d '{
+    "object_kind": "pipeline",
+    "object_attributes": {"id": 12345, "status": "failed"},
+    "project": {"id": 100, "name": "test-project"},
+    "builds": []
+  }'
+```
+
+### Debug GitLab Pipeline Processing
+
+```bash
+# Find all GitLab webhook events in logs
+grep "X-Gitlab-Event" logs/application.log
+
+# Track a specific pipeline through the system
+PIPELINE_ID=12345
+grep "$PIPELINE_ID" logs/application.log | head -50
+
+# Check for job filtering
+grep "Filtering jobs" logs/application.log
+
+# Check for log fetch errors
+grep "Failed to fetch log for job" logs/application.log
+```
+
+## 7.5 Jenkins-Specific Debugging
+
+### Validate Jenkins Configuration
+
+```bash
+# Test Jenkins API connectivity
+curl -s -u "$JENKINS_USER:$JENKINS_API_TOKEN" \
+  "$JENKINS_URL/api/json" | jq '.mode'
+
+# List Jenkins jobs
+curl -s -u "$JENKINS_USER:$JENKINS_API_TOKEN" \
+  "$JENKINS_URL/api/json?tree=jobs[name]" | jq '.jobs[].name'
+
+# Test Blue Ocean API (if available)
+curl -s -u "$JENKINS_USER:$JENKINS_API_TOKEN" \
+  "$JENKINS_URL/blue/rest/organizations/jenkins/pipelines/" | jq '.[].name'
+```
+
+### Test Jenkins Webhook Endpoint
+
+```bash
+# Send test webhook (Jenkins format)
+bfapython manage_container.py test --jenkins
+
+# Send with specific Jenkins URL (multi-instance)
+bfapython manage_container.py test --jenkins --jenkins-url https://jenkins.example.com
+
+# Manual test with curl
+curl -X POST http://localhost:8000/webhook/jenkins \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jenkins_url": "https://jenkins.example.com",
+    "job_name": "my-pipeline",
+    "build_number": 42,
+    "build_status": "FAILURE"
+  }'
+```
+
+### Debug Jenkins Build Processing
+
+```bash
+# Find all Jenkins webhook events
+grep "Jenkins webhook received" logs/application.log
+
+# Track a specific build
+JOB_NAME="my-pipeline"
+BUILD_NUM=42
+grep "$JOB_NAME" logs/application.log | grep "$BUILD_NUM"
+
+# Check for Blue Ocean API errors
+grep "Blue Ocean" logs/application.log | grep -i error
+
+# Check console log fetch
+grep "Fetching console log" logs/application.log
+
+# Check stage extraction
+grep "Extracting failed stages" logs/application.log
+```
+
+### Jenkins Multi-Instance Debugging
+
+```bash
+# Check jenkins_instances.json loading
+grep "Loading Jenkins instances" logs/application.log
+
+# Check instance matching
+grep "Matched Jenkins instance" logs/application.log
+
+# Verify instance configuration
+cat jenkins_instances.json | jq '.instances[].jenkins_url'
+```
+
+## 7.6 Monitoring Dashboard Debugging
+
+### Check Monitoring Database
+
+```bash
+# View dashboard summary
+bfapython scripts/monitor_dashboard.py
+
+# View recent requests
+bfapython scripts/monitor_dashboard.py --recent 50
+
+# View specific pipeline history
+bfapython scripts/monitor_dashboard.py --pipeline 12345
+
+# Export data for analysis
+bfapython scripts/monitor_dashboard.py --export debug_export.csv
+
+# Query database directly
+sqlite3 logs/monitoring.db "SELECT * FROM webhook_requests ORDER BY timestamp DESC LIMIT 10;"
+
+# Get error statistics
+sqlite3 logs/monitoring.db "SELECT status, COUNT(*) FROM webhook_requests GROUP BY status;"
+
+# Find slow requests
+sqlite3 logs/monitoring.db "SELECT * FROM webhook_requests WHERE processing_time > 30 ORDER BY processing_time DESC LIMIT 10;"
+```
+
+### Monitor Real-Time Activity
+
+```bash
+# Watch for new webhook requests (follow application log)
+tail -f logs/application.log | grep "Webhook received"
+
+# Monitor processing status
+watch -n 5 'sqlite3 logs/monitoring.db "SELECT status, COUNT(*) as cnt FROM webhook_requests WHERE timestamp > datetime(\"now\", \"-1 hour\") GROUP BY status;"'
+
+# Count requests per minute
+sqlite3 logs/monitoring.db "SELECT strftime('%Y-%m-%d %H:%M', timestamp) as minute, COUNT(*) FROM webhook_requests GROUP BY minute ORDER BY minute DESC LIMIT 20;"
+```
+
+## 7.7 Configuration Validation
+
+### Validate Full Configuration
+
+```bash
+# Display and validate configuration
+bfapython manage_container.py config
+
+# Quiet validation (exit code only)
+bfapython manage_container.py config --validate-only
+echo "Exit code: $?"
+
+# Check specific environment file
+bfapython manage_container.py config --env-file .env.production
+```
+
+### Common Configuration Issues
+
+| Issue | Symptom | Solution |
+|-------|---------|----------|
+| Invalid GITLAB_URL | "Invalid URL format" error | Ensure URL starts with http:// or https:// |
+| Short GITLAB_TOKEN | "Token too short" error | Generate new token with minimum 10 characters |
+| Invalid WEBHOOK_PORT | Port binding error | Use port between 1-65535 |
+| Missing BFA_HOST | API posting fails | Set BFA_HOST when API_POST_ENABLED=true |
+| Jenkins auth failure | 401 errors in logs | Verify JENKINS_USER and JENKINS_API_TOKEN |
+
+### Test Configuration Without Starting
+
+```bash
+# Python validation script
+python3 -c "
+from src.config_loader import ConfigLoader
+try:
+    config = ConfigLoader.load()
+    print('Configuration valid!')
+    print(f'GitLab URL: {config.gitlab_url}')
+    print(f'Jenkins enabled: {config.jenkins_enabled}')
+    print(f'API posting enabled: {config.api_post_enabled}')
+except Exception as e:
+    print(f'Configuration error: {e}')
+"
+```
+
+## 7.8 Common Issues and Solutions
+
+### GitLab Issues
+
+| Issue | Possible Cause | Debug Steps |
+|-------|---------------|-------------|
+| No logs being saved | Pipeline status filtering | Check `LOG_SAVE_PIPELINE_STATUS` setting |
+| Missing jobs | Job status filtering | Check `LOG_SAVE_JOB_STATUS` setting |
+| 401 Unauthorized | Invalid GitLab token | Verify token with `curl` test above |
+| Webhook not received | Network/firewall issue | Check container port binding and firewall |
+| Slow processing | Large logs | Check `MAX_LOG_LINES` and `TAIL_LOG_LINES` |
+
+### Jenkins Issues
+
+| Issue | Possible Cause | Debug Steps |
+|-------|---------------|-------------|
+| No logs being saved | JENKINS_ENABLED=false | Set JENKINS_ENABLED=true in .env |
+| 401 Unauthorized | Invalid credentials | Verify JENKINS_USER and JENKINS_API_TOKEN |
+| Multi-instance not working | Missing jenkins_url in payload | Check Jenkinsfile sends jenkins_url |
+| Blue Ocean API errors | Plugin not installed | Install Blue Ocean plugin or use console parsing |
+| Handled failures appearing | Filter disabled | Set JENKINS_FILTER_HANDLED_FAILURES=true |
+
+### API Posting Issues
+
+| Issue | Possible Cause | Debug Steps |
+|-------|---------------|-------------|
+| API post timeout | Slow API server | Increase API_POST_TIMEOUT |
+| Connection refused | Wrong BFA_HOST | Verify BFA_HOST is reachable |
+| 401 Unauthorized | Invalid BFA_SECRET_KEY | Check JWT token generation |
+| Fallback to file | API failures | Check logs for specific error messages |
+
+## 7.9 Performance Debugging
+
+### Identify Slow Operations
+
+```bash
+# Find slow pipeline processing
+grep "processing_time" logs/application.log | awk -F'processing_time=' '{print $2}' | sort -n | tail -20
+
+# Check memory usage trend
+docker stats bfa-gitlab-pipeline-extractor --no-stream --format "{{.MemUsage}}"
+
+# Find large log files being processed
+grep "Log size" logs/application.log | sort -t'=' -k2 -n | tail -20
+```
+
+### Log Rotation and Cleanup
+
+```bash
+# Check log file sizes
+du -sh logs/*.log logs/*.db
+
+# Manual log rotation (if needed)
+mv logs/application.log logs/application.log.$(date +%Y%m%d)
+docker exec bfa-gitlab-pipeline-extractor kill -USR1 1  # Signal log rotation
+
+# Clean old pipeline logs (older than 30 days)
+find logs/ -type d -name "pipeline_*" -mtime +30 -exec rm -rf {} \;
 ```
 
 ---

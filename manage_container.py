@@ -1,15 +1,18 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bfapython
+# -*- coding: utf-8 -*-
 """
 GitLab Pipeline Log Extractor - Container Management Script
 
 This script manages the Docker container lifecycle with beautiful CLI output,
 configuration validation, and comprehensive error handling.
 
+Compatible with Python 3.6+
+
 Features:
 - Docker container operations (build, start, stop, restart, logs, status, remove)
 - Configuration display and validation from .env file
 - Monitoring dashboard integration
-- Test webhook functionality
+- Test webhook functionality (GitLab and Jenkins)
 - Export monitoring data
 - Rich terminal output with colors, tables, and progress bars
 
@@ -21,13 +24,13 @@ Exit Codes:
     4: User cancelled operation
 
 Testing:
-    Run unit tests with: pytest tests/test_manage_container.py -v
-    Run with coverage: pytest tests/test_manage_container.py --cov=. --cov-report=html
+    Run unit tests with: bfapython -m pytest tests/test_manage_container.py -v
+    Run with coverage: bfapython -m pytest tests/test_manage_container.py --cov=. --cov-report=html
 
 Usage:
-    ./manage_container.py --help
-    ./manage_container.py build
-    ./manage_container.py start
+    bfapython manage_container.py --help
+    bfapython manage_container.py build
+    bfapython manage_container.py start
     ./manage_container.py status
     ./manage_container.py logs
 """
