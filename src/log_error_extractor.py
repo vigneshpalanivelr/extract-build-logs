@@ -25,11 +25,10 @@ class LogErrorExtractor:
 
     # Error patterns to search for (case-insensitive)
     ERROR_PATTERNS = [
-        'error', 'err!', 'failed', 'failure', 'exception', 'traceback',
-        'syntaxerror', 'typeerror', 'assertionerror', 'valueerror',
-        'fatal', 'critical', 'exit code', 'tests failed',
-        'assertion failed', 'could not resolve', 'eresolve',
-        'compilation error', 'build failed'
+        'make: ***', 'sending interrupt signal to process', 'killed by signal', 'git clone failed',
+        'subprocess.calledprocesserror: command', 'unknown: bad credentials', 'npm err! ebusy: resource busy',
+        'build-packetlogic2/packages/buildenv/11_llvm:', 'docker.errors', 'aseline.tar.lzma: unexpected end of input',
+        'err!', 'exception', 'traceback', 'could not resolve', 'compilation error', 'build failed'
     ]
 
     # Ignore patterns - lines matching these are NOT considered errors even if they match ERROR_PATTERNS
