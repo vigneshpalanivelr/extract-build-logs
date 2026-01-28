@@ -1662,9 +1662,13 @@ def export_monitoring_data(filename: str = "monitoring_export.csv") -> bool:
 
 
 # Testing Operations
-def test_webhook() -> bool:
+def test_webhook(target: str = 'gitlab', jenkins_url: str = None) -> bool:
     """
     Send test webhook to container.
+
+    Args:
+        target: 'gitlab' or 'jenkins' endpoint to test
+        jenkins_url: Optional Jenkins URL for multi-instance setup
 
     Returns:
         True if successful, False otherwise
@@ -1673,63 +1677,134 @@ def test_webhook() -> bool:
         port = get_port_from_config()
         host = get_host_ip()
 
-        console.print("[blue]Testing GitLab webhook endpoint with sample payload...[/blue]")
-        console.print(f"[blue]Target:[/blue] http://{host}:{port}/webhook/gitlab\n")
-
-        # Sample GitLab pipeline webhook payload
-        sample_payload = {
-            "object_kind": "pipeline",
-            "object_attributes": {
-                "id": 12345,
-                "status": "success",
-                "stages": ["build", "test"],
-                "created_at": "2024-01-01 10:00:00 UTC",
-                "finished_at": "2024-01-01 10:15:00 UTC"
-            },
-            "project": {
-                "id": 100,
-                "name": "test-project",
-                "web_url": "https://gitlab.com/test/project"
-            },
-            "builds": [
-                {
-                    "id": 1001,
-                    "name": "build-job",
-                    "stage": "build",
-                    "status": "success"
-                },
-                {
-                    "id": 1002,
-                    "name": "test-job",
-                    "stage": "test",
-                    "status": "success"
-                }
-            ]
-        }
-
-        response = requests.post(
-            f"http://{host}:{port}/webhook/gitlab",
-            json=sample_payload,
-            headers={
-                "Content-Type": "application/json",
-                "X-Gitlab-Event": "Pipeline Hook"
-            },
-            timeout=30
-        )
-
-        response.raise_for_status()
-        result = response.json()
-
-        console.print("[bold green][OK] Test webhook sent successfully![/bold green]")
-        console.print("\n[bold]Response:[/bold]")
-        console.print(json.dumps(result, indent=2))
-        console.print("\n[dim]Check logs with: ./manage_container.py logs[/dim]")
-
-        return True
+        if target == 'jenkins':
+            return _test_jenkins_webhook(host, port, jenkins_url)
+        else:
+            return _test_gitlab_webhook(host, port)
 
     except Exception as e:
         console.print(f"[bold red][X] Failed to send test webhook:[/bold red] {str(e)}", style="red")
         return False
+
+
+def _test_gitlab_webhook(host: str, port: int) -> bool:
+    """Send test webhook to GitLab endpoint."""
+    console.print("[blue]Testing GitLab webhook endpoint with sample payload...[/blue]")
+    console.print(f"[blue]Target:[/blue] http://{host}:{port}/webhook/gitlab\n")
+
+    # Sample GitLab pipeline webhook payload
+    sample_payload = {
+        "object_kind": "pipeline",
+        "object_attributes": {
+            "id": 12345,
+            "status": "success",
+            "stages": ["build", "test"],
+            "created_at": "2024-01-01 10:00:00 UTC",
+            "finished_at": "2024-01-01 10:15:00 UTC"
+        },
+        "project": {
+            "id": 100,
+            "name": "test-project",
+            "web_url": "https://gitlab.com/test/project"
+        },
+        "builds": [
+            {
+                "id": 1001,
+                "name": "build-job",
+                "stage": "build",
+                "status": "success"
+            },
+            {
+                "id": 1002,
+                "name": "test-job",
+                "stage": "test",
+                "status": "success"
+            }
+        ]
+    }
+
+    response = requests.post(
+        f"http://{host}:{port}/webhook/gitlab",
+        json=sample_payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Gitlab-Event": "Pipeline Hook"
+        },
+        timeout=30
+    )
+
+    response.raise_for_status()
+    result = response.json()
+
+    console.print("[bold green][OK] Test webhook sent successfully![/bold green]")
+    console.print("\n[bold]Response:[/bold]")
+    console.print(json.dumps(result, indent=2))
+    console.print("\n[dim]Check logs with: ./manage_container.py logs[/dim]")
+
+    return True
+
+
+def _test_jenkins_webhook(host: str, port: int, jenkins_url: str = None) -> bool:
+    """Send test webhook to Jenkins endpoint."""
+    console.print("[blue]Testing Jenkins webhook endpoint with sample payload...[/blue]")
+    console.print(f"[blue]Target:[/blue] http://{host}:{port}/webhook/jenkins\n")
+
+    # Determine Jenkins URL to use in payload
+    test_jenkins_url = jenkins_url
+    if not test_jenkins_url:
+        # Try to get from jenkins_instances.json first
+        jenkins_instances_file = Path("jenkins_instances.json")
+        if jenkins_instances_file.exists():
+            try:
+                with open(jenkins_instances_file, 'r') as f:
+                    instances_config = json.load(f)
+                if instances_config.get('instances'):
+                    test_jenkins_url = instances_config['instances'][0].get('jenkins_url')
+                    console.print(f"[dim]Using Jenkins URL from jenkins_instances.json: {test_jenkins_url}[/dim]\n")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                pass
+
+        # Fallback to .env
+        if not test_jenkins_url:
+            cfg = load_config(Path(ENV_FILE))
+            if cfg and cfg.get('JENKINS_URL'):
+                test_jenkins_url = cfg['JENKINS_URL']
+                console.print(f"[dim]Using Jenkins URL from .env: {test_jenkins_url}[/dim]\n")
+
+        # Final fallback to example URL
+        if not test_jenkins_url:
+            test_jenkins_url = "https://jenkins.example.com"
+            console.print("[dim]Using example Jenkins URL (configure JENKINS_URL in .env or jenkins_instances.json)[/dim]\n")
+
+    # Sample Jenkins build webhook payload
+    sample_payload = {
+        "jenkins_url": test_jenkins_url,
+        "job_name": "test-pipeline",
+        "build_number": 42,
+        "build_status": "FAILURE",
+        "build_url": f"{test_jenkins_url}/job/test-pipeline/42/",
+        "timestamp": "2024-01-01T10:15:00Z",
+        "triggered_by": "test-user"
+    }
+
+    response = requests.post(
+        f"http://{host}:{port}/webhook/jenkins",
+        json=sample_payload,
+        headers={
+            "Content-Type": "application/json"
+        },
+        timeout=30
+    )
+
+    response.raise_for_status()
+    result = response.json()
+
+    console.print("[bold green][OK] Test webhook sent successfully![/bold green]")
+    console.print("\n[bold]Response:[/bold]")
+    console.print(json.dumps(result, indent=2))
+    console.print("\n[dim]Check logs with: ./manage_container.py logs[/dim]")
+
+    return True
 
 
 # CLI Commands (argparse)
@@ -1899,8 +1974,9 @@ def cmd_export(args):
 
 def cmd_test(args):
     """Send test webhook to the container."""
-
-    success = test_webhook()
+    target = 'jenkins' if args.jenkins else 'gitlab'
+    jenkins_url = getattr(args, 'jenkins_url', None)
+    success = test_webhook(target=target, jenkins_url=jenkins_url)
     sys.exit(EXIT_SUCCESS if success else EXIT_ERROR)
 
 
@@ -1920,7 +1996,8 @@ Examples:
   %(prog)s status                   # Show container status
   %(prog)s monitor --hours 24       # Show monitoring dashboard
   %(prog)s export data.csv          # Export monitoring data
-  %(prog)s test                     # Send test webhook
+  %(prog)s test                     # Test GitLab webhook endpoint
+  %(prog)s test --jenkins           # Test Jenkins webhook endpoint
   %(prog)s remove                   # Remove container/image (interactive)
 
 For more information, see OPERATIONS.md
@@ -1964,7 +2041,8 @@ For more information, see OPERATIONS.md
     parser_remove.set_defaults(func=cmd_remove)
 
     parser_monitor = subparsers.add_parser('monitor', help='View monitoring dashboard')
-    parser_monitor.add_argument('monitor_args', nargs='*', help='Monitor args')
+    parser_monitor.add_argument('monitor_args', nargs=argparse.REMAINDER,
+                                help='Args to pass to monitor script (e.g., --hours 24)')
     parser_monitor.set_defaults(func=cmd_monitor)
 
     parser_export = subparsers.add_parser('export', help='Export monitoring data')
@@ -1972,6 +2050,10 @@ For more information, see OPERATIONS.md
     parser_export.set_defaults(func=cmd_export)
 
     parser_test = subparsers.add_parser('test', help='Send test webhook')
+    parser_test.add_argument('--jenkins', action='store_true',
+                             help='Test Jenkins endpoint instead of GitLab')
+    parser_test.add_argument('--jenkins-url',
+                             help='Jenkins URL for multi-instance setup (optional)')
     parser_test.set_defaults(func=cmd_test)
 
     args = parser.parse_args()

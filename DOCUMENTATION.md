@@ -586,15 +586,26 @@ extract-build-logs/
 │   ├── api-requests.log          # API request logs
 │   └── monitoring.db             # SQLite tracking database
 │
-├── .env                          # Environment configuration
-├── .env.example                  # Configuration template
+├── .env                          # Environment configuration (create from .env.example)
+├── .env.example                  # Configuration template with documentation
+├── .gitlab-ci.yml                # GitLab CI/CD pipeline configuration
+├── .dockerignore                 # Docker build ignore list
+├── .flake8                       # Flake8 linter configuration
+├── .pylintrc                     # Pylint linter configuration
+├── .gitignore                    # Git ignore list
+├── pyproject.toml                # Python project config (pytest, coverage)
 ├── jenkins_instances.json        # Jenkins multi-instance configuration
-├── requirements.txt              # Python dependencies
+├── jenkins_instances.json.example # Jenkins config template
+├── requirements.txt              # Python dependencies (main application)
+├── requirements-manage-py36.txt  # Python 3.6 compatible dependencies
 ├── Dockerfile                    # Docker image definition
 ├── log-extractor-entrypoint.sh   # Container entrypoint script
 ├── manage_container.py           # Container management tool
+├── remove_emojis.py              # Utility to remove emojis from files
 ├── README.md                     # Quick start guide
-└── DOCUMENTATION.md              # This file
+├── DOCUMENTATION.md              # This file (complete documentation)
+├── PYTHON36_COMPATIBILITY.md     # Python 3.6 compatibility guide
+└── PLAN_JENKINS_USER_EXTRACTION.md  # Jenkins user extraction planning doc
 ```
 
 ## 1.5 Data Flow & Processing
@@ -1023,6 +1034,13 @@ GITLAB_TOKEN=your_gitlab_token_here
 
 ### Optional Settings
 
+#### Docker Configuration
+```bash
+DOCKER_IMAGE_NAME=bfa-gitlab-pipeline-extractor   # Docker image name
+DOCKER_CONTAINER_NAME=bfa-gitlab-pipeline-extractor  # Docker container name
+DOCKER_LOGS_DIR=./logs               # Host directory for volume mount
+```
+
 #### Server Configuration
 ```bash
 WEBHOOK_PORT=8000                    # Server port (default: 8000)
@@ -1030,7 +1048,8 @@ WEBHOOK_SECRET=your_webhook_secret   # Webhook validation secret
 LOG_OUTPUT_DIR=./logs                # Log storage directory
 LOG_LEVEL=INFO                       # Logging level (DEBUG, INFO, WARNING, ERROR)
 RETRY_ATTEMPTS=3                     # API retry attempts
-RETRY_DELAY=2                        # Retry delay in seconds
+RETRY_DELAY=60                       # Retry delay in seconds (default: 60)
+LOG_RETENTION_DAYS=90                # Days to retain logs before cleanup
 ```
 
 #### Log Filtering
@@ -1069,6 +1088,23 @@ JENKINS_URL=https://jenkins.example.com       # Jenkins server URL
 JENKINS_USER=your_username                    # Jenkins username
 JENKINS_API_TOKEN=your_jenkins_token          # Jenkins API token
 JENKINS_WEBHOOK_SECRET=your_webhook_secret    # Jenkins webhook secret
+JENKINS_FILTER_HANDLED_FAILURES=true          # Filter out handled failures (try-catch)
+```
+
+#### Log Error Extraction
+```bash
+# Context lines around errors
+ERROR_CONTEXT_LINES_BEFORE=50        # Lines before each error (default: 50)
+ERROR_CONTEXT_LINES_AFTER=10         # Lines after each error (default: 10)
+
+# Ignore patterns (comma-separated, case-insensitive)
+# Lines matching these won't be considered errors even if they match ERROR_PATTERNS
+ERROR_IGNORE_PATTERNS=               # e.g., "error: tag,0 errors"
+
+# Log processing limits
+MAX_LOG_LINES=100000                 # Max lines to process per log (default: 100000)
+TAIL_LOG_LINES=5000                  # Tail lines for hybrid fetch (default: 5000)
+STREAM_CHUNK_SIZE=8192               # Bytes per chunk when streaming (default: 8192)
 ```
 
 ### Configuration Validation
@@ -3778,392 +3814,3 @@ pipeline {
 ```
 
 ---
-
-# Appendix B: Complete Configuration Reference
-
-## B.1 All Environment Variables
-
-### GitLab Configuration
-
-```bash
-# ============================================================================
-# GITLAB CONFIGURATION (REQUIRED)
-# ============================================================================
-
-# GitLab instance URL
-# Examples: https://gitlab.com, https://gitlab.company.com
-GITLAB_URL=https://gitlab.com
-
-# GitLab Personal Access Token
-# Required scopes: api, read_api
-# Generate at: GitLab → Profile → Access Tokens
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-```
-
-### Server Configuration
-
-```bash
-# ============================================================================
-# SERVER CONFIGURATION
-# ============================================================================
-
-# Port for webhook server
-# Default: 8000
-# Valid range: 1-65535
-WEBHOOK_PORT=8000
-
-# Webhook secret token for request validation
-# Leave empty to disable validation (not recommended for production)
-# Generate with: openssl rand -hex 32
-WEBHOOK_SECRET=your_webhook_secret_here
-
-# Directory for log storage
-# Default: ./logs
-# Must be writable by the application
-LOG_OUTPUT_DIR=./logs
-
-# Logging level
-# Options: DEBUG, INFO, WARNING, ERROR, CRITICAL
-# Default: INFO
-# DEBUG: Most verbose, useful for troubleshooting
-# INFO: Normal operational messages
-# WARNING: Warning messages
-# ERROR: Error messages
-# CRITICAL: Critical issues only
-LOG_LEVEL=INFO
-
-# API retry configuration
-# Number of retry attempts for failed API calls
-# Default: 3
-RETRY_ATTEMPTS=3
-
-# Delay between retries (in seconds)
-# Default: 2
-# Exponential backoff: delay * 2^attempt
-RETRY_DELAY=2
-```
-
-### Log Filtering Configuration
-
-```bash
-# ============================================================================
-# LOG FILTERING CONFIGURATION
-# ============================================================================
-
-# Pipeline status filter
-# Which pipeline statuses to save logs for
-# Options: all, failed, success, running, canceled, skipped
-# Multiple values: failed,canceled,skipped
-# Default: all
-# Examples:
-#   all - Save logs for all pipelines
-#   failed - Only save logs for failed pipelines (reduces storage ~90%)
-#   failed,canceled - Save logs for failed or canceled pipelines
-#   success - Only save logs for successful pipelines
-LOG_SAVE_PIPELINE_STATUS=all
-
-# Project whitelist
-# Comma-separated list of project IDs to include
-# Leave empty to save all projects
-# Example: 123,456,789
-# If set, only these projects will be saved
-# Overrides LOG_EXCLUDE_PROJECTS
-LOG_SAVE_PROJECTS=
-
-# Project blacklist
-# Comma-separated list of project IDs to exclude
-# Only used if LOG_SAVE_PROJECTS is empty
-# Example: 999,888
-# These projects will be excluded from log saving
-LOG_EXCLUDE_PROJECTS=
-
-# Job status filter
-# Which job statuses to save logs for within a pipeline
-# Options: all, failed, success, canceled, skipped
-# Default: all
-# Example: failed,canceled - Only save logs for failed or canceled jobs
-LOG_SAVE_JOB_STATUS=all
-
-# Metadata-only mode
-# Save pipeline metadata even if logs are filtered out
-# Options: true, false
-# Default: true
-# When true: Metadata saved for all pipelines, logs only for filtered ones
-# When false: Skip everything (metadata + logs) for filtered pipelines
-LOG_SAVE_METADATA_ALWAYS=true
-```
-
-### BFA Configuration
-
-```bash
-# ============================================================================
-# BFA CONFIGURATION (Build Failure Analyzer / LLM API)
-# ============================================================================
-
-# BFA server hostname (without http://)
-# Used to construct API endpoint: http://BFA_HOST:8000/api/analyze
-# Example: bfa-server.example.com
-# Required if API_POST_ENABLED=true
-BFA_HOST=
-
-# BFA secret key for JWT token generation
-# Used to generate Bearer tokens for API authentication
-# Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
-# If not set, application will try to fetch tokens from BFA_HOST
-BFA_SECRET_KEY=
-```
-
-### API Posting Configuration
-
-```bash
-# ============================================================================
-# API POSTING CONFIGURATION
-# ============================================================================
-
-# Enable API posting
-# When true: POST pipeline logs to external API
-# When false: Save to files only (traditional mode)
-# Default: false
-API_POST_ENABLED=false
-
-# API request timeout (in seconds)
-# Default: 30
-# Increase for slow APIs or large payloads
-API_POST_TIMEOUT=30
-
-# Enable retry logic for API requests
-# When true: Automatically retry failed API requests
-# When false: No retries, fail immediately
-# Default: true
-API_POST_RETRY_ENABLED=true
-
-# Dual mode: Save to both API and files
-# When false: API only (fallback to file on error)
-# When true: Save to both API and files
-# Default: false
-# File storage usage:
-#   false (API only): Minimal file storage (only on API failures)
-#   true (dual mode): Full file storage + API posting
-API_POST_SAVE_TO_FILE=false
-```
-
-### Jenkins Integration
-
-```bash
-# ============================================================================
-# JENKINS INTEGRATION
-# ============================================================================
-
-# Enable Jenkins integration
-# When true: Accept webhooks from Jenkins
-# When false: Jenkins webhooks will be ignored
-# Default: false
-JENKINS_ENABLED=false
-
-# Jenkins server URL
-# Example: https://jenkins.example.com
-# Required if JENKINS_ENABLED=true
-JENKINS_URL=
-
-# Jenkins username
-# Your Jenkins login username
-# Required for API authentication
-JENKINS_USER=
-
-# Jenkins API token
-# Generate at: Jenkins → Your Profile → Configure → API Token
-# Required for API authentication
-JENKINS_API_TOKEN=
-
-# Jenkins webhook secret
-# Used to validate incoming webhooks from Jenkins
-# Should match the token in your Jenkinsfile
-# Leave empty to disable validation
-JENKINS_WEBHOOK_SECRET=
-```
-
-## B.2 Configuration Examples by Use Case
-
-### Use Case 1: Development Environment
-
-**Goal:** Track all pipelines, save all logs, verbose logging
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-
-# Server
-WEBHOOK_PORT=8000
-LOG_LEVEL=DEBUG  # Verbose logging
-
-# No filtering - save everything
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=all
-LOG_SAVE_METADATA_ALWAYS=true
-
-# No API posting
-API_POST_ENABLED=false
-```
-
-### Use Case 2: Production - Failed Pipelines Only
-
-**Goal:** Minimize storage, only save failed pipelines
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.internal.com
-GITLAB_TOKEN=glpat-production-token
-
-# Server
-WEBHOOK_PORT=8000
-WEBHOOK_SECRET=production_webhook_secret_here
-LOG_LEVEL=INFO
-
-# Only save failed pipelines
-LOG_SAVE_PIPELINE_STATUS=failed,canceled
-LOG_SAVE_JOB_STATUS=all  # All jobs within failed pipelines
-LOG_SAVE_METADATA_ALWAYS=true  # Track all pipelines
-
-# No API posting
-API_POST_ENABLED=false
-```
-
-### Use Case 3: Specific Projects Only
-
-**Goal:** Monitor specific critical projects
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-
-# Server
-WEBHOOK_PORT=8000
-LOG_LEVEL=INFO
-
-# Only specific projects
-LOG_SAVE_PROJECTS=123,456,789  # Critical project IDs
-LOG_SAVE_PIPELINE_STATUS=all
-LOG_SAVE_JOB_STATUS=failed  # Only failed jobs to reduce storage
-
-# No API posting
-API_POST_ENABLED=false
-```
-
-### Use Case 4: API Posting with File Fallback
-
-**Goal:** Post logs to API, fallback to files if API fails
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-
-# Server
-WEBHOOK_PORT=8000
-LOG_LEVEL=INFO
-
-# Save failed pipelines
-LOG_SAVE_PIPELINE_STATUS=failed,canceled
-
-# BFA Configuration
-BFA_HOST=bfa-server.example.com
-BFA_SECRET_KEY=your_bfa_secret_key_here
-
-# API Posting (API only, fallback to file on error)
-API_POST_ENABLED=true
-API_POST_TIMEOUT=60  # Longer timeout for LLM
-API_POST_RETRY_ENABLED=true
-API_POST_SAVE_TO_FILE=false  # API only
-```
-
-### Use Case 5: Dual Mode (API + File)
-
-**Goal:** Maximum reliability - save to both API and files
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-
-# Server
-WEBHOOK_PORT=8000
-LOG_LEVEL=INFO
-
-# Save all pipelines
-LOG_SAVE_PIPELINE_STATUS=all
-
-# BFA Configuration
-BFA_HOST=bfa-server.example.com
-BFA_SECRET_KEY=your_bfa_secret_key_here
-
-# API Posting (dual mode - both API and files)
-API_POST_ENABLED=true
-API_POST_TIMEOUT=60
-API_POST_RETRY_ENABLED=true
-API_POST_SAVE_TO_FILE=true  # Dual mode
-```
-
-### Use Case 6: GitLab + Jenkins Multi-Platform
-
-**Goal:** Extract logs from both GitLab and Jenkins
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=glpat-xxxxxxxxxxxxxxxxxxxx
-
-# Server
-WEBHOOK_PORT=8000
-LOG_LEVEL=INFO
-
-# Log Filtering
-LOG_SAVE_PIPELINE_STATUS=failed,canceled
-
-# Jenkins Integration
-JENKINS_ENABLED=true
-JENKINS_URL=https://jenkins.example.com
-JENKINS_USER=jenkins_user
-JENKINS_API_TOKEN=jenkins_api_token_here
-JENKINS_WEBHOOK_SECRET=jenkins_webhook_secret
-
-# API Posting
-BFA_HOST=bfa-server.example.com
-BFA_SECRET_KEY=your_bfa_secret_key_here
-API_POST_ENABLED=true
-API_POST_TIMEOUT=60
-API_POST_RETRY_ENABLED=true
-API_POST_SAVE_TO_FILE=false
-```
-
-### Use Case 7: High-Volume Environment
-
-**Goal:** Handle high pipeline volume, minimize storage
-
-```bash
-# GitLab
-GITLAB_URL=https://gitlab.internal.com
-GITLAB_TOKEN=glpat-production-token
-
-# Server
-WEBHOOK_PORT=8000
-LOG_LEVEL=WARNING  # Less verbose logging
-
-# Aggressive filtering
-LOG_SAVE_PIPELINE_STATUS=failed  # Only failures
-LOG_SAVE_JOB_STATUS=failed  # Only failed jobs
-LOG_SAVE_METADATA_ALWAYS=true  # Track everything
-
-# Exclude noisy projects
-LOG_EXCLUDE_PROJECTS=999,888,777
-
-# API posting only (minimal file storage)
-BFA_HOST=bfa-server.example.com
-BFA_SECRET_KEY=your_bfa_secret_key_here
-API_POST_ENABLED=true
-API_POST_SAVE_TO_FILE=false  # No file storage
-```
-
----
-
