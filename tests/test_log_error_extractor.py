@@ -493,6 +493,21 @@ class TestIgnorePatterns(unittest.TestCase):
         self.assertEqual(len(error_indices), 1)
         self.assertEqual(error_indices[0], 2)
 
+    def test_ignore_pattern_uppercase_pattern(self):
+        """Test that ignore patterns work when provided in uppercase."""
+        extractor = LogErrorExtractor(ignore_patterns=['ERROR: TAG'])
+        lines = [
+            "error: tag latest",
+            "ERROR: TAG latest",
+            "Real error message"
+        ]
+
+        error_indices = extractor._find_error_lines(lines)
+
+        # Only the real error should be detected
+        self.assertEqual(len(error_indices), 1)
+        self.assertEqual(error_indices[0], 2)
+
     def test_ignore_pattern_0_errors_success_message(self):
         """Test filtering success message containing 'error' word."""
         extractor = LogErrorExtractor(ignore_patterns=['0 errors'])
