@@ -17,7 +17,7 @@ Invokes: None
 import os
 import base64
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -61,15 +61,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         error_context_lines_after        -> (int)           -> Error context lines after
         error_ignore_patterns            -> (List[str])     -> Patterns to ignore as errors
         error_adaptive_context_enabled   -> (bool)          -> Enable adaptive context
-        error_adaptive_threshold_1       -> (int)           -> Adaptive threshold 1 (low)
-        error_adaptive_context_1_before  -> (int)           -> Context before for threshold 1
-        error_adaptive_context_1_after   -> (int)           -> Context after for threshold 1
-        error_adaptive_threshold_2       -> (int)           -> Adaptive threshold 2 (medium)
-        error_adaptive_context_2_before  -> (int)           -> Context before for threshold 2
-        error_adaptive_context_2_after   -> (int)           -> Context after for threshold 2
-        error_adaptive_threshold_3       -> (int)           -> Adaptive threshold 3 (high/max)
-        error_adaptive_context_3_before  -> (int)           -> Context before for threshold 3
-        error_adaptive_context_3_after   -> (int)           -> Context after for threshold 3
+        error_adaptive_thresholds        -> (List[Tuple])   -> Adaptive thresholds (threshold, before, after)
         max_log_lines                    -> (int)           -> Max lines to process per log
         tail_log_lines                   -> (int)           -> Lines to fetch from tail first
         stream_chunk_size                -> (int)           -> Bytes per chunk when streaming
@@ -104,15 +96,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     error_context_lines_after: int
     error_ignore_patterns: List[str]
     error_adaptive_context_enabled: bool
-    error_adaptive_threshold_1: int
-    error_adaptive_context_1_before: int
-    error_adaptive_context_1_after: int
-    error_adaptive_threshold_2: int
-    error_adaptive_context_2_before: int
-    error_adaptive_context_2_after: int
-    error_adaptive_threshold_3: int
-    error_adaptive_context_3_before: int
-    error_adaptive_context_3_after: int
+    error_adaptive_thresholds: List[Tuple[int, int, int]]
     max_log_lines: int
     tail_log_lines: int
     stream_chunk_size: int
@@ -285,6 +269,71 @@ class ConfigLoader:
         }
 
     @staticmethod
+    def _parse_adaptive_thresholds(thresholds_str: str) -> List[Tuple[int, int, int]]:
+        """
+        Parse adaptive thresholds configuration string.
+
+        Format: "threshold:before:after,threshold:before:after,..."
+        Example: "50:50:10,100:10:5,150:5:2"
+
+        Args:
+            thresholds_str: Comma-separated list of threshold:before:after triplets
+
+        Returns:
+            List of tuples (threshold, lines_before, lines_after) sorted by threshold
+
+        Raises:
+            ValueError: If format is invalid or thresholds are not in ascending order
+        """
+        thresholds = []
+
+        for triplet in thresholds_str.split(','):
+            triplet = triplet.strip()
+            if not triplet:
+                continue
+
+            parts = triplet.split(':')
+            if len(parts) != 3:
+                raise ValueError(
+                    f"Invalid threshold format '{triplet}'. "
+                    f"Expected 'threshold:before:after' (e.g., '50:50:10')"
+                )
+
+            try:
+                threshold = int(parts[0])
+                lines_before = int(parts[1])
+                lines_after = int(parts[2])
+
+                if threshold <= 0:
+                    raise ValueError(f"Threshold must be positive, got {threshold}")
+                if lines_before < 0 or lines_after < 0:
+                    raise ValueError(f"Context lines must be non-negative, got {lines_before}:{lines_after}")
+
+                thresholds.append((threshold, lines_before, lines_after))
+
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid threshold values in '{triplet}': {e}"
+                ) from e
+
+        if not thresholds:
+            # Return default if empty
+            return [(50, 50, 10), (100, 10, 5), (150, 5, 2)]
+
+        # Sort by threshold (ascending)
+        thresholds.sort(key=lambda x: x[0])
+
+        # Validate thresholds are unique
+        seen_thresholds = set()
+        for threshold, _, _ in thresholds:
+            if threshold in seen_thresholds:
+                raise ValueError(f"Duplicate threshold value: {threshold}")
+            seen_thresholds.add(threshold)
+
+        logger.info("Loaded %d adaptive threshold(s): %s", len(thresholds), thresholds)
+        return thresholds
+
+    @staticmethod
     def _load_log_limits() -> Dict[str, Any]:
         """Load error context and log handling limits."""
         error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
@@ -304,33 +353,17 @@ class ConfigLoader:
             'ERROR_ADAPTIVE_CONTEXT_ENABLED', 'true'
         ).lower() in ('true', '1', 'yes')
 
-        # Load adaptive context thresholds and values
-        error_adaptive_threshold_1 = int(os.getenv('ERROR_ADAPTIVE_THRESHOLD_1', '50'))
-        error_adaptive_context_1_before = int(os.getenv('ERROR_ADAPTIVE_CONTEXT_1_BEFORE', '50'))
-        error_adaptive_context_1_after = int(os.getenv('ERROR_ADAPTIVE_CONTEXT_1_AFTER', '10'))
-
-        error_adaptive_threshold_2 = int(os.getenv('ERROR_ADAPTIVE_THRESHOLD_2', '100'))
-        error_adaptive_context_2_before = int(os.getenv('ERROR_ADAPTIVE_CONTEXT_2_BEFORE', '10'))
-        error_adaptive_context_2_after = int(os.getenv('ERROR_ADAPTIVE_CONTEXT_2_AFTER', '5'))
-
-        error_adaptive_threshold_3 = int(os.getenv('ERROR_ADAPTIVE_THRESHOLD_3', '150'))
-        error_adaptive_context_3_before = int(os.getenv('ERROR_ADAPTIVE_CONTEXT_3_BEFORE', '5'))
-        error_adaptive_context_3_after = int(os.getenv('ERROR_ADAPTIVE_CONTEXT_3_AFTER', '2'))
+        # Load adaptive context thresholds from single string config
+        error_adaptive_thresholds = ConfigLoader._parse_adaptive_thresholds(
+            os.getenv('ERROR_ADAPTIVE_THRESHOLDS', '50:50:10,100:10:5,150:5:2')
+        )
 
         return {
             'error_context_lines_before': error_context_lines_before,
             'error_context_lines_after': error_context_lines_after,
             'error_ignore_patterns': error_ignore_patterns,
             'error_adaptive_context_enabled': error_adaptive_context_enabled,
-            'error_adaptive_threshold_1': error_adaptive_threshold_1,
-            'error_adaptive_context_1_before': error_adaptive_context_1_before,
-            'error_adaptive_context_1_after': error_adaptive_context_1_after,
-            'error_adaptive_threshold_2': error_adaptive_threshold_2,
-            'error_adaptive_context_2_before': error_adaptive_context_2_before,
-            'error_adaptive_context_2_after': error_adaptive_context_2_after,
-            'error_adaptive_threshold_3': error_adaptive_threshold_3,
-            'error_adaptive_context_3_before': error_adaptive_context_3_before,
-            'error_adaptive_context_3_after': error_adaptive_context_3_after,
+            'error_adaptive_thresholds': error_adaptive_thresholds,
             'max_log_lines': max_log_lines,
             'tail_log_lines': tail_log_lines,
             'stream_chunk_size': stream_chunk_size
@@ -475,17 +508,9 @@ class ConfigLoader:
             error_context_lines_after=log_limits['error_context_lines_after'],
             error_ignore_patterns=log_limits['error_ignore_patterns'],
             error_adaptive_context_enabled=log_limits['error_adaptive_context_enabled'],
-            error_adaptive_threshold_1=log_limits['error_adaptive_threshold_1'],
-            error_adaptive_context_1_before=log_limits['error_adaptive_context_1_before'],
-            error_adaptive_context_1_after=log_limits['error_adaptive_context_1_after'],
-            error_adaptive_threshold_2=log_limits['error_adaptive_threshold_2'],
-            error_adaptive_context_2_before=log_limits['error_adaptive_context_2_before'],
-            error_adaptive_context_2_after=log_limits['error_adaptive_context_2_after'],
-            error_adaptive_threshold_3=log_limits['error_adaptive_threshold_3'],
-            error_adaptive_context_3_before=log_limits['error_adaptive_context_3_before'],
-            error_adaptive_context_3_after=log_limits['error_adaptive_context_3_after'],
+            error_adaptive_thresholds=log_limits['error_adaptive_thresholds'],
             max_log_lines=log_limits['max_log_lines'],
-            tail_log_lines=log_limits['tail_log_lines'],
+            tail_log_lines=log_limits['tail_log_limits'],
             stream_chunk_size=log_limits['stream_chunk_size']
         )
 
