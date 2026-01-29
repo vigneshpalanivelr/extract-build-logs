@@ -159,7 +159,16 @@ class ApiPoster:
                     lines_before=self.config.error_context_lines_before,
                     lines_after=self.config.error_context_lines_after,
                     ignore_patterns=self.config.error_ignore_patterns,
-                    use_adaptive_context=self.config.error_adaptive_context_enabled
+                    use_adaptive_context=self.config.error_adaptive_context_enabled,
+                    adaptive_threshold_1=self.config.error_adaptive_threshold_1,
+                    adaptive_context_1_before=self.config.error_adaptive_context_1_before,
+                    adaptive_context_1_after=self.config.error_adaptive_context_1_after,
+                    adaptive_threshold_2=self.config.error_adaptive_threshold_2,
+                    adaptive_context_2_before=self.config.error_adaptive_context_2_before,
+                    adaptive_context_2_after=self.config.error_adaptive_context_2_after,
+                    adaptive_threshold_3=self.config.error_adaptive_threshold_3,
+                    adaptive_context_3_before=self.config.error_adaptive_context_3_before,
+                    adaptive_context_3_after=self.config.error_adaptive_context_3_after
                 )
 
                 if error_lines:
