@@ -37,11 +37,7 @@ class LogErrorExtractor:
 
     def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000,
                  ignore_patterns: List[str] = None, use_adaptive_context: bool = True,
-                 adaptive_threshold_1: int = 50, adaptive_context_1_before: int = 50,
-                 adaptive_context_1_after: int = 10, adaptive_threshold_2: int = 100,
-                 adaptive_context_2_before: int = 10, adaptive_context_2_after: int = 5,
-                 adaptive_threshold_3: int = 150, adaptive_context_3_before: int = 5,
-                 adaptive_context_3_after: int = 2):
+                 adaptive_thresholds: List[Tuple[int, int, int]] = None):
         """
         Initialize the error extractor.
 
@@ -52,30 +48,18 @@ class LogErrorExtractor:
             ignore_patterns: List of patterns to ignore - lines matching these won't be considered
                            errors even if they match ERROR_PATTERNS (default: None)
             use_adaptive_context: Enable adaptive context based on error count (default: True)
-            adaptive_threshold_1: First threshold for adaptive context (default: 50)
-            adaptive_context_1_before: Lines before for threshold 1 (default: 50)
-            adaptive_context_1_after: Lines after for threshold 1 (default: 10)
-            adaptive_threshold_2: Second threshold for adaptive context (default: 100)
-            adaptive_context_2_before: Lines before for threshold 2 (default: 10)
-            adaptive_context_2_after: Lines after for threshold 2 (default: 5)
-            adaptive_threshold_3: Third threshold for adaptive context (default: 150)
-            adaptive_context_3_before: Lines before for threshold 3 (default: 5)
-            adaptive_context_3_after: Lines after for threshold 3 (default: 2)
+            adaptive_thresholds: List of (threshold, before, after) tuples for adaptive context
+                               (default: [(50, 50, 10), (100, 10, 5), (150, 5, 2)])
+                               Example: [(30, 40, 8), (80, 15, 5), (120, 8, 3)]
         """
         self.lines_before = lines_before
         self.lines_after = lines_after
         self.max_line_length = max_line_length
         self.ignore_patterns = ignore_patterns if ignore_patterns is not None else self.IGNORE_PATTERNS
         self.use_adaptive_context = use_adaptive_context
-        self.adaptive_threshold_1 = adaptive_threshold_1
-        self.adaptive_context_1_before = adaptive_context_1_before
-        self.adaptive_context_1_after = adaptive_context_1_after
-        self.adaptive_threshold_2 = adaptive_threshold_2
-        self.adaptive_context_2_before = adaptive_context_2_before
-        self.adaptive_context_2_after = adaptive_context_2_after
-        self.adaptive_threshold_3 = adaptive_threshold_3
-        self.adaptive_context_3_before = adaptive_context_3_before
-        self.adaptive_context_3_after = adaptive_context_3_after
+        self.adaptive_thresholds = adaptive_thresholds if adaptive_thresholds is not None else [
+            (50, 50, 10), (100, 10, 5), (150, 5, 2)
+        ]
 
     def extract_error_sections(self, log_content: str) -> List[str]:
         """
@@ -305,12 +289,14 @@ class LogErrorExtractor:
         Returns:
             Tuple of (lines_before, lines_after)
         """
-        if error_count <= self.adaptive_threshold_1:
-            return (self.adaptive_context_1_before, self.adaptive_context_1_after)
-        elif error_count <= self.adaptive_threshold_2:
-            return (self.adaptive_context_2_before, self.adaptive_context_2_after)
-        else:  # <= threshold_3
-            return (self.adaptive_context_3_before, self.adaptive_context_3_after)
+        # Iterate through thresholds and return context for first match
+        for threshold, lines_before, lines_after in self.adaptive_thresholds:
+            if error_count <= threshold:
+                return (lines_before, lines_after)
+
+        # If exceeded all thresholds, use the last threshold's context (minimal)
+        _, lines_before, lines_after = self.adaptive_thresholds[-1]
+        return (lines_before, lines_after)
 
     def _extract_single_section_with_context(self, lines: List[str], error_idx: int,
                                              lines_before: int, lines_after: int) -> List[str]:
@@ -387,11 +373,13 @@ class LogErrorExtractor:
         if error_count == 0:
             return []
 
-        # Step 2: Handle errors beyond threshold_3 (only if adaptive context is enabled)
-        if self.use_adaptive_context and error_count > self.adaptive_threshold_3:
-            logger.warning("Too many errors (%d > %d), skipping extraction",
-                           error_count, self.adaptive_threshold_3)
-            return []
+        # Step 2: Handle errors beyond max threshold (only if adaptive context is enabled)
+        if self.use_adaptive_context and self.adaptive_thresholds:
+            max_threshold = self.adaptive_thresholds[-1][0]  # Last threshold is the max
+            if error_count > max_threshold:
+                logger.warning("Too many errors (%d > %d), skipping extraction",
+                               error_count, max_threshold)
+                return []
 
         # Step 3: Determine context size
         if self.use_adaptive_context and self.lines_before == 50 and self.lines_after == 10:
@@ -438,11 +426,7 @@ class LogErrorExtractor:
 
 def extract_error_sections(log_content: str, lines_before: int = 50, lines_after: int = 10,
                            ignore_patterns: List[str] = None, use_adaptive_context: bool = True,
-                           adaptive_threshold_1: int = 50, adaptive_context_1_before: int = 50,
-                           adaptive_context_1_after: int = 10, adaptive_threshold_2: int = 100,
-                           adaptive_context_2_before: int = 10, adaptive_context_2_after: int = 5,
-                           adaptive_threshold_3: int = 150, adaptive_context_3_before: int = 5,
-                           adaptive_context_3_after: int = 2) -> List[str]:
+                           adaptive_thresholds: List[Tuple[int, int, int]] = None) -> List[str]:
     """
     Convenience function to extract error sections from log content.
 
@@ -453,15 +437,8 @@ def extract_error_sections(log_content: str, lines_before: int = 50, lines_after
         ignore_patterns: List of patterns to ignore - lines matching these won't be considered
                        errors even if they match ERROR_PATTERNS (default: None)
         use_adaptive_context: Enable adaptive context based on error count (default: True)
-        adaptive_threshold_1: First threshold for adaptive context (default: 50)
-        adaptive_context_1_before: Lines before for threshold 1 (default: 50)
-        adaptive_context_1_after: Lines after for threshold 1 (default: 10)
-        adaptive_threshold_2: Second threshold for adaptive context (default: 100)
-        adaptive_context_2_before: Lines before for threshold 2 (default: 10)
-        adaptive_context_2_after: Lines after for threshold 2 (default: 5)
-        adaptive_threshold_3: Third threshold for adaptive context (default: 150)
-        adaptive_context_3_before: Lines before for threshold 3 (default: 5)
-        adaptive_context_3_after: Lines after for threshold 3 (default: 2)
+        adaptive_thresholds: List of (threshold, before, after) tuples for adaptive context
+                           (default: [(50, 50, 10), (100, 10, 5), (150, 5, 2)])
 
     Returns:
         List with single string element containing all error lines with context, joined by newlines
@@ -471,14 +448,6 @@ def extract_error_sections(log_content: str, lines_before: int = 50, lines_after
         lines_after=lines_after,
         ignore_patterns=ignore_patterns,
         use_adaptive_context=use_adaptive_context,
-        adaptive_threshold_1=adaptive_threshold_1,
-        adaptive_context_1_before=adaptive_context_1_before,
-        adaptive_context_1_after=adaptive_context_1_after,
-        adaptive_threshold_2=adaptive_threshold_2,
-        adaptive_context_2_before=adaptive_context_2_before,
-        adaptive_context_2_after=adaptive_context_2_after,
-        adaptive_threshold_3=adaptive_threshold_3,
-        adaptive_context_3_before=adaptive_context_3_before,
-        adaptive_context_3_after=adaptive_context_3_after
+        adaptive_thresholds=adaptive_thresholds
     )
     return extractor.extract_error_sections(log_content)
