@@ -36,7 +36,7 @@ class LogErrorExtractor:
     IGNORE_PATTERNS: List[str] = []
 
     def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000,
-                 ignore_patterns: List[str] = None):
+                 ignore_patterns: List[str] = None, use_adaptive_context: bool = True):
         """
         Initialize the error extractor.
 
@@ -46,15 +46,29 @@ class LogErrorExtractor:
             max_line_length: Maximum length of individual lines before truncation (default: 1000)
             ignore_patterns: List of patterns to ignore - lines matching these won't be considered
                            errors even if they match ERROR_PATTERNS (default: None)
+            use_adaptive_context: Enable adaptive context based on error count (default: True)
+                                When enabled and using default context (50, 10):
+                                - 1-50 errors: Full context (50 before, 10 after)
+                                - 50-100 errors: Reduced (10 before, 5 after)
+                                - 100-150 errors: Minimal (5 before, 2 after)
+                                - >150 errors: Skip extraction
         """
         self.lines_before = lines_before
         self.lines_after = lines_after
         self.max_line_length = max_line_length
         self.ignore_patterns = ignore_patterns if ignore_patterns is not None else self.IGNORE_PATTERNS
+        self.use_adaptive_context = use_adaptive_context
 
     def extract_error_sections(self, log_content: str) -> List[str]:
         """
         Extract error sections with surrounding context from log content.
+        Uses bottom-to-top extraction with adaptive context based on error count.
+
+        Error count adaptive thresholds:
+        - 1-50 errors: Full context (50 before, 10 after)
+        - 50-100 errors: Reduced context (10 before, 5 after)
+        - 100-150 errors: Minimal context (5 before, 2 after)
+        - >150 errors: Skip extraction (too many errors)
 
         Args:
             log_content: Raw log content as string
@@ -74,17 +88,12 @@ class LogErrorExtractor:
         all_lines = log_content.split('\n')
         cleaned_lines = [self._clean_line(line) for line in all_lines]
 
-        # Find all error line indices
-        error_indices = self._find_error_lines(cleaned_lines)
+        # Extract using bottom-to-top algorithm with adaptive context
+        sections = self._extract_bottom_to_top(cleaned_lines)
 
-        if not error_indices:
+        if not sections:
             logger.debug("No error patterns found in log content")
             return []
-
-        logger.debug("Found %s error line(s) in log", len(error_indices))
-
-        # Extract sections with context and merge overlapping ranges
-        sections = self._extract_sections_with_context(cleaned_lines, error_indices)
 
         # Join all lines into a single string with newlines and return as list with one element
         return ['\n'.join(sections)]
@@ -226,9 +235,189 @@ class LogErrorExtractor:
 
         return merged
 
+    def _is_error_line(self, line: str) -> bool:
+        """
+        Check if a single line matches error patterns but not ignore patterns.
+
+        Args:
+            line: A single cleaned log line
+
+        Returns:
+            True if line is an error, False otherwise
+        """
+        if not line:
+            return False
+
+        line_lower = line.lower()
+
+        # Check if line matches any error pattern
+        if any(pattern in line_lower for pattern in self.ERROR_PATTERNS):
+            # Check if line should be ignored (matches any ignore pattern)
+            if self.ignore_patterns and any(ignore.lower() in line_lower for ignore in self.ignore_patterns):
+                return False  # Not an error - matches ignore pattern
+            return True  # It's an error
+
+        return False  # Doesn't match any error pattern
+
+    def _count_errors(self, lines: List[str]) -> int:
+        """
+        Count total number of error lines in the log.
+
+        Args:
+            lines: List of cleaned log lines
+
+        Returns:
+            Total count of error lines
+        """
+        error_count = 0
+        for line in lines:
+            if self._is_error_line(line):
+                error_count += 1
+
+        return error_count
+
+    def _get_adaptive_context(self, error_count: int) -> Tuple[int, int]:
+        """
+        Determine context size based on error count using adaptive thresholds.
+
+        Args:
+            error_count: Total number of errors found
+
+        Returns:
+            Tuple of (lines_before, lines_after)
+        """
+        if error_count <= 50:
+            return (50, 10)  # Full context
+        elif error_count <= 100:
+            return (10, 5)   # Reduced context
+        else:  # 100-150
+            return (5, 2)    # Minimal context
+
+    def _extract_single_section_with_context(self, lines: List[str], error_idx: int,
+                                            lines_before: int, lines_after: int) -> List[str]:
+        """
+        Extract a single error section with context.
+
+        Args:
+            lines: List of all cleaned log lines
+            error_idx: Index of the error line
+            lines_before: Number of lines to include before error
+            lines_after: Number of lines to include after error
+
+        Returns:
+            List of formatted lines with line numbers for this section
+        """
+        total_lines = len(lines)
+        start = max(0, error_idx - lines_before)
+        end = min(total_lines, error_idx + lines_after + 1)
+
+        section_lines = []
+        for idx in range(start, end):
+            if lines[idx]:  # Skip empty lines
+                # Line numbers are 1-indexed for user readability
+                section_lines.append(f"Line {idx + 1}: {lines[idx]}")
+
+        return section_lines
+
+    def _format_sections(self, sections: List[List[str]]) -> List[str]:
+        """
+        Format multiple sections with separators between them.
+
+        Args:
+            sections: List of sections, where each section is a list of formatted lines
+
+        Returns:
+            Flattened list with separators between sections
+        """
+        if not sections:
+            return []
+
+        result = []
+        for i, section in enumerate(sections):
+            # Add separator before each section except the first
+            if i > 0:
+                result.append("")
+                result.append("--- Next Error Section ---")
+                result.append("")
+
+            # Add the section lines
+            result.extend(section)
+
+        return result
+
+    def _extract_bottom_to_top(self, lines: List[str]) -> List[str]:
+        """
+        Extract errors from bottom to top with adaptive context.
+
+        Algorithm:
+        1. Count total errors to determine adaptive context size
+        2. If >150 errors, skip extraction entirely
+        3. Scan from bottom (last line) to top
+        4. When error found, extract with context and skip that context range
+        5. Reverse output to show chronologically (oldest first)
+
+        Args:
+            lines: List of cleaned log lines
+
+        Returns:
+            List of formatted lines with line numbers
+        """
+        # Step 1: Count total errors
+        error_count = self._count_errors(lines)
+
+        if error_count == 0:
+            return []
+
+        # Step 2: Handle >150 errors (only if adaptive context is enabled)
+        if self.use_adaptive_context and error_count > 150:
+            logger.warning("Too many errors (%d > 150), skipping extraction", error_count)
+            return []
+
+        # Step 3: Determine context size
+        if self.use_adaptive_context and self.lines_before == 50 and self.lines_after == 10:
+            # Use adaptive context (only works with default values 50, 10)
+            lines_before, lines_after = self._get_adaptive_context(error_count)
+            logger.info("Found %d error(s), using adaptive context: %d before, %d after",
+                        error_count, lines_before, lines_after)
+        else:
+            # Use configured values
+            lines_before = self.lines_before
+            lines_after = self.lines_after
+            if self.use_adaptive_context:
+                logger.info("Found %d error(s), using configured context: %d before, %d after "
+                           "(adaptive context requires default values 50, 10)",
+                           error_count, lines_before, lines_after)
+            else:
+                logger.info("Found %d error(s), using configured context: %d before, %d after",
+                           error_count, lines_before, lines_after)
+
+        # Step 4: Extract bottom-to-top
+        result_sections = []
+        current_idx = len(lines) - 1
+
+        while current_idx >= 0:
+            if self._is_error_line(lines[current_idx]):
+                # Extract section with context
+                section = self._extract_single_section_with_context(
+                    lines, current_idx, lines_before, lines_after
+                )
+                result_sections.append(section)
+
+                # Skip context range - move to line before context starts
+                start_idx = max(0, current_idx - lines_before)
+                current_idx = start_idx - 1
+            else:
+                current_idx -= 1
+
+        # Step 5: Reverse for chronological order (oldest first)
+        result_sections.reverse()
+
+        # Step 6: Format sections with separators
+        return self._format_sections(result_sections)
+
 
 def extract_error_sections(log_content: str, lines_before: int = 50, lines_after: int = 10,
-                           ignore_patterns: List[str] = None) -> List[str]:
+                           ignore_patterns: List[str] = None, use_adaptive_context: bool = True) -> List[str]:
     """
     Convenience function to extract error sections from log content.
 
@@ -238,10 +427,12 @@ def extract_error_sections(log_content: str, lines_before: int = 50, lines_after
         lines_after: Number of context lines after each error (default: 10)
         ignore_patterns: List of patterns to ignore - lines matching these won't be considered
                        errors even if they match ERROR_PATTERNS (default: None)
+        use_adaptive_context: Enable adaptive context based on error count (default: True)
 
     Returns:
         List with single string element containing all error lines with context, joined by newlines
     """
     extractor = LogErrorExtractor(lines_before=lines_before, lines_after=lines_after,
-                                  ignore_patterns=ignore_patterns)
+                                  ignore_patterns=ignore_patterns,
+                                  use_adaptive_context=use_adaptive_context)
     return extractor.extract_error_sections(log_content)

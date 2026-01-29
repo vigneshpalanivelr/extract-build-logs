@@ -60,6 +60,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
         error_context_lines_before       -> (int)           -> Error context lines before
         error_context_lines_after        -> (int)           -> Error context lines after
         error_ignore_patterns            -> (List[str])     -> Patterns to ignore as errors
+        error_adaptive_context_enabled   -> (bool)          -> Enable adaptive context
         max_log_lines                    -> (int)           -> Max lines to process per log
         tail_log_lines                   -> (int)           -> Lines to fetch from tail first
         stream_chunk_size                -> (int)           -> Bytes per chunk when streaming
@@ -93,6 +94,7 @@ class Config:  # pylint: disable=too-many-instance-attributes
     error_context_lines_before: int
     error_context_lines_after: int
     error_ignore_patterns: List[str]
+    error_adaptive_context_enabled: bool
     max_log_lines: int
     tail_log_lines: int
     stream_chunk_size: int
@@ -279,10 +281,14 @@ class ConfigLoader:
             s.strip().lower() for s in error_ignore_patterns_str.split(',') if s.strip()
         ]
 
+        # Load adaptive context setting (default: true)
+        error_adaptive_context_enabled = os.getenv('ERROR_ADAPTIVE_CONTEXT_ENABLED', 'true').lower() in ('true', '1', 'yes')
+
         return {
             'error_context_lines_before': error_context_lines_before,
             'error_context_lines_after': error_context_lines_after,
             'error_ignore_patterns': error_ignore_patterns,
+            'error_adaptive_context_enabled': error_adaptive_context_enabled,
             'max_log_lines': max_log_lines,
             'tail_log_lines': tail_log_lines,
             'stream_chunk_size': stream_chunk_size
@@ -426,6 +432,7 @@ class ConfigLoader:
             error_context_lines_before=log_limits['error_context_lines_before'],
             error_context_lines_after=log_limits['error_context_lines_after'],
             error_ignore_patterns=log_limits['error_ignore_patterns'],
+            error_adaptive_context_enabled=log_limits['error_adaptive_context_enabled'],
             max_log_lines=log_limits['max_log_lines'],
             tail_log_lines=log_limits['tail_log_lines'],
             stream_chunk_size=log_limits['stream_chunk_size']

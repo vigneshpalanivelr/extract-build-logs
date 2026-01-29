@@ -157,7 +157,9 @@ class ApiPoster:
                 error_lines = extract_error_sections(
                     log_content=log_content,
                     lines_before=self.config.error_context_lines_before,
-                    lines_after=self.config.error_context_lines_after
+                    lines_after=self.config.error_context_lines_after,
+                    ignore_patterns=self.config.error_ignore_patterns,
+                    use_adaptive_context=self.config.error_adaptive_context_enabled
                 )
 
                 if error_lines:
