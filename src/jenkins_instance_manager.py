@@ -5,6 +5,8 @@ This module manages multiple Jenkins instances and their credentials.
 It loads configuration from jenkins_instances.json and provides
 lookup functionality based on Jenkins URL.
 
+Supports base64-encoded tokens for credential obfuscation.
+
 Data Flow:
     jenkins_instances.json → JenkinsInstanceManager → Credentials Lookup
 
@@ -15,6 +17,7 @@ Invokes: None
 import json
 import os
 import logging
+import base64
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
@@ -59,6 +62,28 @@ class JenkinsInstanceManager:
         self.instances: Dict[str, JenkinsInstance] = {}
         self._load_instances()
 
+    def _decode_if_base64(self, value: str, encoding_type: Optional[str]) -> str:
+        """
+        Decode value if it's base64 encoded.
+
+        Args:
+            value: The value to decode
+            encoding_type: Type of encoding ('base64' or 'plain' or None)
+
+        Returns:
+            Decoded value if base64, original value otherwise
+        """
+        if encoding_type == 'base64':
+            try:
+                decoded_bytes = base64.b64decode(value)
+                return decoded_bytes.decode('utf-8')
+            except Exception as error:
+                logger.error("Failed to decode base64 value: %s", error)
+                raise ValueError(f"Invalid base64 encoding: {error}") from error
+
+        # Default to plain text (backwards compatible)
+        return value
+
     def _load_instances(self):
         """
         Load Jenkins instances from configuration file.
@@ -70,10 +95,19 @@ class JenkinsInstanceManager:
                     "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin",
                     "jenkins_api_token": "token123",
+                    "token_encoding": "plain",
                     "jenkins_webhook_secret": "secret123",
                     "description": "Main Jenkins instance"
                 },
-                ...
+                {
+                    "jenkins_url": "https://jenkins2.example.com",
+                    "jenkins_user": "admin",
+                    "jenkins_api_token": "base64_encoded_token_here",
+                    "token_encoding": "base64",
+                    "jenkins_webhook_secret": "base64_encoded_secret",
+                    "secret_encoding": "base64",
+                    "description": "Jenkins with encoded credentials"
+                }
             ]
         }
         """
@@ -93,11 +127,24 @@ class JenkinsInstanceManager:
             for instance_data in instances_list:
                 normalized_url = self._normalize_url(instance_data['jenkins_url'])
 
+                # Decode tokens if they're base64 encoded
+                token_encoding = instance_data.get('token_encoding', 'plain')
+                secret_encoding = instance_data.get('secret_encoding', 'plain')
+
+                api_token = self._decode_if_base64(
+                    instance_data['jenkins_api_token'],
+                    token_encoding
+                )
+
+                webhook_secret = instance_data.get('jenkins_webhook_secret')
+                if webhook_secret:
+                    webhook_secret = self._decode_if_base64(webhook_secret, secret_encoding)
+
                 instance = JenkinsInstance(
                     jenkins_url=normalized_url,
                     jenkins_user=instance_data['jenkins_user'],
-                    jenkins_api_token=instance_data['jenkins_api_token'],
-                    jenkins_webhook_secret=instance_data.get('jenkins_webhook_secret'),
+                    jenkins_api_token=api_token,
+                    jenkins_webhook_secret=webhook_secret,
                     description=instance_data.get('description')
                 )
 

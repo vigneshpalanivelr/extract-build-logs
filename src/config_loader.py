@@ -5,6 +5,8 @@ This module handles loading and validating configuration from environment variab
 It provides a centralized configuration management system for the GitLab pipeline
 log extraction application.
 
+Supports base64-encoded tokens for credential obfuscation in .env file.
+
 Data Flow:
     Environment Variables → ConfigLoader.load() → Configuration Object → Other Modules
 
@@ -13,8 +15,12 @@ Invokes: None
 """
 
 import os
+import base64
+import logging
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -105,6 +111,36 @@ class ConfigLoader:
     """
 
     @staticmethod
+    def _decode_if_base64(env_var_name: str, value: str) -> str:
+        """
+        Decode environment variable value if it's base64 encoded.
+
+        To use base64 encoding, suffix the env var name with _ENCODING=base64
+        Example: GITLAB_TOKEN_ENCODING=base64
+
+        Args:
+            env_var_name: Name of the environment variable
+            value: The value to potentially decode
+
+        Returns:
+            Decoded value if base64, original value otherwise
+        """
+        encoding_type = os.getenv(f'{env_var_name}_ENCODING', 'plain').lower()
+
+        if encoding_type == 'base64':
+            try:
+                decoded_bytes = base64.b64decode(value)
+                decoded_value = decoded_bytes.decode('utf-8')
+                logger.debug("Decoded base64 value for %s", env_var_name)
+                return decoded_value
+            except Exception as error:
+                logger.error("Failed to decode base64 value for %s: %s", env_var_name, error)
+                raise ValueError(f"Invalid base64 encoding for {env_var_name}: {error}") from error
+
+        # Default to plain text (backwards compatible)
+        return value
+
+    @staticmethod
     def _load_basic_settings() -> Dict[str, Any]:
         """Load basic webhook and logging settings."""
         webhook_port = int(os.getenv('WEBHOOK_PORT', '8000'))
@@ -185,8 +221,16 @@ class ConfigLoader:
             jenkins_url = jenkins_url.rstrip('/')
 
         jenkins_user = os.getenv('JENKINS_USER')
+
+        # Decode API token if base64 encoded
         jenkins_api_token = os.getenv('JENKINS_API_TOKEN')
+        if jenkins_api_token:
+            jenkins_api_token = ConfigLoader._decode_if_base64('JENKINS_API_TOKEN', jenkins_api_token)
+
+        # Decode webhook secret if base64 encoded
         jenkins_webhook_secret = os.getenv('JENKINS_WEBHOOK_SECRET')
+        if jenkins_webhook_secret:
+            jenkins_webhook_secret = ConfigLoader._decode_if_base64('JENKINS_WEBHOOK_SECRET', jenkins_webhook_secret)
 
         # Filter handled failures (failures with try-catch that continued pipeline)
         jenkins_filter_handled_failures_str = os.getenv('JENKINS_FILTER_HANDLED_FAILURES', 'true').lower()
@@ -205,7 +249,11 @@ class ConfigLoader:
     def _load_bfa_config() -> Dict[str, Any]:
         """Load BFA JWT configuration."""
         bfa_host = os.getenv('BFA_HOST')
+
+        # Decode BFA secret key if base64 encoded
         bfa_secret_key = os.getenv('BFA_SECRET_KEY')
+        if bfa_secret_key:
+            bfa_secret_key = ConfigLoader._decode_if_base64('BFA_SECRET_KEY', bfa_secret_key)
 
         # Auto-construct API POST URL from BFA_HOST
         api_post_url = f"http://{bfa_host}:8000/api/analyze" if bfa_host else None
@@ -272,6 +320,9 @@ class ConfigLoader:
             raise ValueError("GITLAB_URL environment variable is required")
         if not gitlab_token:
             raise ValueError("GITLAB_TOKEN environment variable is required")
+
+        # Decode GitLab token if base64 encoded
+        gitlab_token = ConfigLoader._decode_if_base64('GITLAB_TOKEN', gitlab_token)
 
         # Remove trailing slash from GitLab URL if present
         gitlab_url = gitlab_url.rstrip('/')
