@@ -1249,27 +1249,52 @@ def _save_jenkins_build_to_files(
         return
 
     try:
-        # Save console log
-        storage_manager.save_jenkins_console_log(
+        # Save console log and capture path
+        console_log_path = storage_manager.save_jenkins_console_log(
             job_name=job_name,
             build_number=build_number,
             console_log=console_log
         )
 
-        # Save stage logs for failed stages
+        logger.info(
+            "Jenkins console log saved: %s #%s → %s (%d bytes)",
+            job_name, build_number, console_log_path, len(console_log),
+            extra={
+                'job_name': job_name,
+                'build_number': build_number,
+                'console_log_path': str(console_log_path),
+                'console_log_size': len(console_log)
+            }
+        )
+
+        # Save stage logs for failed stages and capture paths
+        stage_log_paths = []
         for stage in failed_stages:
             stage_name = stage.get('stage_name')
             log_content = stage.get('log_content', '')
             if log_content:
-                storage_manager.save_jenkins_stage_log(
+                stage_log_path = storage_manager.save_jenkins_stage_log(
                     job_name=job_name,
                     build_number=build_number,
                     stage_name=stage_name,
                     log_content=log_content
                 )
+                stage_log_paths.append(str(stage_log_path))
+
+                logger.info(
+                    "Jenkins stage log saved: %s #%s [%s] → %s (%d bytes)",
+                    job_name, build_number, stage_name, stage_log_path, len(log_content),
+                    extra={
+                        'job_name': job_name,
+                        'build_number': build_number,
+                        'stage_name': stage_name,
+                        'stage_log_path': str(stage_log_path),
+                        'stage_log_size': len(log_content)
+                    }
+                )
 
         # Save metadata
-        storage_manager.save_jenkins_metadata(
+        metadata_path = storage_manager.save_jenkins_metadata(
             job_name=job_name,
             build_number=build_number,
             build_data=jenkins_payload
@@ -1278,8 +1303,11 @@ def _save_jenkins_build_to_files(
         logger.info("Saved Jenkins build logs to files", extra={
             'job_name': job_name,
             'build_number': build_number,
+            'console_log_path': str(console_log_path),
+            'stage_log_paths': stage_log_paths,
+            'metadata_path': str(metadata_path),
             'console_log_size': len(console_log),
-            'stage_logs': len(failed_stages)
+            'stage_count': len(failed_stages)
         })
 
     except Exception as storage_error:  # pylint: disable=broad-exception-caught
@@ -1684,20 +1712,16 @@ def _save_pipeline_logs_to_files(
             job_details = job_data['details']
             log_content = job_data['log']
             log_size = len(log_content)
+            job_name = job_details['name']
+            job_status = job_details.get('status', 'unknown')
 
-            logger.debug("Saving job log to file", extra={
-                'pipeline_id': pipeline_id,
-                'job_id': job_id,
-                'job_name': job_details['name'],
-                'log_size_bytes': log_size
-            })
-
-            storage_manager.save_log(
+            # Save log and capture path
+            job_log_path = storage_manager.save_log(
                 project_id=project_id,
                 project_name=project_name,
                 pipeline_id=pipeline_id,
                 job_id=job_id,
-                job_name=job_details['name'],
+                job_name=job_name,
                 log_content=log_content,
                 job_details={
                     "status": job_details.get('status'),
@@ -1710,10 +1734,22 @@ def _save_pipeline_logs_to_files(
                 }
             )
             success_count += 1
-            logger.debug("Job log saved to file successfully", extra={
-                'job_id': job_id,
-                'job_name': job_details['name']
-            })
+
+            # Log the saved path
+            logger.info(
+                "GitLab job log saved: %s [%s] job #%s → %s (%d bytes)",
+                project_name, job_status, job_id, job_log_path, log_size,
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'job_id': job_id,
+                    'job_name': job_name,
+                    'job_status': job_status,
+                    'job_log_path': str(job_log_path),
+                    'job_log_size': log_size
+                }
+            )
 
         except Exception as error:  # pylint: disable=broad-exception-caught
             error_count += 1
