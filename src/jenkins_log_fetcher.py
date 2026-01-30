@@ -431,6 +431,53 @@ class JenkinsLogFetcher:
             logger.warning("Failed to fetch stage log (non-critical): %s", error)
             return None
 
+    def fetch_stage_log_tail(self, job_name: str, build_number: int, stage_id: str,
+                             tail_lines: Optional[int] = None) -> Optional[str]:
+        """
+        Fetch only the last N lines of a specific stage's log (bottom-up approach).
+
+        This method fetches the full stage log and trims it to the last N lines.
+        Stage logs are isolated from subsequent cleanup/notify stages, ensuring
+        we only get logs from the failed stage itself.
+
+        Args:
+            job_name (str): Name of the Jenkins job
+            build_number (int): Build number
+            stage_id (str): Stage ID from Blue Ocean API
+            tail_lines (Optional[int]): Number of lines from tail (uses config.tail_log_lines if None)
+
+        Returns:
+            Optional[str]: Tail portion of stage log, or None if not available
+        """
+        if tail_lines is None:
+            tail_lines = self.config.tail_log_lines if self.config else int(os.getenv('TAIL_LOG_LINES', '5000'))
+
+        logger.debug("Fetching stage log tail (last %d lines) for stage %s", tail_lines, stage_id)
+
+        # Fetch full stage log
+        full_stage_log = self.fetch_stage_log(job_name, build_number, stage_id)
+
+        if not full_stage_log:
+            logger.debug("No stage log available for stage %s", stage_id)
+            return None
+
+        # Trim to last N lines (bottom-up)
+        lines = full_stage_log.split('\n')
+        total_lines = len(lines)
+
+        if total_lines <= tail_lines:
+            logger.debug("Stage log has %d lines (≤ %d), returning full log", total_lines, tail_lines)
+            return full_stage_log
+
+        # Return only the tail
+        tail_log = '\n'.join(lines[-tail_lines:])
+        logger.info(
+            "Trimmed stage log for stage %s: %d lines → %d lines (bottom-up)",
+            stage_id, total_lines, tail_lines
+        )
+
+        return tail_log
+
     def _make_request(self, method: str, url: str, **kwargs) -> requests.Response:
         """
         Make an authenticated HTTP request to Jenkins API.

@@ -108,6 +108,98 @@ class LogFetcher:
             logger.error("Failed to fetch log for job %s", job_id)
             raise
 
+    def fetch_job_log_tail(self, project_id: int, job_id: int, tail_lines: int = 5000) -> str:
+        """
+        Fetch only the last N lines of a job's log (bottom-up approach).
+
+        This method attempts to use HTTP Range headers for efficient fetching.
+        If Range headers are not supported by GitLab API, it falls back to
+        fetching the full log and trimming to last N lines.
+
+        Args:
+            project_id (int): GitLab project ID
+            job_id (int): GitLab job ID
+            tail_lines (int): Number of lines from tail (default: 5000)
+
+        Returns:
+            str: Tail portion of log content
+
+        Raises:
+            GitLabAPIError: If the API returns an error
+            RetryExhaustedError: If all retry attempts fail
+
+        API Endpoint:
+            GET /projects/:id/jobs/:job_id/trace
+            (with optional Range header)
+        """
+        url = f"{self.base_url}/projects/{project_id}/jobs/{job_id}/trace"
+
+        logger.info("Fetching log tail (last %d lines) for job %s in project %s", tail_lines, job_id, project_id)
+
+        try:
+            # Strategy 1: Try HTTP Range header (most efficient)
+            # First, get content length via HEAD request
+            head_response = self.session.head(url, timeout=10)
+
+            if head_response.status_code == 200:
+                total_size = int(head_response.headers.get('Content-Length', 0))
+
+                if total_size > 0:
+                    # Calculate start position (approximate bytes per line = 150)
+                    estimated_bytes = tail_lines * 150
+                    start_pos = max(0, total_size - estimated_bytes)
+
+                    logger.debug(
+                        "Total log size: %d bytes for job %s, attempting Range fetch from byte %d",
+                        total_size, job_id, start_pos
+                    )
+
+                    # Try Range header
+                    headers = {'Range': f'bytes={start_pos}-'}
+                    range_response = self.session.get(url, headers=headers, timeout=30)
+
+                    # Check if server supports Range (returns 206 Partial Content)
+                    if range_response.status_code == 206:
+                        tail_log = range_response.text
+                        logger.info(
+                            "Successfully fetched log tail for job %s using Range header (%d bytes)",
+                            job_id, len(tail_log)
+                        )
+                        return tail_log
+
+                    logger.debug(
+                        "GitLab API does not support Range headers (got %d), falling back to full fetch",
+                        range_response.status_code
+                    )
+
+        except requests.RequestException as error:
+            logger.debug("Range header approach failed for job %s: %s, falling back to full fetch", job_id, error)
+
+        # Strategy 2: Fallback - fetch full log and trim (always works)
+        logger.debug("Falling back to full fetch + trim for job %s", job_id)
+        full_log = self.fetch_job_log(project_id, job_id)
+
+        # Handle special case: log not available
+        if full_log.startswith("[Log not available"):
+            return full_log
+
+        # Trim to last N lines
+        lines = full_log.split('\n')
+        total_lines = len(lines)
+
+        if total_lines <= tail_lines:
+            logger.debug("Job log has %d lines (≤ %d), returning full log", total_lines, tail_lines)
+            return full_log
+
+        # Return only the tail
+        tail_log = '\n'.join(lines[-tail_lines:])
+        logger.info(
+            "Trimmed job log for job %s: %d lines → %d lines (bottom-up)",
+            job_id, total_lines, tail_lines
+        )
+
+        return tail_log
+
     @retry_on_failure(max_retries=3, base_delay=2.0, exceptions=(requests.RequestException,))
     def fetch_job_details(self, project_id: int, job_id: int) -> Dict[str, Any]:
         """
