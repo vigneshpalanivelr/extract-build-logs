@@ -1092,18 +1092,27 @@ def _analyze_failed_steps(stage: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def _extract_failed_stages_with_logs(
     blue_ocean_stages: list,
-    console_log: str
+    console_log: str,
+    fetcher: 'JenkinsLogFetcher',
+    job_name: str,
+    build_number: int
 ) -> list:
     """
-    Extract failed stages and their log content.
+    Extract failed stages and their log content using bottom-up approach.
 
     For each failed stage, analyzes the individual steps (stageFlowNodes) to identify
     the real failure. When multiple steps fail within a stage (e.g., due to try-catch),
     only the last failed step represents the actual failure that stopped execution.
 
+    Uses bottom-up log fetching: tries to fetch stage-specific logs via Blue Ocean API
+    (tail only), falling back to console log parsing if stage logs are unavailable.
+
     Args:
         blue_ocean_stages: List of Blue Ocean stage metadata
-        console_log: Full console log content
+        console_log: Full console log content (fallback)
+        fetcher: Jenkins log fetcher instance
+        job_name: Jenkins job name
+        build_number: Build number
 
     Returns:
         List of failed stage dicts with log content
@@ -1136,10 +1145,36 @@ def _extract_failed_stages_with_logs(
         lines_after=config.error_context_lines_after
     )
 
-    # For each failed stage, extract errors from console log
+    # For each failed stage, extract logs using bottom-up approach
     for stage in failed_stages:
         stage_name = stage.get('stage_name')
+        stage_id = stage.get('stage_id')
         failed_step_info = stage.get('failed_step_info')
+
+        # Strategy 1: Try to fetch stage-specific logs via Blue Ocean API (bottom-up)
+        stage_log = None
+        if stage_id:
+            try:
+                logger.debug(
+                    "Attempting to fetch stage log tail (bottom-up) for stage '%s' (ID: %s)",
+                    stage_name, stage_id
+                )
+                stage_log = fetcher.fetch_stage_log_tail(job_name, build_number, stage_id, config.tail_log_lines)
+                if stage_log:
+                    stage['log_content'] = stage_log
+                    logger.info(
+                        "Fetched stage log tail (bottom-up) for stage '%s': %d bytes",
+                        stage_name, len(stage_log)
+                    )
+                    continue  # Successfully fetched stage log, skip console parsing
+            except Exception as error:  # pylint: disable=broad-exception-caught
+                logger.debug(
+                    "Could not fetch stage log via API for stage '%s': %s, falling back to console parsing",
+                    stage_name, error
+                )
+
+        # Strategy 2: Fallback to console log parsing (existing logic)
+        logger.debug("Falling back to console log parsing for stage '%s'", stage_name)
 
         # If we identified a specific failed step, extract ONLY that step's logs
         if failed_step_info and failed_step_info.get('step_name'):
@@ -1321,8 +1356,10 @@ def process_jenkins_build(
             monitor.update_request(db_request_id, RequestStatus.COMPLETED)
             return
 
-        # Extract failed stages with error context
-        failed_stages = _extract_failed_stages_with_logs(blue_ocean_stages, console_log)
+        # Extract failed stages with error context (using bottom-up log fetching)
+        failed_stages = _extract_failed_stages_with_logs(
+            blue_ocean_stages, console_log, fetcher, job_name, build_number
+        )
         if not failed_stages:
             logger.info("No failed stages to process")
             monitor.update_request(db_request_id, RequestStatus.COMPLETED)
@@ -1499,12 +1536,13 @@ def _fetch_and_filter_pipeline_jobs(
         }
     )
 
-    # Now fetch logs only for filtered jobs
+    # Now fetch logs only for filtered jobs (using bottom-up tail approach)
     all_logs = {}
     for job in jobs_to_fetch:
         job_id = job['id']
         try:
-            log_content = log_fetcher.fetch_job_log(project_id, job_id)
+            # Fetch tail of logs (bottom-up approach aligns with bottom-up error extraction)
+            log_content = log_fetcher.fetch_job_log_tail(project_id, job_id, config.tail_log_lines)
             all_logs[job_id] = {'details': job, 'log': log_content}
         except Exception as error:  # pylint: disable=broad-exception-caught
             logger.error("Failed to fetch log for job %s: %s", job_id, str(error))
