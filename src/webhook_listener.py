@@ -1844,9 +1844,30 @@ def process_pipeline_event(
         fetch_duration_ms = int((time.time() - fetch_start) * 1000)
         job_count = len(all_logs)
 
-        # Post to API if enabled
+        # Check if "external" stage is present (indicates external analysis already running)
+        # When external scripts update commit status, they add "external" stage which triggers
+        # redundant webhook events. Skip API posting to avoid duplicate BFA analysis.
+        stages = pipeline_info.get('stages', [])
+        has_external_stage = 'external' in stages
+
+        # Post to API if enabled (skip if external stage present)
         save_start = time.time()
-        api_post_success = _post_pipeline_logs_to_api(pipeline_info, all_logs, project_name)
+        api_post_success = False
+
+        if has_external_stage:
+            logger.info(
+                "Skipping API post for pipeline %s - 'external' stage detected (redundant webhook event)",
+                pipeline_id,
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'stages': stages,
+                    'reason': 'external_stage_present'
+                }
+            )
+        else:
+            api_post_success = _post_pipeline_logs_to_api(pipeline_info, all_logs, project_name)
 
         # Determine if we should save to files and do so
         success_count = 0
