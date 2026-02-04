@@ -60,6 +60,7 @@ class LogErrorExtractor:
         self.adaptive_thresholds = adaptive_thresholds if adaptive_thresholds is not None else [
             (50, 50, 10), (100, 10, 5), (150, 5, 2)
         ]
+        self.last_error_summary = None  # Store last extraction summary for later access
 
     def extract_error_sections(self, log_content: str, log_file_path: str = None) -> List[str]:
         """
@@ -492,6 +493,9 @@ class LogErrorExtractor:
             "ignored_patterns": error_analysis['ignored_patterns'],
             "extracted_content": log_file_path if log_file_path else "N/A"
         }
+
+        # Store summary for later access
+        self.last_error_summary = error_summary
 
         # Log the error summary at INFO level
         logger.info("Error Extraction Summary:\n%s", json.dumps(error_summary, indent=2))
