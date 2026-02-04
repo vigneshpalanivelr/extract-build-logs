@@ -1152,7 +1152,7 @@ def _extract_failed_stages_with_logs(
     )
 
     # Build base path for logs (same structure as storage_manager)
-    base_log_dir = Path(config.log_dir if config else "./logs") / "jenkins-builds" / job_name / str(build_number)
+    base_log_dir = Path(config.log_output_dir if config else "./logs") / "jenkins-builds" / job_name / str(build_number)
 
     # For each failed stage, extract logs using bottom-up approach
     for stage in failed_stages:
