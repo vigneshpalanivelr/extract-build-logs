@@ -47,10 +47,13 @@ class LogErrorExtractor:
             max_line_length: Maximum length of individual lines before truncation (default: 1000)
             ignore_patterns: List of patterns to ignore - lines matching these won't be considered
                            errors even if they match ERROR_PATTERNS (default: None)
-            use_adaptive_context: Enable adaptive context based on error count (default: True)
-            adaptive_thresholds: List of (threshold, before, after) tuples for adaptive context
+            use_adaptive_context: Enable INCREMENTAL BUCKET extraction (default: True)
+            adaptive_thresholds: List of (count, before, after) tuples defining incremental buckets
                                (default: [(50, 50, 10), (100, 10, 5), (150, 5, 2)])
-                               Example: [(30, 40, 8), (80, 15, 5), (120, 8, 3)]
+                               Each tuple: (error_count, lines_before, lines_after)
+                               Example: [(5, 50, 10), (10, 10, 5), (20, 5, 2)]
+                                 → First 5 errors: 50b/10a, Next 10: 10b/5a, Next 20: 5b/2a
+                                 → Total: 35 errors extracted, rest ignored
         """
         self.lines_before = lines_before
         self.lines_after = lines_after
@@ -66,14 +69,23 @@ class LogErrorExtractor:
     def extract_error_sections(self, log_content: str, log_file_path: str = None) -> List[str]:
         """
         Extract error sections with surrounding context from log content.
-        Uses bottom-to-top extraction with adaptive context based on error count.
+        Uses bottom-to-top extraction with INCREMENTAL BUCKET approach.
 
-        Adaptive thresholds are configurable via constructor parameters.
-        Default thresholds (when use_adaptive_context=True):
-        - 1-threshold_1 errors: context_1 (default: 1-50 → 50 before, 10 after)
-        - threshold_1+1 to threshold_2: context_2 (default: 51-100 → 10 before, 5 after)
-        - threshold_2+1 to threshold_3: context_3 (default: 101-150 → 5 before, 2 after)
-        - >threshold_3 errors: Skip extraction (default: >150)
+        Adaptive thresholds define incremental buckets (when use_adaptive_context=True):
+        Config "5:50:10,10:10:5,20:5:2" means:
+        - First 5 errors (from bottom): 50 lines before, 10 lines after each
+        - Next 10 errors: 10 lines before, 5 lines after each
+        - Next 20 errors: 5 lines before, 2 lines after each
+        - Remaining errors (36+): IGNORED (not extracted)
+
+        Total extracted: 5 + 10 + 20 = 35 errors maximum
+
+        Default thresholds: "50:50:10,100:10:5,150:5:2"
+        - First 50 errors: 50 before, 10 after
+        - Next 100 errors: 10 before, 5 after
+        - Next 150 errors: 5 before, 2 after
+        - Remaining errors: IGNORED
+        Total: 300 errors maximum
 
         Args:
             log_content: Raw log content as string
@@ -301,6 +313,34 @@ class LogErrorExtractor:
         _, lines_before, lines_after = self.adaptive_thresholds[-1]
         return (lines_before, lines_after)
 
+    def _get_bucket_context(self, errors_extracted: int) -> Tuple[int, int]:
+        """
+        Determine context size based on which incremental bucket this error belongs to.
+
+        Thresholds are treated as incremental buckets:
+        "5:50:10,10:10:5,20:5:2" means:
+          - Errors 0-4 (first 5): 50 before, 10 after
+          - Errors 5-14 (next 10): 10 before, 5 after
+          - Errors 15-34 (next 20): 5 before, 2 after
+
+        Args:
+            errors_extracted: Number of errors extracted so far (0-indexed)
+
+        Returns:
+            Tuple of (lines_before, lines_after) for this error's bucket
+        """
+        cumulative = 0
+        for bucket_count, lines_before, lines_after in self.adaptive_thresholds:
+            if errors_extracted < cumulative + bucket_count:
+                # This error belongs to this bucket
+                return (lines_before, lines_after)
+            cumulative += bucket_count
+
+        # Should never reach here if max_errors_to_extract is set correctly
+        # But if we do, use the last bucket's context
+        _, lines_before, lines_after = self.adaptive_thresholds[-1]
+        return (lines_before, lines_after)
+
     def _analyze_errors(self, lines: List[str]) -> Dict[str, Any]:
         """
         Analyze error patterns in log lines and return detailed breakdown.
@@ -457,31 +497,37 @@ class LogErrorExtractor:
             self.last_extraction_status = "no_errors"
             return []
 
-        # Step 2: Handle errors beyond max threshold (only if adaptive context is enabled)
-        # Instead of skipping, extract with minimal context but cap the number of errors
-        max_errors_to_extract = None
+        # Step 2: Calculate incremental buckets and max errors to extract
+        # Thresholds are now treated as incremental buckets:
+        # "5:50:10,10:10:5,20:5:2" means:
+        #   - First 5 errors: 50 before, 10 after
+        #   - Next 10 errors: 10 before, 5 after
+        #   - Next 20 errors: 5 before, 2 after
+        #   - Remaining errors: IGNORE
         if self.use_adaptive_context and self.adaptive_thresholds:
-            max_threshold = self.adaptive_thresholds[-1][0]  # Last threshold is the max
-            if error_count > max_threshold:
-                # Too many errors - extract only up to 2x the max threshold with minimal context
-                max_errors_to_extract = max_threshold * 2
+            max_errors_to_extract = sum(bucket[0] for bucket in self.adaptive_thresholds)
+            bucket_breakdown = ' + '.join([str(bucket[0]) for bucket in self.adaptive_thresholds])
+
+            if error_count > max_errors_to_extract:
                 logger.warning(
-                    "Too many errors (%d > %d), extracting first %d errors with minimal context",
-                    error_count, max_threshold, max_errors_to_extract
+                    "Too many errors (%d > %d), extracting first %d errors using incremental buckets (%s)",
+                    error_count, max_errors_to_extract, max_errors_to_extract, bucket_breakdown
                 )
 
-        # Step 3: Determine context size
-        if self.use_adaptive_context and self.lines_before == 50 and self.lines_after == 10:
-            # Use adaptive context (only works with default values 50, 10)
-            lines_before, lines_after = self._get_adaptive_context(error_count)
-            context_description = f"{lines_before} before, {lines_after} after (adaptive)"
+            # Build context description showing bucket structure
+            bucket_descriptions = []
+            cumulative = 0
+            for count, before, after in self.adaptive_thresholds:
+                start = cumulative + 1
+                end = cumulative + count
+                bucket_descriptions.append(f"errors {start}-{end}: {before}b/{after}a")
+                cumulative = end
+            context_description = f"incremental buckets ({', '.join(bucket_descriptions)})"
         else:
-            # Use configured values
-            lines_before = self.lines_before
-            lines_after = self.lines_after
-            context_description = f"{lines_before} before, {lines_after} after (configured)"
+            max_errors_to_extract = None
+            context_description = f"{self.lines_before} before, {self.lines_after} after (fixed)"
 
-        # Step 4: Build error summary
+        # Step 3: Build error summary
         # Format adaptive thresholds as string
         thresholds_str = ','.join([f"{t}:{b}:{a}" for t, b, a in self.adaptive_thresholds])
 
@@ -509,7 +555,7 @@ class LogErrorExtractor:
         # Log the error summary at INFO level
         logger.info("Error Extraction Summary:\n%s", json.dumps(error_summary, indent=2))
 
-        # Step 5: Extract bottom-to-top
+        # Step 4: Extract bottom-to-top with incremental buckets
         result_sections = []
         current_idx = len(lines) - 1
         errors_extracted = 0
@@ -519,10 +565,17 @@ class LogErrorExtractor:
                 # Check if we've hit the extraction cap
                 if max_errors_to_extract is not None and errors_extracted >= max_errors_to_extract:
                     logger.info(
-                        "Reached error extraction cap (%d/%d errors), stopping extraction",
-                        errors_extracted, error_count
+                        "Reached error extraction cap (%d/%d total errors), extracted %d errors",
+                        max_errors_to_extract, error_count, errors_extracted
                     )
                     break
+
+                # Determine context for this error based on which bucket it belongs to
+                if self.use_adaptive_context and self.adaptive_thresholds:
+                    lines_before, lines_after = self._get_bucket_context(errors_extracted)
+                else:
+                    lines_before = self.lines_before
+                    lines_after = self.lines_after
 
                 # Extract section with context
                 section = self._extract_single_section_with_context(
@@ -550,7 +603,7 @@ def extract_error_sections(log_content: str, lines_before: int = 50, lines_after
                            adaptive_thresholds: List[Tuple[int, int, int]] = None,
                            log_file_path: str = None) -> List[str]:
     """
-    Convenience function to extract error sections from log content.
+    Convenience function to extract error sections from log content using INCREMENTAL BUCKETS.
 
     Args:
         log_content: Raw log content as string
@@ -558,9 +611,11 @@ def extract_error_sections(log_content: str, lines_before: int = 50, lines_after
         lines_after: Number of context lines after each error (default: 10)
         ignore_patterns: List of patterns to ignore - lines matching these won't be considered
                        errors even if they match ERROR_PATTERNS (default: None)
-        use_adaptive_context: Enable adaptive context based on error count (default: True)
-        adaptive_thresholds: List of (threshold, before, after) tuples for adaptive context
+        use_adaptive_context: Enable INCREMENTAL BUCKET extraction (default: True)
+        adaptive_thresholds: List of (count, before, after) tuples defining incremental buckets
                            (default: [(50, 50, 10), (100, 10, 5), (150, 5, 2)])
+                           Example: [(5, 50, 10), (10, 10, 5), (20, 5, 2)]
+                             → First 5: 50b/10a, Next 10: 10b/5a, Next 20: 5b/2a, Rest: ignored
         log_file_path: Optional path where log is saved (for logging purposes)
 
     Returns:

@@ -1222,16 +1222,8 @@ def _extract_failed_stages_with_logs(
                 # Handle extraction results
                 if error_sections:
                     stage['log_content'] = error_sections[0]
-                elif error_extractor.last_extraction_status == "too_many_errors":
-                    # Too many errors - use last 500 lines instead of full log to avoid LLM crash
-                    truncated_log = '\n'.join(console_log.split('\n')[-500:])
-                    stage['log_content'] = f"[ERROR: Too many errors detected, showing last 500 lines only]\n\n{truncated_log}"
-                    logger.warning(
-                        "Too many errors for stage '%s', using last 500 lines instead of full log",
-                        stage_name
-                    )
                 else:
-                    # No errors or other case - use full log
+                    # No errors found - use full log
                     stage['log_content'] = console_log
         else:
             # No step-level filtering, extract errors from full console log
@@ -1260,14 +1252,6 @@ def _extract_failed_stages_with_logs(
                         logger.info("Saved error extraction summary -> %s", summary_path)
                     except Exception as save_error:  # pylint: disable=broad-exception-caught
                         logger.debug("Could not save error summary: %s", save_error)
-            elif error_extractor.last_extraction_status == "too_many_errors":
-                # Too many errors - use last 500 lines instead of full log to avoid LLM crash
-                truncated_log = '\n'.join(console_log.split('\n')[-500:])
-                stage['log_content'] = f"[ERROR: Too many errors detected, showing last 500 lines only]\n\n{truncated_log}"
-                logger.warning(
-                    "Too many errors for stage '%s', using last 500 lines instead of full log",
-                    stage_name
-                )
             else:
                 # No error patterns found, use full console log
                 stage['log_content'] = console_log
