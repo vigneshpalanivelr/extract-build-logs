@@ -510,7 +510,7 @@ class ConfigLoader:
             error_adaptive_context_enabled=log_limits['error_adaptive_context_enabled'],
             error_adaptive_thresholds=log_limits['error_adaptive_thresholds'],
             max_log_lines=log_limits['max_log_lines'],
-            tail_log_lines=log_limits['tail_log_limits'],
+            tail_log_lines=log_limits['tail_log_lines'],
             stream_chunk_size=log_limits['stream_chunk_size']
         )
 
