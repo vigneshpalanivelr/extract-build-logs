@@ -61,6 +61,7 @@ class LogErrorExtractor:
             (50, 50, 10), (100, 10, 5), (150, 5, 2)
         ]
         self.last_error_summary = None  # Store last extraction summary for later access
+        self.last_extraction_status = None  # Track extraction status: "success", "no_errors", "too_many_errors"
 
     def extract_error_sections(self, log_content: str, log_file_path: str = None) -> List[str]:
         """
@@ -453,15 +454,21 @@ class LogErrorExtractor:
         error_count = sum(error_analysis['error_types'].values())
 
         if error_count == 0:
+            self.last_extraction_status = "no_errors"
             return []
 
         # Step 2: Handle errors beyond max threshold (only if adaptive context is enabled)
+        # Instead of skipping, extract with minimal context but cap the number of errors
+        max_errors_to_extract = None
         if self.use_adaptive_context and self.adaptive_thresholds:
             max_threshold = self.adaptive_thresholds[-1][0]  # Last threshold is the max
             if error_count > max_threshold:
-                logger.warning("Too many errors (%d > %d), skipping extraction",
-                               error_count, max_threshold)
-                return []
+                # Too many errors - extract only up to 2x the max threshold with minimal context
+                max_errors_to_extract = max_threshold * 2
+                logger.warning(
+                    "Too many errors (%d > %d), extracting first %d errors with minimal context",
+                    error_count, max_threshold, max_errors_to_extract
+                )
 
         # Step 3: Determine context size
         if self.use_adaptive_context and self.lines_before == 50 and self.lines_after == 10:
@@ -491,7 +498,9 @@ class LogErrorExtractor:
             "error_types": error_analysis['error_types'],
             "line_samples": line_samples,
             "ignored_patterns": error_analysis['ignored_patterns'],
-            "extracted_content": log_file_path if log_file_path else "N/A"
+            "extracted_content": log_file_path if log_file_path else "N/A",
+            "extraction_capped": max_errors_to_extract is not None,
+            "max_errors_extracted": max_errors_to_extract if max_errors_to_extract is not None else error_count
         }
 
         # Store summary for later access
@@ -503,14 +512,24 @@ class LogErrorExtractor:
         # Step 5: Extract bottom-to-top
         result_sections = []
         current_idx = len(lines) - 1
+        errors_extracted = 0
 
         while current_idx >= 0:
             if self._is_error_line(lines[current_idx]):
+                # Check if we've hit the extraction cap
+                if max_errors_to_extract is not None and errors_extracted >= max_errors_to_extract:
+                    logger.info(
+                        "Reached error extraction cap (%d/%d errors), stopping extraction",
+                        errors_extracted, error_count
+                    )
+                    break
+
                 # Extract section with context
                 section = self._extract_single_section_with_context(
                     lines, current_idx, lines_before, lines_after
                 )
                 result_sections.append(section)
+                errors_extracted += 1
 
                 # Skip context range - move to line before context starts
                 start_idx = max(0, current_idx - lines_before)
@@ -522,6 +541,7 @@ class LogErrorExtractor:
         result_sections.reverse()
 
         # Step 7: Format sections with separators
+        self.last_extraction_status = "success"
         return self._format_sections(result_sections)
 
 
