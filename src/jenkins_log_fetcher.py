@@ -195,7 +195,12 @@ class JenkinsLogFetcher:
             total_size = int(head_response.headers.get('Content-Length', 0))
 
             if total_size == 0:
-                logger.warning("Console log is empty for job %s #%s", job_name, build_number)
+                # Jenkins HEAD may return 0 while log is being written or not support HEAD properly
+                # Return empty string - hybrid mode will fall back to streaming
+                logger.debug(
+                    "Console log HEAD returned 0 bytes for job %s #%s (log may still be writing)",
+                    job_name, build_number
+                )
                 return ""
 
             # Calculate start position (approximate bytes per line = 150)
@@ -312,7 +317,7 @@ class JenkinsLogFetcher:
         """
         from .log_error_extractor import LogErrorExtractor  # pylint: disable=import-outside-toplevel
 
-        logger.info("Fetching console log (hybrid) for job %s #%s", job_name, build_number)
+        logger.debug("Using hybrid log fetching for job %s #%s", job_name, build_number)
 
         # Try tail first
         try:
@@ -333,7 +338,7 @@ class JenkinsLogFetcher:
             logger.info("No errors in tail for job %s #%s, streaming full log", job_name, build_number)
 
         except Exception as error:  # pylint: disable=broad-exception-caught
-            logger.warning(
+            logger.debug(
                 "Tail fetch failed for job %s #%s: %s, falling back to streaming",
                 job_name, build_number, error
             )
