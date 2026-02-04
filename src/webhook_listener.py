@@ -1117,6 +1117,9 @@ def _extract_failed_stages_with_logs(
     Returns:
         List of failed stage dicts with log content
     """
+    import json
+    from pathlib import Path
+
     # Build list of failed stages from Blue Ocean metadata
     failed_stages = []
     for stage in blue_ocean_stages:
@@ -1142,14 +1145,24 @@ def _extract_failed_stages_with_logs(
     # Extract error context from console log for each failed stage
     error_extractor = LogErrorExtractor(
         lines_before=config.error_context_lines_before,
-        lines_after=config.error_context_lines_after
+        lines_after=config.error_context_lines_after,
+        ignore_patterns=config.error_ignore_patterns,
+        use_adaptive_context=config.error_adaptive_context_enabled,
+        adaptive_thresholds=config.error_adaptive_thresholds
     )
+
+    # Build base path for logs (same structure as storage_manager)
+    base_log_dir = Path(config.log_dir if config else "./logs") / "jenkins-builds" / job_name / str(build_number)
 
     # For each failed stage, extract logs using bottom-up approach
     for stage in failed_stages:
         stage_name = stage.get('stage_name')
         stage_id = stage.get('stage_id')
         failed_step_info = stage.get('failed_step_info')
+
+        # Build expected log file path for this stage
+        safe_stage_name = stage_name.lower().replace(' ', '_').replace('/', '_')
+        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
 
         # Strategy 1: Try to fetch stage-specific logs via Blue Ocean API (bottom-up)
         stage_log = None
@@ -1201,12 +1214,18 @@ def _extract_failed_stages_with_logs(
                     "falling back to error pattern extraction",
                     step_name
                 )
-                error_sections = error_extractor.extract_error_sections(console_log)
+                console_log_path = base_log_dir / "console.log"
+                error_sections = error_extractor.extract_error_sections(
+                    console_log, log_file_path=str(console_log_path)
+                )
                 stage['log_content'] = error_sections[0] if error_sections else console_log
         else:
             # No step-level filtering, extract errors from full console log
             logger.debug("No step-level info for stage '%s', extracting errors from full log", stage_name)
-            error_sections = error_extractor.extract_error_sections(console_log)
+            console_log_path = base_log_dir / "console.log"
+            error_sections = error_extractor.extract_error_sections(
+                console_log, log_file_path=str(console_log_path)
+            )
 
             if error_sections:
                 # Found error patterns, use extracted context
@@ -1216,6 +1235,17 @@ def _extract_failed_stages_with_logs(
                     stage_name,
                     len(error_sections[0])
                 )
+
+                # Save error extraction summary as JSON file
+                if error_extractor.last_error_summary:
+                    summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
+                    try:
+                        summary_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(summary_path, 'w', encoding='utf-8') as summary_file:
+                            json.dump(error_extractor.last_error_summary, summary_file, indent=2)
+                        logger.info("Saved error extraction summary -> %s", summary_path)
+                    except Exception as save_error:  # pylint: disable=broad-exception-caught
+                        logger.debug("Could not save error summary: %s", save_error)
             else:
                 # No error patterns found, use full console log
                 stage['log_content'] = console_log
@@ -1257,7 +1287,7 @@ def _save_jenkins_build_to_files(
         )
 
         logger.info(
-            "Jenkins console log saved: %s #%s → %s (%d bytes)",
+            "Jenkins console log saved: %s #%s -> %s (%d bytes)",
             job_name, build_number, console_log_path, len(console_log),
             extra={
                 'job_name': job_name,
@@ -1282,7 +1312,7 @@ def _save_jenkins_build_to_files(
                 stage_log_paths.append(str(stage_log_path))
 
                 logger.info(
-                    "Jenkins stage log saved: %s #%s [%s] → %s (%d bytes)",
+                    "Jenkins stage log saved: %s #%s [%s] -> %s (%d bytes)",
                     job_name, build_number, stage_name, stage_log_path, len(log_content),
                     extra={
                         'job_name': job_name,
@@ -1737,7 +1767,7 @@ def _save_pipeline_logs_to_files(
 
             # Log the saved path
             logger.info(
-                "GitLab job log saved: %s [%s] job #%s → %s (%d bytes)",
+                "GitLab job log saved: %s [%s] job #%s -> %s (%d bytes)",
                 project_name, job_status, job_id, job_log_path, log_size,
                 extra={
                     'pipeline_id': pipeline_id,

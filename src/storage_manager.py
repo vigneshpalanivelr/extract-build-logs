@@ -173,7 +173,7 @@ class StorageManager:
             with open(log_path, 'w', encoding='utf-8') as file_handle:
                 file_handle.write(log_content)
 
-            logger.info("Saved log for job %s (%s) to %s", job_id, job_name, log_path)
+            logger.debug("Saved log for job %s (%s) to %s", job_id, job_name, log_path)
 
             # Update metadata
             if job_details:
@@ -487,7 +487,7 @@ class StorageManager:
             with open(console_log_path, 'w', encoding='utf-8') as file_handle:
                 file_handle.write(console_log)
 
-            logger.info(
+            logger.debug(
                 "Saved Jenkins console log for %s #%s to %s",
                 job_name,
                 build_number,
@@ -537,7 +537,7 @@ class StorageManager:
             with open(stage_log_path, 'w', encoding='utf-8') as file_handle:
                 file_handle.write(log_content)
 
-            logger.info(
+            logger.debug(
                 "Saved Jenkins stage log for %s #%s stage '%s' to %s",
                 job_name,
                 build_number,
@@ -602,12 +602,13 @@ class StorageManager:
             with open(metadata_path, 'w', encoding='utf-8') as file_handle:
                 json.dump(build_data, file_handle, indent=2, ensure_ascii=False)
 
-            logger.info(
+            logger.debug(
                 "Saved Jenkins build metadata for %s #%s to %s",
                 job_name,
                 build_number,
                 metadata_path
             )
+            return metadata_path
 
         except IOError as error:
             logger.error(
