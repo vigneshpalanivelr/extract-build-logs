@@ -478,11 +478,15 @@ class JenkinsLogFetcher:
         lines = full_stage_log.split('\n')
         total_lines = len(lines)
 
+        # Ensure tail_lines is an integer at this point (should always be due to checks above)
+        assert isinstance(tail_lines, int) and tail_lines > 0, "tail_lines must be a positive integer"
+
         if total_lines <= tail_lines:
             logger.debug("Stage log has %d lines (≤ %d), returning full log", total_lines, tail_lines)
             return full_stage_log
 
-        # Return only the tail
+        # Return only the tail (tail_lines is guaranteed to be a positive int at this point)
+        # pylint: disable=invalid-unary-operand-type
         tail_log = '\n'.join(lines[-tail_lines:])
         logger.info(
             "Trimmed stage log for stage %s: %d lines → %d lines (bottom-up)",

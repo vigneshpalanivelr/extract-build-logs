@@ -277,7 +277,7 @@ class TestBackgroundTasks(unittest.TestCase):
             {'id': 1, 'name': 'build', 'status': 'success'},
             {'id': 2, 'name': 'test', 'status': 'success'}
         ]
-        mock_log_fetcher.fetch_job_log.side_effect = ['Build log', 'Test log']
+        mock_log_fetcher.fetch_job_log_tail.side_effect = ['Build log', 'Test log']
 
         # Mock API posting
         mock_api_poster.post_pipeline_logs.return_value = True
@@ -289,7 +289,7 @@ class TestBackgroundTasks(unittest.TestCase):
 
         # Verify
         mock_storage.save_pipeline_metadata.assert_called_once()
-        self.assertEqual(mock_log_fetcher.fetch_job_log.call_count, 2)
+        self.assertEqual(mock_log_fetcher.fetch_job_log_tail.call_count, 2)
         mock_api_poster.post_pipeline_logs.assert_called_once()
         mock_monitor.update_request.assert_called()
 
@@ -505,15 +505,15 @@ class TestProcessPipelineEventAdvanced(unittest.TestCase):
             {'id': 2, 'name': 'test', 'status': 'failed'},
             {'id': 3, 'name': 'deploy', 'status': 'success'}
         ]
-        mock_log_fetcher.fetch_job_log.return_value = 'Test log'
+        mock_log_fetcher.fetch_job_log_tail.return_value = 'Test log'
 
         pipeline_info = create_complete_pipeline_info({'status': 'failed'})
 
         process_pipeline_event(pipeline_info, db_request_id=1, req_id='test-123')
 
         # Verify only 1 job log was fetched (the failed one)
-        self.assertEqual(mock_log_fetcher.fetch_job_log.call_count, 1)
-        mock_log_fetcher.fetch_job_log.assert_called_with(456, 2)
+        self.assertEqual(mock_log_fetcher.fetch_job_log_tail.call_count, 1)
+        mock_log_fetcher.fetch_job_log_tail.assert_called_with(456, 2, mock_config.tail_log_lines)
 
     @patch('src.webhook_listener.time')
     @patch('src.webhook_listener.clear_request_id')
