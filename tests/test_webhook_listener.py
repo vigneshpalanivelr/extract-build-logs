@@ -861,6 +861,9 @@ Build finished"""
             {'name': 'Test', 'status': 'FAILURE', 'id': '1', 'durationMillis': 5000}
         ]
 
+        # Mock fetch_stage_log_tail to return None so it falls back to console log parsing
+        mock_log_fetcher.fetch_stage_log_tail.return_value = None
+
         mock_api_poster.post_jenkins_logs.return_value = True
 
         build_info = {

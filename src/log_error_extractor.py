@@ -496,55 +496,46 @@ class LogErrorExtractor:
             return []
 
         # Step 2: Calculate incremental buckets and max errors to extract
-        # Thresholds are now treated as incremental buckets:
-        # "5:50:10,10:10:5,20:5:2" means:
-        #   - First 5 errors: 50 before, 10 after
-        #   - Next 10 errors: 10 before, 5 after
-        #   - Next 20 errors: 5 before, 2 after
-        #   - Remaining errors: IGNORE
         # NOTE: Incremental buckets only apply when using default values (50, 10)
-        has_default_values = self.lines_before == 50 and self.lines_after == 10
-        use_incremental_buckets = (self.use_adaptive_context and self.adaptive_thresholds and has_default_values)
+        use_incremental_buckets = (
+            self.use_adaptive_context
+            and self.adaptive_thresholds
+            and self.lines_before == 50
+            and self.lines_after == 10
+        )
 
         if use_incremental_buckets:
             max_errors_to_extract = sum(bucket[0] for bucket in self.adaptive_thresholds)
-            bucket_breakdown = ' + '.join([str(bucket[0]) for bucket in self.adaptive_thresholds])
 
             if error_count > max_errors_to_extract:
                 logger.warning(
                     "Too many errors (%d > %d), extracting first %d errors using incremental buckets (%s)",
-                    error_count, max_errors_to_extract, max_errors_to_extract, bucket_breakdown
+                    error_count, max_errors_to_extract, max_errors_to_extract,
+                    ' + '.join([str(b[0]) for b in self.adaptive_thresholds])
                 )
 
             # Build context description showing bucket structure
-            bucket_descriptions = []
             cumulative = 0
+            bucket_descs = []
             for count, before, after in self.adaptive_thresholds:
-                start = cumulative + 1
-                end = cumulative + count
-                bucket_descriptions.append(f"errors {start}-{end}: {before}b/{after}a")
-                cumulative = end
-            context_description = f"incremental buckets ({', '.join(bucket_descriptions)})"
+                bucket_descs.append(f"errors {cumulative + 1}-{cumulative + count}: {before}b/{after}a")
+                cumulative += count
+            context_description = f"incremental buckets ({', '.join(bucket_descs)})"
         else:
             max_errors_to_extract = None
             context_description = f"{self.lines_before} before, {self.lines_after} after (fixed)"
 
         # Step 3: Build error summary
-        # Format adaptive thresholds as string
-        thresholds_str = ','.join([f"{t}:{b}:{a}" for t, b, a in self.adaptive_thresholds])
-
-        # Format line samples for each error type
-        line_samples = {}
-        for pattern, line_nums in error_analysis['error_lines'].items():
-            line_samples[pattern] = self._format_line_sample(line_nums)
-
         error_summary = {
             "total_errors_found": error_count,
-            "error_settings": thresholds_str,
+            "error_settings": ','.join([f"{t}:{b}:{a}" for t, b, a in self.adaptive_thresholds]),
             "search_technique": "bottom-up",
             "context_used": context_description,
             "error_types": error_analysis['error_types'],
-            "line_samples": line_samples,
+            "line_samples": {
+                p: self._format_line_sample(nums)
+                for p, nums in error_analysis['error_lines'].items()
+            },
             "ignored_patterns": error_analysis['ignored_patterns'],
             "extracted_content": log_file_path if log_file_path else "N/A",
             "extraction_capped": max_errors_to_extract is not None,
