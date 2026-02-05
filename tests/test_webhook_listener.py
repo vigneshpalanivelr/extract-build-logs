@@ -1367,6 +1367,229 @@ Done"""
         self.assertEqual(result['step_name'], 'Step2')  # Last failed step
         self.assertEqual(result['total_failed_steps'], 2)
 
+    def test_save_error_summary_to_file_success(self):
+        """Test successfully saving error summary to file."""
+        from src.webhook_listener import _save_error_summary_to_file
+        from src.log_error_extractor import LogErrorExtractor
+        from pathlib import Path
+        import tempfile
+        import json
+
+        # Create a temporary directory for testing
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_log_dir = Path(tmpdir)
+            safe_stage_name = "test_stage"
+
+            # Create an extractor with error summary
+            extractor = LogErrorExtractor()
+            extractor.last_error_summary = {
+                'error_count': 5,
+                'total_lines': 100,
+                'extraction_method': 'adaptive'
+            }
+
+            # Save the error summary
+            _save_error_summary_to_file(extractor, base_log_dir, safe_stage_name)
+
+            # Verify file was created and contains correct data
+            summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
+            self.assertTrue(summary_path.exists())
+
+            with open(summary_path, 'r', encoding='utf-8') as f:
+                loaded_summary = json.load(f)
+
+            self.assertEqual(loaded_summary['error_count'], 5)
+            self.assertEqual(loaded_summary['total_lines'], 100)
+            self.assertEqual(loaded_summary['extraction_method'], 'adaptive')
+
+    def test_save_error_summary_to_file_no_summary(self):
+        """Test saving when extractor has no error summary."""
+        from src.webhook_listener import _save_error_summary_to_file
+        from src.log_error_extractor import LogErrorExtractor
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_log_dir = Path(tmpdir)
+            safe_stage_name = "test_stage"
+
+            # Create an extractor WITHOUT error summary
+            extractor = LogErrorExtractor()
+            extractor.last_error_summary = None
+
+            # Save should do nothing
+            _save_error_summary_to_file(extractor, base_log_dir, safe_stage_name)
+
+            # Verify file was NOT created
+            summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
+            self.assertFalse(summary_path.exists())
+
+    @patch('builtins.open', side_effect=OSError("Permission denied"))
+    @patch('src.webhook_listener.logger')
+    def test_save_error_summary_to_file_write_error(self, mock_logger, mock_open):
+        """Test error handling when file write fails."""
+        from src.webhook_listener import _save_error_summary_to_file
+        from src.log_error_extractor import LogErrorExtractor
+        from pathlib import Path
+        import tempfile
+
+        # Use a valid temp directory, but mock open to fail
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_log_dir = Path(tmpdir)
+            safe_stage_name = "test_stage"
+
+            # Create an extractor with error summary
+            extractor = LogErrorExtractor()
+            extractor.last_error_summary = {
+                'error_count': 5,
+                'total_lines': 100
+            }
+
+            # Should not raise exception, just log the error
+            _save_error_summary_to_file(extractor, base_log_dir, safe_stage_name)
+
+            # Verify error was logged
+            mock_logger.debug.assert_called_once()
+            call_args = mock_logger.debug.call_args[0]
+            self.assertIn("Could not save error summary", call_args[0])
+
+    def test_try_fetch_stage_log_via_api_empty_stage_id(self):
+        """Test _try_fetch_stage_log_via_api returns None when stage_id is empty."""
+        from src.webhook_listener import _try_fetch_stage_log_via_api
+
+        # Mock fetcher
+        mock_fetcher = Mock()
+
+        # Call with empty stage_id
+        result = _try_fetch_stage_log_via_api(mock_fetcher, "test-job", 123, "", "Test Stage")
+
+        # Should return None without calling fetcher
+        self.assertIsNone(result)
+        mock_fetcher.fetch_stage_log_tail.assert_not_called()
+
+    def test_try_fetch_stage_log_via_api_exception(self):
+        """Test _try_fetch_stage_log_via_api handles exceptions gracefully."""
+        from src.webhook_listener import _try_fetch_stage_log_via_api
+
+        # Mock fetcher that raises exception
+        mock_fetcher = Mock()
+        mock_fetcher.fetch_stage_log_tail.side_effect = Exception("API error")
+
+        # Call should not raise, just return None
+        result = _try_fetch_stage_log_via_api(mock_fetcher, "test-job", 123, "stage-1", "Test Stage")
+
+        # Should return None after catching exception
+        self.assertIsNone(result)
+
+    def test_process_console_log_fallback_with_failed_step(self):
+        """Test _process_console_log_fallback extracts specific failed step logs."""
+        from src.webhook_listener import _process_console_log_fallback
+        from src.log_error_extractor import LogErrorExtractor
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_log_dir = Path(tmpdir)
+            safe_stage_name = "test_stage"
+
+            console_log = """[Pipeline] Start of job
+[Pipeline] { (Build)
+Building application
+Compiling sources
+[Pipeline] }
+[Pipeline] { (Test)
+Running tests
+Error: Test failed
+[Pipeline] }
+[Pipeline] End of job"""
+
+            failed_step_info = {
+                'step_name': 'Test',
+                'step_status': 'FAILED',
+                'total_failed_steps': 1
+            }
+
+            error_extractor = LogErrorExtractor()
+
+            result = _process_console_log_fallback(
+                console_log, error_extractor, base_log_dir, safe_stage_name,
+                "Test Stage", failed_step_info
+            )
+
+            # Should extract step-specific logs
+            self.assertIsNotNone(result)
+            self.assertIn('Running tests', result)
+            self.assertIn('Error: Test failed', result)
+            self.assertNotIn('Building application', result)  # Should not include Build step
+
+    def test_process_console_log_fallback_step_not_found(self):
+        """Test _process_console_log_fallback when specific step not found in console."""
+        from src.webhook_listener import _process_console_log_fallback
+        from src.log_error_extractor import LogErrorExtractor
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_log_dir = Path(tmpdir)
+            safe_stage_name = "test_stage"
+
+            console_log = """[Pipeline] Start of job
+[Pipeline] { (Build)
+Building application
+Exception: Build error occurred
+[Pipeline] }
+[Pipeline] End of job"""
+
+            # Looking for a step that doesn't exist
+            failed_step_info = {
+                'step_name': 'Deploy',  # Not in console log
+                'step_status': 'FAILED',
+                'total_failed_steps': 1
+            }
+
+            error_extractor = LogErrorExtractor()
+
+            result = _process_console_log_fallback(
+                console_log, error_extractor, base_log_dir, safe_stage_name,
+                "Deploy Stage", failed_step_info
+            )
+
+            # Should fall back to error extraction and find errors
+            self.assertIsNotNone(result)
+            self.assertIn('Exception', result)  # Should extract error context
+
+    def test_process_console_log_fallback_with_error_sections(self):
+        """Test _process_console_log_fallback extracts error sections when no step info."""
+        from src.webhook_listener import _process_console_log_fallback
+        from src.log_error_extractor import LogErrorExtractor
+        from pathlib import Path
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            base_log_dir = Path(tmpdir)
+            safe_stage_name = "test_stage"
+
+            console_log = """Build started
+Compiling code
+Exception: Compilation failed at line 42
+Error: Missing dependency
+Build completed"""
+
+            # No failed step info
+            failed_step_info = None
+
+            error_extractor = LogErrorExtractor()
+
+            result = _process_console_log_fallback(
+                console_log, error_extractor, base_log_dir, safe_stage_name,
+                "Build Stage", failed_step_info
+            )
+
+            # Should extract error sections
+            self.assertIsNotNone(result)
+            self.assertIn('Exception', result)
+            self.assertIn('Compilation failed', result)
+
 
 if __name__ == "__main__":
     unittest.main()
