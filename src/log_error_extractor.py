@@ -503,8 +503,10 @@ class LogErrorExtractor:
         #   - Next 20 errors: 5 before, 2 after
         #   - Remaining errors: IGNORE
         # NOTE: Incremental buckets only apply when using default values (50, 10)
-        if (self.use_adaptive_context and self.adaptive_thresholds and
-            self.lines_before == 50 and self.lines_after == 10):
+        has_default_values = self.lines_before == 50 and self.lines_after == 10
+        use_incremental_buckets = (self.use_adaptive_context and self.adaptive_thresholds and has_default_values)
+
+        if use_incremental_buckets:
             max_errors_to_extract = sum(bucket[0] for bucket in self.adaptive_thresholds)
             bucket_breakdown = ' + '.join([str(bucket[0]) for bucket in self.adaptive_thresholds])
 
