@@ -708,6 +708,43 @@ class TestConfigLoaderHelpers(unittest.TestCase):
         self.assertEqual(result['tail_log_lines'], 10000)
         self.assertEqual(result['stream_chunk_size'], 16384)
 
+    def test_decode_if_base64_with_base64(self):
+        """Test _decode_if_base64 with base64 encoding."""
+        import base64
+
+        # Create a base64 encoded value
+        original_value = "secret_password_123"
+        encoded_value = base64.b64encode(original_value.encode('utf-8')).decode('utf-8')
+
+        # Set encoding type to base64
+        os.environ['GITLAB_TOKEN_ENCODING'] = 'base64'
+
+        result = ConfigLoader._decode_if_base64('GITLAB_TOKEN', encoded_value)
+
+        self.assertEqual(result, original_value)
+
+    def test_decode_if_base64_with_invalid_base64(self):
+        """Test _decode_if_base64 with invalid base64 raises ValueError."""
+        # Set encoding type to base64
+        os.environ['API_KEY_ENCODING'] = 'base64'
+
+        # Invalid base64 string
+        invalid_base64 = "not_valid_base64!!!"
+
+        with self.assertRaises(ValueError) as context:
+            ConfigLoader._decode_if_base64('API_KEY', invalid_base64)
+
+        self.assertIn("Invalid base64 encoding", str(context.exception))
+
+    def test_decode_if_base64_plain_text(self):
+        """Test _decode_if_base64 with plain text (no encoding)."""
+        # No encoding specified, should return original value
+        plain_value = "plain_text_password"
+
+        result = ConfigLoader._decode_if_base64('PASSWORD', plain_value)
+
+        self.assertEqual(result, plain_value)
+
 
 if __name__ == '__main__':
     unittest.main()
