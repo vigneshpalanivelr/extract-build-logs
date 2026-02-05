@@ -1191,5 +1191,182 @@ class TestJenkinsWebhookEdgeCases(unittest.TestCase):
         self.assertIn("error", response.json()["detail"]["status"])
 
 
+class TestHelperFunctions(unittest.TestCase):
+    """Test helper functions in webhook_listener."""
+
+    def test_extract_step_logs_from_console_success(self):
+        """Test extracting a specific step's log from console log."""
+        from src.webhook_listener import _extract_step_logs_from_console
+
+        console_log = """[Pipeline] Start of job
+[Pipeline] { (Build)
+Building application
+Compiling sources
+[Pipeline] }
+[Pipeline] { (Test)
+Running tests
+All tests passed
+[Pipeline] }
+[Pipeline] End of job"""
+
+        result = _extract_step_logs_from_console(console_log, 'Build', 'Build Stage')
+
+        self.assertIsNotNone(result)
+        self.assertIn('Building application', result)
+        self.assertIn('Compiling sources', result)
+        self.assertNotIn('Running tests', result)  # Should not include Test step
+
+    def test_extract_step_logs_from_console_empty_inputs(self):
+        """Test extracting step log with empty inputs."""
+        from src.webhook_listener import _extract_step_logs_from_console
+
+        # Empty console log
+        result = _extract_step_logs_from_console('', 'Build', 'Build Stage')
+        self.assertIsNone(result)
+
+        # Empty step name
+        result = _extract_step_logs_from_console('some log', '', 'Build Stage')
+        self.assertIsNone(result)
+
+        # None inputs
+        result = _extract_step_logs_from_console(None, 'Build', 'Build Stage')
+        self.assertIsNone(result)
+
+    def test_extract_step_logs_from_console_step_not_found(self):
+        """Test extracting step log when step is not found."""
+        from src.webhook_listener import _extract_step_logs_from_console
+
+        console_log = """[Pipeline] Start of job
+[Pipeline] { (Deploy)
+Deploying application
+[Pipeline] }
+[Pipeline] End of job"""
+
+        # Looking for 'Build' step which doesn't exist
+        result = _extract_step_logs_from_console(console_log, 'Build', 'Build Stage')
+
+        # Should return None when step not found
+        self.assertIsNone(result)
+
+    def test_extract_step_logs_with_alternative_pattern(self):
+        """Test extracting step log with alternative pattern format."""
+        from src.webhook_listener import _extract_step_logs_from_console
+
+        console_log = """[Pipeline] Start
+{ (CustomStep
+Step content here
+More content
+[Pipeline] }
+Done"""
+
+        result = _extract_step_logs_from_console(console_log, 'CustomStep', 'Custom Stage')
+
+        self.assertIsNotNone(result)
+        self.assertIn('Step content here', result)
+        self.assertIn('More content', result)
+
+    def test_analyze_failed_steps_no_failed_steps(self):
+        """Test analyzing failed steps when stage has no failed steps."""
+        from src.webhook_listener import _analyze_failed_steps
+
+        stage = {
+            'name': 'Build',
+            'status': 'FAILED',
+            'stageFlowNodes': [
+                {'name': 'Step1', 'status': 'SUCCESS', 'durationMillis': 100},
+                {'name': 'Step2', 'status': 'SUCCESS', 'durationMillis': 200}
+            ]
+        }
+
+        result = _analyze_failed_steps(stage)
+
+        # Should return None when no failed steps found
+        self.assertIsNone(result)
+
+    def test_analyze_failed_steps_real_failure(self):
+        """Test analyzing a real failed step (no successful steps after it)."""
+        from src.webhook_listener import _analyze_failed_steps
+
+        stage = {
+            'name': 'Build',
+            'status': 'FAILED',
+            'stageFlowNodes': [
+                {'name': 'Compile', 'status': 'SUCCESS', 'durationMillis': 100},
+                {'name': 'Test', 'status': 'FAILED', 'durationMillis': 50},
+                # No more steps after failed step
+            ]
+        }
+
+        result = _analyze_failed_steps(stage)
+
+        # Should identify Test as the real failure
+        self.assertIsNotNone(result)
+        self.assertEqual(result['step_name'], 'Test')
+        self.assertEqual(result['step_status'], 'FAILED')
+        self.assertEqual(result['total_failed_steps'], 1)
+        self.assertEqual(result['handled_failures'], 0)
+
+    def test_analyze_failed_steps_handled_failure(self):
+        """Test analyzing handled failure (successful steps after failed step)."""
+        from src.webhook_listener import _analyze_failed_steps
+
+        stage = {
+            'name': 'Build',
+            'status': 'FAILED',
+            'stageFlowNodes': [
+                {'name': 'Compile', 'status': 'SUCCESS', 'durationMillis': 100},
+                {'name': 'OptionalCheck', 'status': 'FAILED', 'durationMillis': 50},
+                {'name': 'Package', 'status': 'SUCCESS', 'durationMillis': 150},  # Successful after failure
+                {'name': 'Deploy', 'status': 'FAILED', 'durationMillis': 30}  # Real failure
+            ]
+        }
+
+        result = _analyze_failed_steps(stage)
+
+        # Should identify Deploy as the real failure (OptionalCheck was handled)
+        self.assertIsNotNone(result)
+        self.assertEqual(result['step_name'], 'Deploy')
+        self.assertEqual(result['total_failed_steps'], 2)
+        self.assertEqual(result['handled_failures'], 1)  # OptionalCheck was handled
+
+    def test_analyze_failed_steps_with_skipped_steps(self):
+        """Test analyzing failed step with SKIPPED status after failure."""
+        from src.webhook_listener import _analyze_failed_steps
+
+        stage = {
+            'name': 'Test',
+            'status': 'FAILED',
+            'stageFlowNodes': [
+                {'name': 'UnitTest', 'status': 'FAILED', 'durationMillis': 100},
+                {'name': 'IntegrationTest', 'status': 'SKIPPED', 'durationMillis': 0}  # Skipped counts as handled
+            ]
+        }
+
+        result = _analyze_failed_steps(stage)
+
+        # UnitTest should be identified as handled failure (SKIPPED counts as continuation)
+        self.assertIsNone(result)  # All failures were handled
+
+    def test_analyze_failed_steps_multiple_real_failures(self):
+        """Test analyzing the last real failed step when multiple exist."""
+        from src.webhook_listener import _analyze_failed_steps
+
+        stage = {
+            'name': 'Build',
+            'status': 'FAILED',
+            'stageFlowNodes': [
+                {'name': 'Step1', 'status': 'FAILED', 'durationMillis': 100},
+                {'name': 'Step2', 'status': 'FAILED', 'durationMillis': 50}
+            ]
+        }
+
+        result = _analyze_failed_steps(stage)
+
+        # Should return the last real failure
+        self.assertIsNotNone(result)
+        self.assertEqual(result['step_name'], 'Step2')  # Last failed step
+        self.assertEqual(result['total_failed_steps'], 2)
+
+
 if __name__ == "__main__":
     unittest.main()
