@@ -346,6 +346,151 @@ class TestLogFetcher(unittest.TestCase):
         # Session should be closed (we can't directly check but method should execute)
         # This covers lines 308-309
 
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_with_range_support(self, mock_head, mock_get):
+        """Test fetch_job_log_tail with Range header support (206 response)."""
+        # Mock HEAD response with Content-Length
+        mock_head_response = Mock()
+        mock_head_response.status_code = 200
+        mock_head_response.headers = {'Content-Length': '10000'}
+        mock_head.return_value = mock_head_response
+
+        # Mock GET with Range header returning 206 Partial Content
+        mock_range_response = Mock()
+        mock_range_response.status_code = 206
+        mock_range_response.text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
+        mock_get.return_value = mock_range_response
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 5)
+
+        self.assertEqual(result, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5")
+        mock_head.assert_called_once()
+        mock_get.assert_called_once()
+        # Verify Range header was used
+        call_kwargs = mock_get.call_args[1]
+        self.assertIn('headers', call_kwargs)
+        self.assertIn('Range', call_kwargs['headers'])
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_without_range_support(self, mock_head, mock_get):
+        """Test fetch_job_log_tail fallback when Range not supported (200 instead of 206)."""
+        # Mock HEAD response
+        mock_head_response = Mock()
+        mock_head_response.status_code = 200
+        mock_head_response.headers = {'Content-Length': '10000'}
+        mock_head.return_value = mock_head_response
+
+        # Mock Range request returning 200 (not 206), then mock full fetch
+        mock_range_response = Mock()
+        mock_range_response.status_code = 200  # Server doesn't support Range
+
+        mock_full_log_response = Mock()
+        mock_full_log_response.status_code = 200
+        mock_full_log_response.text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8"
+
+        mock_get.side_effect = [mock_range_response, mock_full_log_response]
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 3)
+
+        # Should fallback to full fetch and trim to last 3 lines
+        self.assertEqual(result, "Line 6\nLine 7\nLine 8")
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_head_request_fails(self, mock_head, mock_get):
+        """Test fetch_job_log_tail when HEAD request fails."""
+        # Mock HEAD request failure
+        mock_head.side_effect = requests.RequestException("Connection error")
+
+        # Mock full log fetch (fallback)
+        mock_full_log_response = Mock()
+        mock_full_log_response.status_code = 200
+        mock_full_log_response.text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
+        mock_get.return_value = mock_full_log_response
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 3)
+
+        # Should fallback to full fetch and trim
+        self.assertEqual(result, "Line 3\nLine 4\nLine 5")
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_no_content_length(self, mock_head, mock_get):
+        """Test fetch_job_log_tail when HEAD response has no Content-Length."""
+        # Mock HEAD response without Content-Length
+        mock_head_response = Mock()
+        mock_head_response.status_code = 200
+        mock_head_response.headers = {}  # No Content-Length
+        mock_head.return_value = mock_head_response
+
+        # Mock full log fetch (fallback)
+        mock_full_log_response = Mock()
+        mock_full_log_response.status_code = 200
+        mock_full_log_response.text = "Line 1\nLine 2\nLine 3"
+        mock_get.return_value = mock_full_log_response
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 2)
+
+        # Should fallback to full fetch and trim
+        self.assertEqual(result, "Line 2\nLine 3")
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_log_not_available(self, mock_head, mock_get):
+        """Test fetch_job_log_tail when log is not available (404)."""
+        # Mock HEAD fails
+        mock_head.side_effect = requests.RequestException("Error")
+
+        # Mock full fetch returning log not available
+        mock_full_log_response = Mock()
+        mock_full_log_response.status_code = 404
+        mock_get.return_value = mock_full_log_response
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 5)
+
+        # Should return log not available message
+        self.assertEqual(result, "[Log not available for job 456]")
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_shorter_than_requested(self, mock_head, mock_get):
+        """Test fetch_job_log_tail when log has fewer lines than requested."""
+        # Mock HEAD fails
+        mock_head.side_effect = requests.RequestException("Error")
+
+        # Mock full fetch with short log
+        mock_full_log_response = Mock()
+        mock_full_log_response.status_code = 200
+        mock_full_log_response.text = "Line 1\nLine 2"
+        mock_get.return_value = mock_full_log_response
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 100)
+
+        # Should return full log since it's shorter than requested
+        self.assertEqual(result, "Line 1\nLine 2")
+
+    @patch('requests.Session.get')
+    @patch('requests.Session.head')
+    def test_fetch_job_log_tail_head_404(self, mock_head, mock_get):
+        """Test fetch_job_log_tail when HEAD returns 404."""
+        # Mock HEAD returning non-200 status
+        mock_head_response = Mock()
+        mock_head_response.status_code = 404
+        mock_head.return_value = mock_head_response
+
+        # Mock full fetch
+        mock_full_log_response = Mock()
+        mock_full_log_response.status_code = 200
+        mock_full_log_response.text = "Line 1\nLine 2\nLine 3"
+        mock_get.return_value = mock_full_log_response
+
+        result = self.fetcher.fetch_job_log_tail(123, 456, 2)
+
+        # Should fallback to full fetch
+        self.assertEqual(result, "Line 2\nLine 3")
+
 
 class TestGitLabAPIError(unittest.TestCase):
     """Test cases for GitLabAPIError exception."""

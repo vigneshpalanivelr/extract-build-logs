@@ -267,6 +267,95 @@ class TestJenkinsLogFetcher(unittest.TestCase):
 
         self.assertIsNone(result)
 
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher._make_request')
+    def test_fetch_stage_log_json_without_text(self, mock_make_request):
+        """Test stage log fetch when JSON response doesn't have 'text' field."""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        # JSON response without 'text' field (only metadata)
+        mock_response.json.return_value = {"id": "stage-1", "status": "FAILED"}
+        mock_make_request.return_value = mock_response
+
+        result = self.fetcher.fetch_stage_log("test-job", 123, "stage-1")
+
+        # Should return None when JSON doesn't have text field
+        self.assertIsNone(result)
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_stage_log')
+    def test_fetch_stage_log_tail_success(self, mock_fetch_stage_log):
+        """Test fetch_stage_log_tail with successful stage log fetch."""
+        # Mock stage log with multiple lines
+        mock_fetch_stage_log.return_value = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7"
+
+        result = self.fetcher.fetch_stage_log_tail("test-job", 123, "stage-1", 3)
+
+        # Should return last 3 lines
+        self.assertEqual(result, "Line 5\nLine 6\nLine 7")
+        mock_fetch_stage_log.assert_called_once_with("test-job", 123, "stage-1")
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_stage_log')
+    def test_fetch_stage_log_tail_no_stage_log(self, mock_fetch_stage_log):
+        """Test fetch_stage_log_tail when stage log is not available."""
+        mock_fetch_stage_log.return_value = None
+
+        result = self.fetcher.fetch_stage_log_tail("test-job", 123, "stage-1", 5)
+
+        # Should return None
+        self.assertIsNone(result)
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_stage_log')
+    def test_fetch_stage_log_tail_shorter_than_requested(self, mock_fetch_stage_log):
+        """Test fetch_stage_log_tail when log is shorter than requested lines."""
+        mock_fetch_stage_log.return_value = "Line 1\nLine 2"
+
+        result = self.fetcher.fetch_stage_log_tail("test-job", 123, "stage-1", 100)
+
+        # Should return full log
+        self.assertEqual(result, "Line 1\nLine 2")
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_stage_log')
+    def test_fetch_stage_log_tail_with_none_tail_lines(self, mock_fetch_stage_log):
+        """Test fetch_stage_log_tail when tail_lines is None (uses config default)."""
+        mock_fetch_stage_log.return_value = "\n".join([f"Line {i}" for i in range(1, 101)])
+
+        # tail_lines=None should use config.tail_log_lines (5000 from setUp)
+        result = self.fetcher.fetch_stage_log_tail("test-job", 123, "stage-1", None)
+
+        # Should return full log since it's less than 5000 lines
+        self.assertIn("Line 100", result)
+        self.assertIn("Line 1", result)
+
+    @patch('os.getenv')
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_stage_log')
+    def test_fetch_stage_log_tail_with_env_fallback(self, mock_fetch_stage_log, mock_getenv):
+        """Test fetch_stage_log_tail using environment variable fallback."""
+        # Create fetcher without config
+        fetcher_no_config = JenkinsLogFetcher(
+            jenkins_url="https://jenkins.example.com",
+            jenkins_user="testuser",
+            jenkins_api_token="testtoken"
+        )
+
+        mock_getenv.return_value = "3"
+        mock_fetch_stage_log.return_value = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
+
+        result = fetcher_no_config.fetch_stage_log_tail("test-job", 123, "stage-1", None)
+
+        # Should use env variable value (3)
+        self.assertEqual(result, "Line 3\nLine 4\nLine 5")
+        mock_getenv.assert_called_with('TAIL_LOG_LINES', '5000')
+
+    @patch('src.jenkins_log_fetcher.JenkinsLogFetcher.fetch_stage_log')
+    def test_fetch_stage_log_tail_with_invalid_tail_lines(self, mock_fetch_stage_log):
+        """Test fetch_stage_log_tail with invalid tail_lines (0 or negative)."""
+        mock_fetch_stage_log.return_value = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
+
+        # Pass 0 as tail_lines - should fallback to 5000
+        result = self.fetcher.fetch_stage_log_tail("test-job", 123, "stage-1", 0)
+
+        # Should return full log since it's less than 5000 lines
+        self.assertEqual(result, "Line 1\nLine 2\nLine 3\nLine 4\nLine 5")
+
     @patch('requests.request')
     def test_make_request_success(self, mock_request):
         """Test _make_request with successful response."""
