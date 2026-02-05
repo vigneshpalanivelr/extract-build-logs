@@ -457,6 +457,10 @@ class JenkinsLogFetcher:
         if tail_lines is None:
             tail_lines = self.config.tail_log_lines if self.config else int(os.getenv('TAIL_LOG_LINES', '5000'))
 
+        # Safety check: ensure tail_lines is valid
+        if tail_lines is None or tail_lines <= 0:
+            tail_lines = 5000  # Fallback to default
+
         logger.debug("Fetching stage log tail (last %d lines) for stage %s", tail_lines, stage_id)
 
         # Fetch full stage log
