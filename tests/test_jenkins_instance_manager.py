@@ -345,3 +345,50 @@ class TestJenkinsInstanceManager:
             instance = manager.get_instance(url)
             assert instance is not None, f"Failed to match URL: {url}"
             assert instance.jenkins_user == "admin"
+
+    def test_decode_value_with_invalid_base64(self, temp_config_file):
+        """Test _decode_if_base64 with invalid base64 encoding raises ValueError."""
+        # Create a config with base64 encoding indicated
+        config_data = {
+            "instances": [
+                {
+                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_user": "admin",
+                    "jenkins_api_token": "not_valid_base64!!!",  # Invalid base64
+                    "token_encoding": "base64"
+                }
+            ]
+        }
+        with open(temp_config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f)
+
+        # Should raise ValueError due to invalid base64
+        with pytest.raises(ValueError, match="Invalid base64 encoding"):
+            JenkinsInstanceManager(config_file=temp_config_file)
+
+    def test_decode_value_with_valid_base64(self, temp_config_file):
+        """Test _decode_if_base64 successfully decodes valid base64."""
+        import base64
+        # Create a valid base64 encoded string
+        original_token = "secret_token_123"
+        encoded_token = base64.b64encode(original_token.encode('utf-8')).decode('utf-8')
+
+        config_data = {
+            "instances": [
+                {
+                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_user": "admin",
+                    "jenkins_api_token": encoded_token,
+                    "token_encoding": "base64"
+                }
+            ]
+        }
+        with open(temp_config_file, 'w', encoding='utf-8') as f:
+            json.dump(config_data, f)
+
+        manager = JenkinsInstanceManager(config_file=temp_config_file)
+        instance = manager.get_instance("https://jenkins.example.com")
+
+        # Should have decoded the base64 token
+        assert instance is not None
+        assert instance.jenkins_api_token == original_token
