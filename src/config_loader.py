@@ -311,10 +311,10 @@ class ConfigLoader:
 
                 thresholds.append((threshold, lines_before, lines_after))
 
-            except ValueError as e:
+            except ValueError as ve:
                 raise ValueError(
-                    f"Invalid threshold values in '{triplet}': {e}"
-                ) from e
+                    f"Invalid threshold values in '{triplet}': {ve}"
+                ) from ve
 
         if not thresholds:
             # Return default if empty

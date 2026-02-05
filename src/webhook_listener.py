@@ -21,12 +21,14 @@ Invokes: config_loader, pipeline_extractor, log_fetcher, storage_manager, error_
 """
 # pylint: disable=too-many-lines
 
+import json
 import logging
 import sys
 import hmac
 import uuid
 import time
 import tempfile
+from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
 from fastapi import FastAPI, Request, Header, BackgroundTasks, HTTPException, Query
@@ -1090,6 +1092,95 @@ def _analyze_failed_steps(stage: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _save_error_summary_to_file(error_extractor: LogErrorExtractor, base_log_dir: Path,
+                                safe_stage_name: str) -> None:
+    """Save error extraction summary as JSON file."""
+    if error_extractor.last_error_summary:
+        summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
+        try:
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(summary_path, 'w', encoding='utf-8') as summary_file:
+                json.dump(error_extractor.last_error_summary, summary_file, indent=2)
+            logger.info("Saved error extraction summary -> %s", summary_path)
+        except Exception as save_error:  # pylint: disable=broad-exception-caught
+            logger.debug("Could not save error summary: %s", save_error)
+
+
+def _try_fetch_stage_log_via_api(fetcher: 'JenkinsLogFetcher', job_name: str, build_number: int,
+                                 stage_id: str, stage_name: str) -> Optional[str]:
+    """Try to fetch stage-specific logs via Blue Ocean API (bottom-up)."""
+    if not stage_id:
+        return None
+
+    try:
+        logger.debug(
+            "Attempting to fetch stage log tail (bottom-up) for stage '%s' (ID: %s)",
+            stage_name, stage_id
+        )
+        stage_log = fetcher.fetch_stage_log_tail(job_name, build_number, stage_id, config.tail_log_lines)
+        if stage_log:
+            logger.info(
+                "Fetched stage log tail (bottom-up) for stage '%s': %d bytes",
+                stage_name, len(stage_log)
+            )
+            return stage_log
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        logger.debug(
+            "Could not fetch stage log via API for stage '%s': %s, falling back to console parsing",
+            stage_name, error
+        )
+    return None
+
+
+def _process_console_log_fallback(console_log: str, error_extractor: LogErrorExtractor,
+                                  base_log_dir: Path, safe_stage_name: str, stage_name: str,
+                                  failed_step_info: Optional[Dict[str, Any]]) -> str:
+    """Process console log fallback when stage API fetch fails."""
+    logger.debug("Falling back to console log parsing for stage '%s'", stage_name)
+
+    # If we identified a specific failed step, extract ONLY that step's logs
+    if failed_step_info and failed_step_info.get('step_name'):
+        step_name = failed_step_info['step_name']
+        logger.info(
+            "Attempting to extract logs for specific failed step '%s' in stage '%s'",
+            step_name, stage_name
+        )
+
+        step_logs = _extract_step_logs_from_console(console_log, step_name, stage_name)
+        if step_logs:
+            logger.info(
+                "Extracted logs for failed step '%s' in stage '%s': %d bytes",
+                step_name, stage_name, len(step_logs)
+            )
+            return step_logs
+
+        logger.warning(
+            "Could not extract step-specific logs for '%s', falling back to error pattern extraction",
+            step_name
+        )
+
+    # Extract errors from full console log
+    logger.debug("No step-level info for stage '%s', extracting errors from full log", stage_name)
+    console_log_path = base_log_dir / "console.log"
+    error_sections = error_extractor.extract_error_sections(
+        console_log, log_file_path=str(console_log_path)
+    )
+
+    if error_sections:
+        logger.info(
+            "Extracted error context for stage '%s': %d bytes",
+            stage_name, len(error_sections[0])
+        )
+        _save_error_summary_to_file(error_extractor, base_log_dir, safe_stage_name)
+        return error_sections[0]
+
+    logger.info(
+        "No error patterns found for stage '%s', using full console log: %d bytes",
+        stage_name, len(console_log)
+    )
+    return console_log
+
+
 def _extract_failed_stages_with_logs(
     blue_ocean_stages: list,
     console_log: str,
@@ -1117,9 +1208,6 @@ def _extract_failed_stages_with_logs(
     Returns:
         List of failed stage dicts with log content
     """
-    import json
-    from pathlib import Path
-
     # Build list of failed stages from Blue Ocean metadata
     failed_stages = []
     for stage in blue_ocean_stages:
@@ -1159,107 +1247,18 @@ def _extract_failed_stages_with_logs(
         stage_name = stage.get('stage_name')
         stage_id = stage.get('stage_id')
         failed_step_info = stage.get('failed_step_info')
-
-        # Build expected log file path for this stage
         safe_stage_name = stage_name.lower().replace(' ', '_').replace('/', '_')
-        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
 
         # Strategy 1: Try to fetch stage-specific logs via Blue Ocean API (bottom-up)
-        stage_log = None
-        if stage_id:
-            try:
-                logger.debug(
-                    "Attempting to fetch stage log tail (bottom-up) for stage '%s' (ID: %s)",
-                    stage_name, stage_id
-                )
-                stage_log = fetcher.fetch_stage_log_tail(job_name, build_number, stage_id, config.tail_log_lines)
-                if stage_log:
-                    stage['log_content'] = stage_log
-                    logger.info(
-                        "Fetched stage log tail (bottom-up) for stage '%s': %d bytes",
-                        stage_name, len(stage_log)
-                    )
-                    continue  # Successfully fetched stage log, skip console parsing
-            except Exception as error:  # pylint: disable=broad-exception-caught
-                logger.debug(
-                    "Could not fetch stage log via API for stage '%s': %s, falling back to console parsing",
-                    stage_name, error
-                )
+        stage_log = _try_fetch_stage_log_via_api(fetcher, job_name, build_number, stage_id, stage_name)
+        if stage_log:
+            stage['log_content'] = stage_log
+            continue  # Successfully fetched stage log, skip console parsing
 
-        # Strategy 2: Fallback to console log parsing (existing logic)
-        logger.debug("Falling back to console log parsing for stage '%s'", stage_name)
-
-        # If we identified a specific failed step, extract ONLY that step's logs
-        if failed_step_info and failed_step_info.get('step_name'):
-            step_name = failed_step_info['step_name']
-            logger.info(
-                "Attempting to extract logs for specific failed step '%s' in stage '%s'",
-                step_name, stage_name
-            )
-
-            # Extract logs for just this specific step
-            step_logs = _extract_step_logs_from_console(console_log, step_name, stage_name)
-
-            if step_logs:
-                # Successfully extracted step-specific logs
-                stage['log_content'] = step_logs
-                logger.info(
-                    "Extracted logs for failed step '%s' in stage '%s': %d bytes",
-                    step_name, stage_name, len(step_logs)
-                )
-            else:
-                # Failed to parse step logs, fall back to error extraction
-                logger.warning(
-                    "Could not extract step-specific logs for '%s', "
-                    "falling back to error pattern extraction",
-                    step_name
-                )
-                console_log_path = base_log_dir / "console.log"
-                error_sections = error_extractor.extract_error_sections(
-                    console_log, log_file_path=str(console_log_path)
-                )
-
-                # Handle extraction results
-                if error_sections:
-                    stage['log_content'] = error_sections[0]
-                else:
-                    # No errors found - use full log
-                    stage['log_content'] = console_log
-        else:
-            # No step-level filtering, extract errors from full console log
-            logger.debug("No step-level info for stage '%s', extracting errors from full log", stage_name)
-            console_log_path = base_log_dir / "console.log"
-            error_sections = error_extractor.extract_error_sections(
-                console_log, log_file_path=str(console_log_path)
-            )
-
-            if error_sections:
-                # Found error patterns, use extracted context
-                stage['log_content'] = error_sections[0]
-                logger.info(
-                    "Extracted error context for stage '%s': %d bytes",
-                    stage_name,
-                    len(error_sections[0])
-                )
-
-                # Save error extraction summary as JSON file
-                if error_extractor.last_error_summary:
-                    summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
-                    try:
-                        summary_path.parent.mkdir(parents=True, exist_ok=True)
-                        with open(summary_path, 'w', encoding='utf-8') as summary_file:
-                            json.dump(error_extractor.last_error_summary, summary_file, indent=2)
-                        logger.info("Saved error extraction summary -> %s", summary_path)
-                    except Exception as save_error:  # pylint: disable=broad-exception-caught
-                        logger.debug("Could not save error summary: %s", save_error)
-            else:
-                # No error patterns found, use full console log
-                stage['log_content'] = console_log
-                logger.info(
-                    "No error patterns found for stage '%s', using full console log: %d bytes",
-                    stage_name,
-                    len(console_log)
-                )
+        # Strategy 2: Fallback to console log parsing with error extraction
+        stage['log_content'] = _process_console_log_fallback(
+            console_log, error_extractor, base_log_dir, safe_stage_name, stage_name, failed_step_info
+        )
 
     return failed_stages
 

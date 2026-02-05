@@ -8,7 +8,9 @@ Invoked by: api_poster
 Invokes: None
 """
 
+import json
 import re
+from collections import defaultdict
 from typing import List, Tuple, Dict, Any
 import logging
 
@@ -351,8 +353,6 @@ class LogErrorExtractor:
         Returns:
             Dictionary with error analysis including counts and line numbers by pattern
         """
-        from collections import defaultdict
-
         error_types = defaultdict(int)
         error_lines = defaultdict(list)
         ignored_patterns = defaultdict(int)
@@ -487,8 +487,6 @@ class LogErrorExtractor:
         Returns:
             List of formatted lines with line numbers
         """
-        import json
-
         # Step 1: Analyze errors in detail
         error_analysis = self._analyze_errors(lines)
         error_count = sum(error_analysis['error_types'].values())
