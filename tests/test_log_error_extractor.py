@@ -625,6 +625,99 @@ Real exception: something failed
         self.assertEqual(len(error_indices), 1)
         self.assertEqual(error_indices[0], 1)
 
+    def test_multiple_error_sections_with_separator(self):
+        """Test that multiple error sections include separators between them."""
+        # Use lines_before=1, lines_after=1 to allow some context
+        # But make errors far enough apart that they don't merge
+        extractor = LogErrorExtractor(lines_before=1, lines_after=1)
+        # Create log with errors far apart (at least 5 lines) so they don't merge
+        lines = []
+        for i in range(1, 11):
+            lines.append(f"Line {i}")
+        lines[2] = "Exception: first error occurred"  # Line 3, matches 'exception'
+        lines[8] = "Build failed: second error"  # Line 9, matches 'build failed'
+
+        result_lines = extractor._extract_sections_with_context(lines, extractor._find_error_lines(lines))
+
+        # Check for separator between sections
+        result_str = '\n'.join(result_lines)
+        self.assertIn('--- Next Error Section ---', result_str)
+        self.assertIn('Exception: first error occurred', result_str)
+        self.assertIn('Build failed: second error', result_str)
+
+    def test_count_errors_method(self):
+        """Test _count_errors internal method."""
+        extractor = LogErrorExtractor()
+        lines = [
+            "Normal line",
+            "Exception occurred in module X",  # matches 'exception' pattern
+            "Another line",
+            "Build failed with code 1",  # matches 'build failed' pattern
+            "Success message"
+        ]
+
+        count = extractor._count_errors(lines)
+        self.assertEqual(count, 2)
+
+    def test_count_errors_with_no_errors(self):
+        """Test _count_errors with no errors."""
+        extractor = LogErrorExtractor()
+        lines = ["Normal line", "Another normal line"]
+
+        count = extractor._count_errors(lines)
+        self.assertEqual(count, 0)
+
+    def test_get_adaptive_context_fallback(self):
+        """Test _get_adaptive_context falls back to last threshold when exceeded."""
+        # Thresholds: 50 errors -> 50:10, 100 -> 10:5, 150 -> 5:2
+        extractor = LogErrorExtractor(
+            use_adaptive_context=True,
+            adaptive_thresholds=[(50, 50, 10), (100, 10, 5), (150, 5, 2)]
+        )
+
+        # Error count exceeds all thresholds (200 > 150)
+        lines_before, lines_after = extractor._get_adaptive_context(200)
+
+        # Should use last threshold's context (5, 2)
+        self.assertEqual(lines_before, 5)
+        self.assertEqual(lines_after, 2)
+
+    def test_get_bucket_context_fallback(self):
+        """Test _get_bucket_context falls back to last bucket when exceeded."""
+        extractor = LogErrorExtractor(
+            use_adaptive_context=True,
+            adaptive_thresholds=[(5, 50, 10), (10, 10, 5), (20, 5, 2)]
+        )
+
+        # Total buckets: 5 + 10 + 20 = 35 errors max
+        # Request context for error 40 (exceeds all buckets)
+        lines_before, lines_after = extractor._get_bucket_context(40)
+
+        # Should use last bucket's context (5, 2)
+        self.assertEqual(lines_before, 5)
+        self.assertEqual(lines_after, 2)
+
+    def test_format_line_sample_empty_list(self):
+        """Test _format_line_sample with empty list."""
+        extractor = LogErrorExtractor()
+
+        result = extractor._format_line_sample([])
+
+        self.assertEqual(result, "")
+
+    def test_format_line_sample_more_than_five(self):
+        """Test _format_line_sample with more than 5 line numbers."""
+        extractor = LogErrorExtractor()
+        line_numbers = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+        result = extractor._format_line_sample(line_numbers)
+
+        # Should show first 5 and last, with total count
+        self.assertIn("10,20,30,40,50", result)
+        self.assertIn("100", result)
+        self.assertIn("(10 total)", result)
+        self.assertIn("...", result)
+
 
 if __name__ == '__main__':
     unittest.main()
