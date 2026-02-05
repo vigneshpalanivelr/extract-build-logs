@@ -44,6 +44,8 @@ class TestLogFetcher(unittest.TestCase):
             error_context_lines_before=50,
             error_context_lines_after=10,
             error_ignore_patterns=[],
+            error_adaptive_context_enabled=True,
+            error_adaptive_thresholds=[(50, 50, 10), (100, 10, 5), (150, 5, 2)],
             max_log_lines=100000,
             tail_log_lines=5000,
             stream_chunk_size=8192
