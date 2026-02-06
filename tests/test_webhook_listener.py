@@ -1659,7 +1659,6 @@ Building...
     def test_extract_failed_stages_with_stage_log_error_extraction(self, mock_config):
         """Test that error extraction happens on stage-specific logs when available."""
         from src.webhook_listener import _extract_failed_stages_with_logs
-        from pathlib import Path
         import tempfile
 
         # Setup mock config

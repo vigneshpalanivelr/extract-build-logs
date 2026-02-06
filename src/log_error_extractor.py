@@ -27,15 +27,18 @@ class LogErrorExtractor:
 
     # Error patterns to search for (case-insensitive)
     ERROR_PATTERNS = [
-        'make: ***', 'sending interrupt signal to process', 'killed by signal', 'git clone failed',
+        'make: ***', 'sending interrupt signal to process', 'killed by signal', 'git clone failed', 'err!',
         'subprocess.calledprocesserror: command', 'unknown: bad credentials', 'npm err! ebusy: resource busy',
-        'build-packetlogic2/packages/buildenv/11_llvm:', 'docker.errors', 'aseline.tar.lzma: unexpected end of input',
-        'err!', 'exception', 'traceback', 'could not resolve', 'compilation error', 'build failed'
+        'build-packetlogic2/packages/buildenv/11_llvm:', 'docker.errors', 'exception', 'traceback',
+        'could not resolve', 'compilation error', 'build failed', 'aseline.tar.lzma: unexpected end of input',
+        'error: ',
     ]
 
     # Ignore patterns - lines matching these are NOT considered errors even if they match ERROR_PATTERNS
     # This filters out false positives (case-insensitive)
-    IGNORE_PATTERNS: List[str] = []
+    IGNORE_PATTERNS: List[str] = [
+        'error: tag ', '[ FAIL ]', '[new branch]', 'INFO: I/O exception', '-exception-'
+    ]
 
     def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000,
                  ignore_patterns: List[str] = None, use_adaptive_context: bool = True,

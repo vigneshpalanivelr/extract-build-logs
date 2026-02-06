@@ -28,6 +28,7 @@ import hmac
 import uuid
 import time
 import tempfile
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime
@@ -1128,11 +1129,11 @@ def _try_fetch_stage_log_via_api(fetcher: 'JenkinsLogFetcher', job_name: str, bu
                 stage_name, len(stage_log)
             )
             return stage_log
-        else:
-            logger.warning(
-                "Stage log fetch returned None for stage '%s' (ID: %s), falling back to console parsing",
-                stage_name, stage_id
-            )
+
+        logger.warning(
+            "Stage log fetch returned None for stage '%s' (ID: %s), falling back to console parsing",
+            stage_name, stage_id
+        )
     except Exception as error:  # pylint: disable=broad-exception-caught
         logger.warning(
             "Could not fetch stage log via API for stage '%s' (ID: %s): %s, falling back to console parsing",
@@ -1160,8 +1161,6 @@ def _extract_stage_section_from_console(console_log: str, stage_name: str) -> Op
     """
     if not console_log or not stage_name:
         return None
-
-    import re
 
     lines = console_log.split('\n')
     stage_start_idx = None
@@ -1505,7 +1504,6 @@ def _save_jenkins_build_to_files(
                 summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
                 try:
                     with open(summary_path, 'w', encoding='utf-8') as f:
-                        import json
                         json.dump(error_summary, f, indent=2)
                     logger.info(
                         "Jenkins error summary saved: %s #%s [%s] -> %s",

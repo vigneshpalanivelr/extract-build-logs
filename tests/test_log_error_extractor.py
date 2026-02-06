@@ -450,10 +450,14 @@ class TestIgnorePatterns(unittest.TestCase):
         self.assertEqual(extractor.ignore_patterns, ignore_patterns)
 
     def test_initialization_default_ignore_patterns(self):
-        """Test that default ignore_patterns is empty list."""
+        """Test that default ignore_patterns contains expected patterns."""
         extractor = LogErrorExtractor()
 
-        self.assertEqual(extractor.ignore_patterns, [])
+        # Should have default ignore patterns
+        expected_patterns = [
+            'error: tag ', '[ FAIL ]', '[new branch]', 'INFO: I/O exception', '-exception-'
+        ]
+        self.assertEqual(extractor.ignore_patterns, expected_patterns)
 
     def test_ignore_pattern_filters_false_positive(self):
         """Test that ignore pattern filters out false positive errors."""
