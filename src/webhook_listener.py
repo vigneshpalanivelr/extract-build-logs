@@ -1248,46 +1248,22 @@ def _process_console_log_fallback(console_log: str, error_extractor: LogErrorExt
     stage_section = _extract_stage_section_from_console(console_log, stage_name)
 
     if stage_section:
-        # Save stage section to file
-        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
-        try:
-            stage_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(stage_log_path, 'w', encoding='utf-8') as f:
-                f.write(stage_section)
-            logger.info(
-                "Saved stage section to file: %s (%d bytes)",
-                stage_log_path, len(stage_section)
-            )
-        except Exception as save_error:  # pylint: disable=broad-exception-caught
-            logger.warning("Failed to save stage section: %s", save_error)
-
         # Extract errors from stage-specific section (not full console log)
         logger.debug(
             "Extracting errors from stage-specific section for '%s'",
             stage_name
         )
+        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
         error_sections = error_extractor.extract_error_sections(
             stage_section, log_file_path=str(stage_log_path)
         )
 
         if error_sections:
-            # Save extracted errors to separate file
-            errors_log_path = base_log_dir / f"stage_{safe_stage_name}_errors.log"
-            try:
-                with open(errors_log_path, 'w', encoding='utf-8') as f:
-                    f.write(error_sections[0])
-                logger.info(
-                    "Saved extracted errors to file: %s (%d bytes)",
-                    errors_log_path, len(error_sections[0])
-                )
-            except Exception as save_error:  # pylint: disable=broad-exception-caught
-                logger.warning("Failed to save extracted errors: %s", save_error)
-
             logger.info(
                 "Extracted error context from stage section '%s': %d bytes",
                 stage_name, len(error_sections[0])
             )
-            _save_error_summary_to_file(error_extractor, base_log_dir, safe_stage_name)
+            # Note: Files will be saved later in _save_jenkins_build_to_files
             return error_sections[0]
 
         logger.info(
@@ -1311,7 +1287,7 @@ def _process_console_log_fallback(console_log: str, error_extractor: LogErrorExt
             "Extracted error context for stage '%s': %d bytes",
             stage_name, len(error_sections[0])
         )
-        _save_error_summary_to_file(error_extractor, base_log_dir, safe_stage_name)
+        # Note: Files will be saved later in _save_jenkins_build_to_files
         return error_sections[0]
 
     logger.info(
@@ -1403,55 +1379,45 @@ def _extract_failed_stages_with_logs(
         # Strategy 1: Try to fetch stage-specific logs via Blue Ocean API (bottom-up)
         stage_log = _try_fetch_stage_log_via_api(fetcher, job_name, build_number, stage_id, stage_name)
         if stage_log:
-            # Save stage log to file
-            stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
-            try:
-                stage_log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(stage_log_path, 'w', encoding='utf-8') as f:
-                    f.write(stage_log)
-                logger.info(
-                    "Saved stage log from API to file: %s (%d bytes)",
-                    stage_log_path, len(stage_log)
-                )
-            except Exception as save_error:  # pylint: disable=broad-exception-caught
-                logger.warning("Failed to save stage log: %s", save_error)
+            # Store full stage log for later file saving
+            stage['stage_full_log'] = stage_log
 
             # Extract error context from stage-specific log
+            stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
             error_sections = error_extractor.extract_error_sections(
                 stage_log, log_file_path=str(stage_log_path)
             )
 
             if error_sections:
-                # Save extracted errors to separate file
-                errors_log_path = base_log_dir / f"stage_{safe_stage_name}_errors.log"
-                try:
-                    with open(errors_log_path, 'w', encoding='utf-8') as f:
-                        f.write(error_sections[0])
-                    logger.info(
-                        "Saved extracted errors to file: %s (%d bytes)",
-                        errors_log_path, len(error_sections[0])
-                    )
-                except Exception as save_error:  # pylint: disable=broad-exception-caught
-                    logger.warning("Failed to save extracted errors: %s", save_error)
-
                 logger.info(
                     "Extracted error context from stage-specific log '%s': %d bytes",
                     stage_name, len(error_sections[0])
                 )
-                _save_error_summary_to_file(error_extractor, base_log_dir, safe_stage_name)
                 stage['log_content'] = error_sections[0]
+                # Store error summary for later file saving
+                stage['error_summary'] = error_extractor.last_error_summary
             else:
                 logger.info(
                     "No error patterns found in stage-specific log '%s', using full stage log: %d bytes",
                     stage_name, len(stage_log)
                 )
                 stage['log_content'] = stage_log
+            # Note: Files will be saved later in _save_jenkins_build_to_files
             continue  # Successfully fetched and processed stage log
 
         # Strategy 2: Fallback to console log parsing with error extraction
+        # First, extract the stage section from console log
+        stage_section = _extract_stage_section_from_console(console_log, stage_name)
+        if stage_section:
+            stage['stage_full_log'] = stage_section  # Store full stage section
+
         stage['log_content'] = _process_console_log_fallback(
             console_log, error_extractor, base_log_dir, safe_stage_name, stage_name, failed_step_info
         )
+        # Store error summary if available
+        if error_extractor.last_error_summary:
+            stage['error_summary'] = error_extractor.last_error_summary
+        # Note: Files will be saved later in _save_jenkins_build_to_files
 
     return failed_stages
 
@@ -1495,31 +1461,58 @@ def _save_jenkins_build_to_files(
             }
         )
 
-        # Save stage logs for failed stages and capture paths
+        # Save stage logs for failed stages in proper order
         stage_log_paths = []
+        base_log_dir = Path(config.log_output_dir if config else "./logs") / "jenkins-builds" / job_name / str(build_number)
+
         for stage in failed_stages:
             stage_name = stage.get('stage_name')
-            log_content = stage.get('log_content', '')
-            if log_content:
+            safe_stage_name = stage_name.lower().replace(' ', '_').replace('/', '_')
+
+            # 1. Save full stage section (if available from console extraction or API)
+            stage_full_log = stage.get('stage_full_log', '')
+            if stage_full_log:
                 stage_log_path = storage_manager.save_jenkins_stage_log(
                     job_name=job_name,
                     build_number=build_number,
                     stage_name=stage_name,
-                    log_content=log_content
+                    log_content=stage_full_log
                 )
                 stage_log_paths.append(str(stage_log_path))
-
                 logger.info(
-                    "Jenkins stage log saved: %s #%s [%s] -> %s (%d bytes)",
-                    job_name, build_number, stage_name, stage_log_path, len(log_content),
-                    extra={
-                        'job_name': job_name,
-                        'build_number': build_number,
-                        'stage_name': stage_name,
-                        'stage_log_path': str(stage_log_path),
-                        'stage_log_size': len(log_content)
-                    }
+                    "Jenkins stage section saved: %s #%s [%s] -> %s (%d bytes)",
+                    job_name, build_number, stage_name, stage_log_path, len(stage_full_log)
                 )
+
+            # 2. Save extracted errors (errors + context lines only)
+            log_content = stage.get('log_content', '')
+            if log_content:
+                errors_log_path = base_log_dir / f"stage_{safe_stage_name}_errors.log"
+                try:
+                    errors_log_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(errors_log_path, 'w', encoding='utf-8') as f:
+                        f.write(log_content)
+                    logger.info(
+                        "Jenkins stage errors saved: %s #%s [%s] -> %s (%d bytes)",
+                        job_name, build_number, stage_name, errors_log_path, len(log_content)
+                    )
+                except Exception as save_error:  # pylint: disable=broad-exception-caught
+                    logger.warning("Failed to save stage errors: %s", save_error)
+
+            # 3. Save error extraction summary
+            error_summary = stage.get('error_summary')
+            if error_summary:
+                summary_path = base_log_dir / f"stage_{safe_stage_name}_error_summary.json"
+                try:
+                    with open(summary_path, 'w', encoding='utf-8') as f:
+                        import json
+                        json.dump(error_summary, f, indent=2)
+                    logger.info(
+                        "Jenkins error summary saved: %s #%s [%s] -> %s",
+                        job_name, build_number, stage_name, summary_path
+                    )
+                except Exception as save_error:  # pylint: disable=broad-exception-caught
+                    logger.warning("Failed to save error summary: %s", save_error)
 
         # Save metadata
         metadata_path = storage_manager.save_jenkins_metadata(
