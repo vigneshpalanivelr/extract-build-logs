@@ -334,8 +334,11 @@ class ConfigLoader:
     @staticmethod
     def _load_log_limits() -> Dict[str, Any]:
         """Load error context and log handling limits."""
-        error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
-        error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
+        # Error context defaults (used as fallback when adaptive is disabled)
+        # With adaptive enabled (default), these are overridden by adaptive_thresholds
+        error_context_lines_before = 50  # Hardcoded default
+        error_context_lines_after = 10   # Hardcoded default
+
         max_log_lines = int(os.getenv('MAX_LOG_LINES', '100000'))
         tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))
         stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))
