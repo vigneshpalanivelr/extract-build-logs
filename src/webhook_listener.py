@@ -1252,8 +1252,26 @@ def _extract_failed_stages_with_logs(
         # Strategy 1: Try to fetch stage-specific logs via Blue Ocean API (bottom-up)
         stage_log = _try_fetch_stage_log_via_api(fetcher, job_name, build_number, stage_id, stage_name)
         if stage_log:
-            stage['log_content'] = stage_log
-            continue  # Successfully fetched stage log, skip console parsing
+            # Extract error context from stage-specific log
+            stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
+            error_sections = error_extractor.extract_error_sections(
+                stage_log, log_file_path=str(stage_log_path)
+            )
+
+            if error_sections:
+                logger.info(
+                    "Extracted error context from stage-specific log '%s': %d bytes",
+                    stage_name, len(error_sections[0])
+                )
+                _save_error_summary_to_file(error_extractor, base_log_dir, safe_stage_name)
+                stage['log_content'] = error_sections[0]
+            else:
+                logger.info(
+                    "No error patterns found in stage-specific log '%s', using full stage log: %d bytes",
+                    stage_name, len(stage_log)
+                )
+                stage['log_content'] = stage_log
+            continue  # Successfully fetched and processed stage log
 
         # Strategy 2: Fallback to console log parsing with error extraction
         stage['log_content'] = _process_console_log_fallback(
