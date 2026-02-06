@@ -177,7 +177,8 @@ Line 5"""
         patterns_to_test = [
             'make: ***', 'Sending interrupt signal to process', 'Killed by signal', 'Git clone failed',
             'subprocess.CalledProcessError: Command', 'unknown: Bad credentials', 'npm ERR! EBUSY: resource busy',
-            'build-packetlogic2/packages/buildenv/11_llvm:', 'docker.errors', 'aseline.tar.lzma: Unexpected end of input',
+            'build-packetlogic2/packages/buildenv/11_llvm:', 'docker.errors',
+            'aseline.tar.lzma: Unexpected end of input',
             'err!', 'exception', 'traceback', 'could not resolve', 'compilation error', 'build failed'
         ]
 
