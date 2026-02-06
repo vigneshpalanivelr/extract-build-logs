@@ -1143,61 +1143,66 @@ def _try_fetch_stage_log_via_api(fetcher: 'JenkinsLogFetcher', job_name: str, bu
 
 def _extract_stage_section_from_console(console_log: str, stage_name: str) -> Optional[str]:
     """
-    Extract a specific stage section from console log (bottom-up approach).
+    Extract a specific stage section from console log.
 
-    Finds the stage boundaries and extracts logs from stage start to the next stage
-    (or end of log). This isolates the failed stage's logs for targeted error extraction.
+    Jenkins pipeline structure:
+    [Pipeline] stage          <- Stage start marker
+    [Pipeline] { (Build)      <- Stage name
+    ...stage content...
+    [Pipeline] // stage       <- Stage end marker
 
     Args:
         console_log: Full console log content
-        stage_name: Name of the stage to extract
+        stage_name: Name of the stage to extract (e.g., "Build", "Test")
 
     Returns:
-        Stage-specific log content, or None if stage not found
+        Stage-specific log content from [Pipeline] stage to [Pipeline] // stage, or None if not found
     """
     if not console_log or not stage_name:
         return None
 
     import re
 
-    # Common Jenkins stage markers (case-insensitive)
-    # Pattern: [Pipeline] { (StageName) or [Pipeline] Stage "StageName"
-    stage_patterns = [
-        rf'\[Pipeline\]\s*\{{\s*\({re.escape(stage_name)}\)',  # { (Build)
-        rf'\[Pipeline\]\s*Stage\s*["\']?{re.escape(stage_name)}["\']?',  # Stage "Build"
-        rf'{{\s*\({re.escape(stage_name)}',  # { (Build - alternative format
-    ]
-
     lines = console_log.split('\n')
     stage_start_idx = None
     stage_end_idx = None
 
-    # Find stage start
-    for idx, line in enumerate(lines):
-        for pattern in stage_patterns:
-            if re.search(pattern, line, re.IGNORECASE):
+    # Find stage by looking for:
+    # Line N:   [Pipeline] stage
+    # Line N+1: [Pipeline] { (StageName)
+    for idx in range(len(lines) - 1):
+        current_line = lines[idx]
+        next_line = lines[idx + 1]
+
+        # Check if current line is "[Pipeline] stage"
+        if re.search(r'^\[Pipeline\]\s+stage\s*$', current_line, re.IGNORECASE):
+            # Check if next line contains the stage name in parentheses
+            # Pattern: [Pipeline] { (Build) or [Pipeline] { (Build with spaces)
+            stage_name_pattern = rf'^\[Pipeline\]\s+\{{\s*\({re.escape(stage_name)}\s*\)'
+            if re.search(stage_name_pattern, next_line, re.IGNORECASE):
                 stage_start_idx = idx
-                logger.debug("Found stage '%s' at line %d", stage_name, idx + 1)
+                logger.debug(
+                    "Found stage '%s' start at line %d: %s",
+                    stage_name, idx + 1, current_line.strip()
+                )
                 break
-        if stage_start_idx is not None:
-            break
 
     if stage_start_idx is None:
         logger.warning("Could not find stage '%s' in console log", stage_name)
         return None
 
-    # Find next stage start or end marker (bottom-up boundary)
+    # Find stage end marker: [Pipeline] // stage
     for idx in range(stage_start_idx + 1, len(lines)):
         line = lines[idx]
-        # Look for next stage markers or end markers
-        if (re.search(r'\[Pipeline\]\s*\{', line) and '(' in line) or \
-           re.search(r'\[Pipeline\]\s*Stage', line) or \
-           re.search(r'\[Pipeline\]\s*End of Pipeline', line, re.IGNORECASE):
-            stage_end_idx = idx
-            logger.debug("Found end of stage '%s' at line %d", stage_name, idx + 1)
+        if re.search(r'^\[Pipeline\]\s+//\s+stage\s*$', line, re.IGNORECASE):
+            stage_end_idx = idx + 1  # Include the end marker line
+            logger.debug(
+                "Found stage '%s' end at line %d: %s",
+                stage_name, idx + 1, line.strip()
+            )
             break
 
-    # If no next stage found, use end of log
+    # If no end marker found, use end of log
     if stage_end_idx is None:
         stage_end_idx = len(lines)
         logger.debug("Using end of log as boundary for stage '%s'", stage_name)
@@ -1243,17 +1248,41 @@ def _process_console_log_fallback(console_log: str, error_extractor: LogErrorExt
     stage_section = _extract_stage_section_from_console(console_log, stage_name)
 
     if stage_section:
+        # Save stage section to file
+        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
+        try:
+            stage_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(stage_log_path, 'w', encoding='utf-8') as f:
+                f.write(stage_section)
+            logger.info(
+                "Saved stage section to file: %s (%d bytes)",
+                stage_log_path, len(stage_section)
+            )
+        except Exception as save_error:  # pylint: disable=broad-exception-caught
+            logger.warning("Failed to save stage section: %s", save_error)
+
         # Extract errors from stage-specific section (not full console log)
         logger.debug(
             "Extracting errors from stage-specific section for '%s'",
             stage_name
         )
-        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
         error_sections = error_extractor.extract_error_sections(
             stage_section, log_file_path=str(stage_log_path)
         )
 
         if error_sections:
+            # Save extracted errors to separate file
+            errors_log_path = base_log_dir / f"stage_{safe_stage_name}_errors.log"
+            try:
+                with open(errors_log_path, 'w', encoding='utf-8') as f:
+                    f.write(error_sections[0])
+                logger.info(
+                    "Saved extracted errors to file: %s (%d bytes)",
+                    errors_log_path, len(error_sections[0])
+                )
+            except Exception as save_error:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to save extracted errors: %s", save_error)
+
             logger.info(
                 "Extracted error context from stage section '%s': %d bytes",
                 stage_name, len(error_sections[0])
@@ -1374,13 +1403,37 @@ def _extract_failed_stages_with_logs(
         # Strategy 1: Try to fetch stage-specific logs via Blue Ocean API (bottom-up)
         stage_log = _try_fetch_stage_log_via_api(fetcher, job_name, build_number, stage_id, stage_name)
         if stage_log:
-            # Extract error context from stage-specific log
+            # Save stage log to file
             stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
+            try:
+                stage_log_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(stage_log_path, 'w', encoding='utf-8') as f:
+                    f.write(stage_log)
+                logger.info(
+                    "Saved stage log from API to file: %s (%d bytes)",
+                    stage_log_path, len(stage_log)
+                )
+            except Exception as save_error:  # pylint: disable=broad-exception-caught
+                logger.warning("Failed to save stage log: %s", save_error)
+
+            # Extract error context from stage-specific log
             error_sections = error_extractor.extract_error_sections(
                 stage_log, log_file_path=str(stage_log_path)
             )
 
             if error_sections:
+                # Save extracted errors to separate file
+                errors_log_path = base_log_dir / f"stage_{safe_stage_name}_errors.log"
+                try:
+                    with open(errors_log_path, 'w', encoding='utf-8') as f:
+                        f.write(error_sections[0])
+                    logger.info(
+                        "Saved extracted errors to file: %s (%d bytes)",
+                        errors_log_path, len(error_sections[0])
+                    )
+                except Exception as save_error:  # pylint: disable=broad-exception-caught
+                    logger.warning("Failed to save extracted errors: %s", save_error)
+
                 logger.info(
                     "Extracted error context from stage-specific log '%s': %d bytes",
                     stage_name, len(error_sections[0])

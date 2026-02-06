@@ -1604,27 +1604,36 @@ Build completed"""
         console_log = """[Pipeline] Start of Pipeline
 [Pipeline] node
 Running on agent-1
-[Pipeline] {
+[Pipeline] stage
 [Pipeline] { (Build)
+[Pipeline] parallel
 Building application...
 Compiling sources...
 Exception: Build failed at line 42
 Error: Missing dependency
 Build completed
+[Pipeline] // parallel
 [Pipeline] }
+[Pipeline] // stage
+[Pipeline] echo
+[Pipeline] stage
 [Pipeline] { (Test)
 Running tests...
 All tests passed
 [Pipeline] }
+[Pipeline] // stage
 [Pipeline] End of Pipeline"""
 
         # Extract Build stage section
         result = _extract_stage_section_from_console(console_log, 'Build')
 
         self.assertIsNotNone(result)
+        self.assertIn('[Pipeline] stage', result)
+        self.assertIn('[Pipeline] { (Build)', result)
         self.assertIn('Building application', result)
         self.assertIn('Exception: Build failed', result)
         self.assertIn('Build completed', result)
+        self.assertIn('[Pipeline] // stage', result)
         # Should NOT include Test stage content
         self.assertNotIn('Running tests', result)
         self.assertNotIn('All tests passed', result)
@@ -1634,9 +1643,11 @@ All tests passed
         from src.webhook_listener import _extract_stage_section_from_console
 
         console_log = """[Pipeline] Start of Pipeline
+[Pipeline] stage
 [Pipeline] { (Build)
 Building...
 [Pipeline] }
+[Pipeline] // stage
 [Pipeline] End of Pipeline"""
 
         # Try to extract non-existent stage
