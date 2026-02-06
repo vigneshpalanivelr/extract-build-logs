@@ -1357,10 +1357,10 @@ def _extract_failed_stages_with_logs(
         return []
 
     # Extract error context from console log for each failed stage
+    # Note: ignore_patterns uses default from LogErrorExtractor class (not from config)
     error_extractor = LogErrorExtractor(
         lines_before=config.error_context_lines_before,
         lines_after=config.error_context_lines_after,
-        ignore_patterns=config.error_ignore_patterns,
         use_adaptive_context=config.error_adaptive_context_enabled,
         adaptive_thresholds=config.error_adaptive_thresholds
     )

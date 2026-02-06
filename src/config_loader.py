@@ -59,7 +59,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
         bfa_secret_key                   -> (Optional[str]) -> BFA JWT secret key
         error_context_lines_before       -> (int)           -> Error context lines before
         error_context_lines_after        -> (int)           -> Error context lines after
-        error_ignore_patterns            -> (List[str])     -> Patterns to ignore as errors
         error_adaptive_context_enabled   -> (bool)          -> Enable adaptive context
         error_adaptive_thresholds        -> (List[Tuple])   -> Adaptive thresholds (threshold, before, after)
         max_log_lines                    -> (int)           -> Max lines to process per log
@@ -94,7 +93,6 @@ class Config:  # pylint: disable=too-many-instance-attributes
     bfa_secret_key: Optional[str]
     error_context_lines_before: int
     error_context_lines_after: int
-    error_ignore_patterns: List[str]
     error_adaptive_context_enabled: bool
     error_adaptive_thresholds: List[Tuple[int, int, int]]
     max_log_lines: int
@@ -342,12 +340,6 @@ class ConfigLoader:
         tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))
         stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))
 
-        # Load ignore patterns (comma-separated, case-insensitive matching)
-        error_ignore_patterns_str = os.getenv('ERROR_IGNORE_PATTERNS', '')
-        error_ignore_patterns = [
-            s.strip().lower() for s in error_ignore_patterns_str.split(',') if s.strip()
-        ]
-
         # Load adaptive context setting (default: true)
         error_adaptive_context_enabled = os.getenv(
             'ERROR_ADAPTIVE_CONTEXT_ENABLED', 'true'
@@ -361,7 +353,6 @@ class ConfigLoader:
         return {
             'error_context_lines_before': error_context_lines_before,
             'error_context_lines_after': error_context_lines_after,
-            'error_ignore_patterns': error_ignore_patterns,
             'error_adaptive_context_enabled': error_adaptive_context_enabled,
             'error_adaptive_thresholds': error_adaptive_thresholds,
             'max_log_lines': max_log_lines,
@@ -506,7 +497,6 @@ class ConfigLoader:
             bfa_secret_key=bfa['bfa_secret_key'],
             error_context_lines_before=log_limits['error_context_lines_before'],
             error_context_lines_after=log_limits['error_context_lines_after'],
-            error_ignore_patterns=log_limits['error_ignore_patterns'],
             error_adaptive_context_enabled=log_limits['error_adaptive_context_enabled'],
             error_adaptive_thresholds=log_limits['error_adaptive_thresholds'],
             max_log_lines=log_limits['max_log_lines'],
