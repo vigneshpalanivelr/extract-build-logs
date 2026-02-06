@@ -1110,6 +1110,10 @@ def _try_fetch_stage_log_via_api(fetcher: 'JenkinsLogFetcher', job_name: str, bu
                                  stage_id: str, stage_name: str) -> Optional[str]:
     """Try to fetch stage-specific logs via Blue Ocean API (bottom-up)."""
     if not stage_id:
+        logger.warning(
+            "Cannot fetch stage log for '%s': stage_id is empty, falling back to console parsing",
+            stage_name
+        )
         return None
 
     try:
@@ -1124,10 +1128,15 @@ def _try_fetch_stage_log_via_api(fetcher: 'JenkinsLogFetcher', job_name: str, bu
                 stage_name, len(stage_log)
             )
             return stage_log
+        else:
+            logger.warning(
+                "Stage log fetch returned None for stage '%s' (ID: %s), falling back to console parsing",
+                stage_name, stage_id
+            )
     except Exception as error:  # pylint: disable=broad-exception-caught
-        logger.debug(
-            "Could not fetch stage log via API for stage '%s': %s, falling back to console parsing",
-            stage_name, error
+        logger.warning(
+            "Could not fetch stage log via API for stage '%s' (ID: %s): %s, falling back to console parsing",
+            stage_name, stage_id, error
         )
     return None
 
@@ -1212,12 +1221,23 @@ def _extract_failed_stages_with_logs(
     failed_stages = []
     for stage in blue_ocean_stages:
         if stage.get('status') in ['FAILED', 'FAILURE']:
+            stage_name = stage.get('name', 'Unknown')
+            stage_id = stage.get('id', '')
             stage_dict = {
-                'stage_name': stage.get('name', 'Unknown'),
-                'stage_id': stage.get('id', ''),
+                'stage_name': stage_name,
+                'stage_id': stage_id,
                 'status': stage.get('status', 'UNKNOWN'),
                 'duration_ms': stage.get('durationMillis', 0)
             }
+
+            # Log stage info for debugging
+            if stage_id:
+                logger.debug("Failed stage '%s' has stage_id: %s", stage_name, stage_id)
+            else:
+                logger.warning(
+                    "Failed stage '%s' has no stage_id (Blue Ocean may not be available)",
+                    stage_name
+                )
 
             # If filtering is enabled, analyze steps within the stage
             if config.jenkins_filter_handled_failures:
