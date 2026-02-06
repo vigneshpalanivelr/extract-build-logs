@@ -874,14 +874,21 @@ Build finished"""
 
         process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
 
-        # Should still post to API with full console log as fallback
+        # Should still post to API with stage-specific section as fallback
         mock_api_poster.post_jenkins_logs.assert_called_once()
         payload = mock_api_poster.post_jenkins_logs.call_args[0][0]
 
-        # Verify stage has log_content (full console log when no errors found)
+        # Verify stage has log_content (stage section when no errors found)
         self.assertEqual(len(payload['stages']), 1)
         self.assertIn('log_content', payload['stages'][0])
-        self.assertEqual(payload['stages'][0]['log_content'], console_log)
+        log_content = payload['stages'][0]['log_content']
+
+        # Should contain Test stage content
+        self.assertIn('Running tests', log_content)
+        self.assertIn('All tests passed', log_content)
+        # Should NOT contain other stages
+        self.assertNotIn('Build completed successfully', log_content)
+        self.assertNotIn('Started by user', log_content)
 
     @patch('src.webhook_listener.time')
     @patch('src.webhook_listener.clear_request_id')
@@ -1589,6 +1596,53 @@ Build completed"""
             self.assertIsNotNone(result)
             self.assertIn('Exception', result)
             self.assertIn('Compilation failed', result)
+
+    def test_extract_stage_section_from_console(self):
+        """Test extracting specific stage section from console log."""
+        from src.webhook_listener import _extract_stage_section_from_console
+
+        console_log = """[Pipeline] Start of Pipeline
+[Pipeline] node
+Running on agent-1
+[Pipeline] {
+[Pipeline] { (Build)
+Building application...
+Compiling sources...
+Exception: Build failed at line 42
+Error: Missing dependency
+Build completed
+[Pipeline] }
+[Pipeline] { (Test)
+Running tests...
+All tests passed
+[Pipeline] }
+[Pipeline] End of Pipeline"""
+
+        # Extract Build stage section
+        result = _extract_stage_section_from_console(console_log, 'Build')
+
+        self.assertIsNotNone(result)
+        self.assertIn('Building application', result)
+        self.assertIn('Exception: Build failed', result)
+        self.assertIn('Build completed', result)
+        # Should NOT include Test stage content
+        self.assertNotIn('Running tests', result)
+        self.assertNotIn('All tests passed', result)
+
+    def test_extract_stage_section_from_console_not_found(self):
+        """Test extracting stage section when stage not found."""
+        from src.webhook_listener import _extract_stage_section_from_console
+
+        console_log = """[Pipeline] Start of Pipeline
+[Pipeline] { (Build)
+Building...
+[Pipeline] }
+[Pipeline] End of Pipeline"""
+
+        # Try to extract non-existent stage
+        result = _extract_stage_section_from_console(console_log, 'Deploy')
+
+        self.assertIsNone(result)
 
     @patch('src.webhook_listener.config')
     def test_extract_failed_stages_with_stage_log_error_extraction(self, mock_config):
