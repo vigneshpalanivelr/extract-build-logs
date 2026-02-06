@@ -1462,7 +1462,8 @@ def _save_jenkins_build_to_files(
 
         # Save stage logs for failed stages in proper order
         stage_log_paths = []
-        base_log_dir = Path(config.log_output_dir if config else "./logs") / "jenkins-builds" / job_name / str(build_number)
+        log_dir = config.log_output_dir if config else "./logs"
+        base_log_dir = Path(log_dir) / "jenkins-builds" / job_name / str(build_number)
 
         for stage in failed_stages:
             stage_name = stage.get('stage_name')
