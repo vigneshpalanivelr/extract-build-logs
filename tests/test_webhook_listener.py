@@ -1590,6 +1590,72 @@ Build completed"""
             self.assertIn('Exception', result)
             self.assertIn('Compilation failed', result)
 
+    @patch('src.webhook_listener.config')
+    def test_extract_failed_stages_with_stage_log_error_extraction(self, mock_config):
+        """Test that error extraction happens on stage-specific logs when available."""
+        from src.webhook_listener import _extract_failed_stages_with_logs
+        from pathlib import Path
+        import tempfile
+
+        # Setup mock config
+        mock_config.error_context_lines_before = 50
+        mock_config.error_context_lines_after = 10
+        mock_config.error_ignore_patterns = []
+        mock_config.error_adaptive_context_enabled = False
+        mock_config.error_adaptive_thresholds = []
+        mock_config.jenkins_filter_handled_failures = False
+        mock_config.tail_log_lines = 5000
+        mock_config.log_output_dir = tempfile.gettempdir()
+
+        # Create mock Blue Ocean stages with one failed stage
+        blue_ocean_stages = [
+            {
+                'name': 'Build',
+                'id': 'stage-1',
+                'status': 'FAILED',
+                'durationMillis': 5000
+            }
+        ]
+
+        # Stage-specific log with error patterns
+        stage_log_with_errors = """Building application...
+Compiling sources...
+Exception: Build failed at line 42
+Error: Missing dependency 'foo'
+Build completed with errors"""
+
+        # Mock fetcher that returns stage-specific log
+        mock_fetcher = Mock()
+        mock_fetcher.fetch_stage_log_tail.return_value = stage_log_with_errors
+
+        console_log = "Full console log content..."
+
+        # Call the function
+        result = _extract_failed_stages_with_logs(
+            blue_ocean_stages=blue_ocean_stages,
+            console_log=console_log,
+            fetcher=mock_fetcher,
+            job_name="test-job",
+            build_number=123
+        )
+
+        # Verify stage log was fetched
+        mock_fetcher.fetch_stage_log_tail.assert_called_once_with(
+            "test-job", 123, "stage-1", 5000
+        )
+
+        # Verify result
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['stage_name'], 'Build')
+
+        # Verify error extraction happened (log_content should contain errors from stage log)
+        log_content = result[0]['log_content']
+        self.assertIsNotNone(log_content)
+        self.assertIn('Exception', log_content)
+        # The error extraction should have focused on error context from the stage log
+        # (not from console log, which is different content)
+        self.assertNotIn('Full console log content', log_content)
+
 
 if __name__ == "__main__":
     unittest.main()
