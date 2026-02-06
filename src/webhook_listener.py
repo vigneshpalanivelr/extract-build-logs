@@ -1141,6 +1141,77 @@ def _try_fetch_stage_log_via_api(fetcher: 'JenkinsLogFetcher', job_name: str, bu
     return None
 
 
+def _extract_stage_section_from_console(console_log: str, stage_name: str) -> Optional[str]:
+    """
+    Extract a specific stage section from console log (bottom-up approach).
+
+    Finds the stage boundaries and extracts logs from stage start to the next stage
+    (or end of log). This isolates the failed stage's logs for targeted error extraction.
+
+    Args:
+        console_log: Full console log content
+        stage_name: Name of the stage to extract
+
+    Returns:
+        Stage-specific log content, or None if stage not found
+    """
+    if not console_log or not stage_name:
+        return None
+
+    import re
+
+    # Common Jenkins stage markers (case-insensitive)
+    # Pattern: [Pipeline] { (StageName) or [Pipeline] Stage "StageName"
+    stage_patterns = [
+        rf'\[Pipeline\]\s*\{{\s*\({re.escape(stage_name)}\)',  # { (Build)
+        rf'\[Pipeline\]\s*Stage\s*["\']?{re.escape(stage_name)}["\']?',  # Stage "Build"
+        rf'{{\s*\({re.escape(stage_name)}',  # { (Build - alternative format
+    ]
+
+    lines = console_log.split('\n')
+    stage_start_idx = None
+    stage_end_idx = None
+
+    # Find stage start
+    for idx, line in enumerate(lines):
+        for pattern in stage_patterns:
+            if re.search(pattern, line, re.IGNORECASE):
+                stage_start_idx = idx
+                logger.debug("Found stage '%s' at line %d", stage_name, idx + 1)
+                break
+        if stage_start_idx is not None:
+            break
+
+    if stage_start_idx is None:
+        logger.warning("Could not find stage '%s' in console log", stage_name)
+        return None
+
+    # Find next stage start or end marker (bottom-up boundary)
+    for idx in range(stage_start_idx + 1, len(lines)):
+        line = lines[idx]
+        # Look for next stage markers or end markers
+        if (re.search(r'\[Pipeline\]\s*\{', line) and '(' in line) or \
+           re.search(r'\[Pipeline\]\s*Stage', line) or \
+           re.search(r'\[Pipeline\]\s*End of Pipeline', line, re.IGNORECASE):
+            stage_end_idx = idx
+            logger.debug("Found end of stage '%s' at line %d", stage_name, idx + 1)
+            break
+
+    # If no next stage found, use end of log
+    if stage_end_idx is None:
+        stage_end_idx = len(lines)
+        logger.debug("Using end of log as boundary for stage '%s'", stage_name)
+
+    # Extract stage section
+    stage_section = '\n'.join(lines[stage_start_idx:stage_end_idx])
+    logger.info(
+        "Extracted stage section for '%s': %d lines (%d bytes)",
+        stage_name, stage_end_idx - stage_start_idx, len(stage_section)
+    )
+
+    return stage_section
+
+
 def _process_console_log_fallback(console_log: str, error_extractor: LogErrorExtractor,
                                   base_log_dir: Path, safe_stage_name: str, stage_name: str,
                                   failed_step_info: Optional[Dict[str, Any]]) -> str:
@@ -1168,8 +1239,39 @@ def _process_console_log_fallback(console_log: str, error_extractor: LogErrorExt
             step_name
         )
 
-    # Extract errors from full console log
-    logger.debug("No step-level info for stage '%s', extracting errors from full log", stage_name)
+    # Try to extract stage-specific section from console log
+    stage_section = _extract_stage_section_from_console(console_log, stage_name)
+
+    if stage_section:
+        # Extract errors from stage-specific section (not full console log)
+        logger.debug(
+            "Extracting errors from stage-specific section for '%s'",
+            stage_name
+        )
+        stage_log_path = base_log_dir / f"stage_{safe_stage_name}.log"
+        error_sections = error_extractor.extract_error_sections(
+            stage_section, log_file_path=str(stage_log_path)
+        )
+
+        if error_sections:
+            logger.info(
+                "Extracted error context from stage section '%s': %d bytes",
+                stage_name, len(error_sections[0])
+            )
+            _save_error_summary_to_file(error_extractor, base_log_dir, safe_stage_name)
+            return error_sections[0]
+
+        logger.info(
+            "No error patterns found in stage section '%s', using full stage section: %d bytes",
+            stage_name, len(stage_section)
+        )
+        return stage_section
+
+    # Fallback: Extract errors from full console log (old behavior)
+    logger.warning(
+        "Could not extract stage section for '%s', falling back to full console log",
+        stage_name
+    )
     console_log_path = base_log_dir / "console.log"
     error_sections = error_extractor.extract_error_sections(
         console_log, log_file_path=str(console_log_path)
