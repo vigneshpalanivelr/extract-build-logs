@@ -154,11 +154,11 @@ class ApiPoster:
                 log_content = job_data.get('log', '')
 
                 # Extract error sections with context using configurable parameters
+                # Note: ignore_patterns uses default from LogErrorExtractor class
                 error_lines = extract_error_sections(
                     log_content=log_content,
                     lines_before=self.config.error_context_lines_before,
                     lines_after=self.config.error_context_lines_after,
-                    ignore_patterns=self.config.error_ignore_patterns,
                     use_adaptive_context=self.config.error_adaptive_context_enabled,
                     adaptive_thresholds=self.config.error_adaptive_thresholds
                 )
