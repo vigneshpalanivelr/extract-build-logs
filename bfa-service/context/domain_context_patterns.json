@@ -1,0 +1,36 @@
+{
+  "IT": [
+    {
+      "failure": "ERROR: Failed to execute on remote machine vmbuild",
+      "solution": "vmbuild server might not be reachable, please reach out to IT"
+    },
+    {
+      "failure": "Write failed: Broken pipe",
+      "solution": "Server node crashed or NFS encountered some problem, please reach out to IT with logs."
+    },
+    {
+      "failure": "Connection closed by",
+      "solution": "Server went offline for some reason, please reach out to IT with logs."
+    },
+    {
+      "failure": "ERROR: Failed to execute on remote machine ovabuild",
+      "solution": "ovabuild server might not be reachable, please reach out to IT"
+    },
+    {
+      "failure": "cp: cannot stat",
+      "solution": "NFS encountered some problem, please reach out to IT"
+    },
+    {
+      "failure": "Connection timed out",
+      "solution": "Process timed out on the server, please reach out to IT"
+    },
+    {
+      "failure": "ModuleNotFoundError: No module named 'toolscache'",
+      "solution": "toolscache service might have landed into some issue, please reach out to IT/DevOps."
+    },
+    {
+      "failure": "Stale file handle",
+      "solution": "NFS might have encountered some issue or parallel threads would've performed cleanup in same workspace, please reach out to IT/DevOps."
+    }
+  ]
+}
