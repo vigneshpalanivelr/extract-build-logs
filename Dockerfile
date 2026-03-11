@@ -3,6 +3,9 @@
 
 FROM python:3.8-slim
 
+# Create logs directory
+RUN mkdir -p /app/logs /app/src /app/scripts && chmod 755 /app
+
 # Set working directory
 WORKDIR /app
 
@@ -26,11 +29,8 @@ COPY log-extractor-entrypoint.sh ./
 # Make entrypoint script executable
 RUN chmod +x log-extractor-entrypoint.sh
 
-# Create logs directory
-RUN mkdir -p /app/logs
-
-# Note: Running as root to avoid user namespace permission issues
-# The host's Docker daemon (--userns-remap) will handle user mapping
+# Switch to non-root user
+USER appuser
 
 # Expose webhook port (default 8000, can be changed via WEBHOOK_PORT env var)
 EXPOSE 8000

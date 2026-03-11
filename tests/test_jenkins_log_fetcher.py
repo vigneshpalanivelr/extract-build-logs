@@ -36,7 +36,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
             jenkins_enabled=True,
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_user="test_user",
             jenkins_api_token="test_api_token",
             jenkins_webhook_secret=None,
@@ -55,7 +55,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
 
     def test_initialization_with_jenkins_enabled(self):
         """Test initialization when Jenkins is enabled."""
-        self.assertEqual(self.fetcher.jenkins_url, "https://jenkins.example.com")
+        self.assertEqual(self.fetcher.jenkins_url, "https://jenkins1.example.com")
         self.assertIsNotNone(self.fetcher.auth)
         self.assertIsNotNone(self.fetcher.error_handler)
 
@@ -104,14 +104,14 @@ class TestJenkinsLogFetcher(unittest.TestCase):
     def test_initialization_with_explicit_credentials(self):
         """Test initialization with explicit Jenkins credentials."""
         fetcher = JenkinsLogFetcher(
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_user="test_user",
             jenkins_api_token="test_token",
             retry_attempts=3,
             retry_delay=2
         )
 
-        self.assertEqual(fetcher.jenkins_url, "https://jenkins.example.com")
+        self.assertEqual(fetcher.jenkins_url, "https://jenkins1.example.com")
         self.assertEqual(fetcher.auth.username, "test_user")
         self.assertEqual(fetcher.auth.password, "test_token")
         self.assertIsNotNone(fetcher.error_handler)
@@ -119,13 +119,13 @@ class TestJenkinsLogFetcher(unittest.TestCase):
     def test_initialization_with_explicit_credentials_trailing_slash(self):
         """Test initialization with explicit credentials removes trailing slash."""
         fetcher = JenkinsLogFetcher(
-            jenkins_url="https://jenkins.example.com/",
+            jenkins_url="https://jenkins1.example.com/",
             jenkins_user="test_user",
             jenkins_api_token="test_token"
         )
 
         # Trailing slash should be removed
-        self.assertEqual(fetcher.jenkins_url, "https://jenkins.example.com")
+        self.assertEqual(fetcher.jenkins_url, "https://jenkins1.example.com")
 
     def test_initialization_without_config_or_credentials(self):
         """Test initialization fails when neither config nor credentials provided."""
@@ -139,7 +139,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
         # Missing jenkins_api_token
         with self.assertRaises(ValueError) as context:
             JenkinsLogFetcher(
-                jenkins_url="https://jenkins.example.com",
+                jenkins_url="https://jenkins1.example.com",
                 jenkins_user="test_user"
             )
 
@@ -329,7 +329,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
         """Test fetch_stage_log_tail using environment variable fallback."""
         # Create fetcher without config
         fetcher_no_config = JenkinsLogFetcher(
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_user="testuser",
             jenkins_api_token="testtoken"
         )
@@ -361,7 +361,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
         mock_response.status_code = 200
         mock_request.return_value = mock_response
 
-        result = self.fetcher._make_request('GET', 'https://jenkins.example.com/api/json')
+        result = self.fetcher._make_request('GET', 'https://jenkins1.example.com/api/json')
 
         self.assertEqual(result.status_code, 200)
         mock_request.assert_called_once()
@@ -373,7 +373,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
         mock_response.status_code = 200
         mock_request.return_value = mock_response
 
-        self.fetcher._make_request('GET', 'https://jenkins.example.com/api/json', timeout=60)
+        self.fetcher._make_request('GET', 'https://jenkins1.example.com/api/json', timeout=60)
 
         # Verify timeout was passed correctly
         call_kwargs = mock_request.call_args[1]
@@ -388,7 +388,7 @@ class TestJenkinsLogFetcher(unittest.TestCase):
         mock_request.return_value = mock_response
 
         with self.assertRaises(requests.exceptions.HTTPError):
-            result = self.fetcher._make_request('GET', 'https://jenkins.example.com/api/json')
+            result = self.fetcher._make_request('GET', 'https://jenkins1.example.com/api/json')
             result.raise_for_status()
 
     @patch('requests.head')

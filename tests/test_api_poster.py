@@ -56,7 +56,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -92,7 +92,7 @@ class TestApiPoster(unittest.TestCase):
             "created_at": "2024-01-01T00:00:00Z",
             "finished_at": "2024-01-01T00:02:00Z",
             "duration": 120.5,
-            "user": {"name": "Test User", "email": "test@example.com"},
+            "user": {"name": "Test User", "email": "john.doe@internal.com"},
             "stages": ["build", "test", "deploy"]
         }
 
@@ -156,7 +156,7 @@ class TestApiPoster(unittest.TestCase):
         self.assertEqual(payload["repo"], "test-project")
         self.assertEqual(payload["branch"], "main")
         self.assertEqual(payload["commit"], "abc123d")  # First 7 chars of sha
-        self.assertEqual(payload["triggered_by"], "Test User@sandvine.com")  # Username gets domain appended
+        self.assertEqual(payload["triggered_by"], "Test User@internal.com")  # Username gets domain appended
         # job_name is a comma-separated string
         self.assertIsInstance(payload["job_name"], str)
         self.assertEqual(len(payload["failed_steps"]), 0)  # No failed jobs
@@ -223,7 +223,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=False,
             api_post_save_to_file=False,
@@ -544,7 +544,7 @@ class TestApiPoster(unittest.TestCase):
     @patch('requests.post')
     def test_fetch_token_from_bfa_server_success(self, mock_post):
         """Test successful token fetching from BFA server."""
-        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_host = "bfa-server.example.com"
         self.config.bfa_secret_key = None
 
         mock_response = MagicMock()
@@ -564,7 +564,7 @@ class TestApiPoster(unittest.TestCase):
     @patch('requests.post')
     def test_fetch_token_from_bfa_server_uses_cache(self, mock_post):
         """Test that cached token is reused if still valid."""
-        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_host = "bfa-server.example.com"
         self.config.bfa_secret_key = None
 
         poster = ApiPoster(self.config)
@@ -582,7 +582,7 @@ class TestApiPoster(unittest.TestCase):
     @patch('requests.post')
     def test_fetch_token_from_bfa_server_request_failure(self, mock_post):
         """Test token fetching when HTTP request fails."""
-        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_host = "bfa-server.example.com"
         self.config.bfa_secret_key = None
 
         mock_post.side_effect = requests.exceptions.ConnectionError("Network error")
@@ -595,7 +595,7 @@ class TestApiPoster(unittest.TestCase):
     @patch('requests.post')
     def test_fetch_token_from_bfa_server_missing_token_field(self, mock_post):
         """Test token fetching when response is missing token field."""
-        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_host = "bfa-server.example.com"
         self.config.bfa_secret_key = None
 
         mock_response = MagicMock()
@@ -644,7 +644,7 @@ class TestApiPoster(unittest.TestCase):
     @patch.object(ApiPoster, '_fetch_token_from_bfa_server')
     def test_post_to_api_with_bfa_server_token(self, mock_fetch_token, mock_post):
         """Test _post_to_api fetches token from BFA server when no secret key."""
-        self.config.bfa_host = "bfa.example.com"
+        self.config.bfa_host = "bfa-server.example.com"
         self.config.bfa_secret_key = None
 
         mock_fetch_token.return_value = "fetched-token-456"
@@ -1008,7 +1008,7 @@ class TestApiPoster(unittest.TestCase):
             log_exclude_projects=[],
             log_save_job_status=["all"],
             log_save_metadata_always=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_enabled=True,
             api_post_timeout=30,
             api_post_retry_enabled=False,
@@ -1018,7 +1018,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -1069,7 +1069,7 @@ class TestApiPoster(unittest.TestCase):
             log_exclude_projects=[],
             log_save_job_status=["all"],
             log_save_metadata_always=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_enabled=True,
             api_post_timeout=30,
             api_post_retry_enabled=False,
@@ -1079,7 +1079,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key="secret123",
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -1127,7 +1127,7 @@ class TestApiPoster(unittest.TestCase):
             log_exclude_projects=[],
             log_save_job_status=["all"],
             log_save_metadata_always=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_enabled=True,
             api_post_timeout=30,
             api_post_retry_enabled=False,
@@ -1183,7 +1183,7 @@ class TestApiPoster(unittest.TestCase):
             log_exclude_projects=[],
             log_save_job_status=["all"],
             log_save_metadata_always=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_enabled=True,
             api_post_timeout=30,
             api_post_retry_enabled=False,
@@ -1193,7 +1193,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -1276,12 +1276,12 @@ class TestApiPoster(unittest.TestCase):
             log_exclude_projects=[],
             log_save_job_status=["all"],
             log_save_metadata_always=True,
-            api_post_url="https://api.example.com/jenkins",
+            api_post_url="https://bfa-server.example.com/jenkins",
             api_post_enabled=True,
             api_post_timeout=30,
             api_post_retry_enabled=False,
             api_post_save_to_file=False,
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_enabled=True,
             jenkins_user="testuser",
             jenkins_api_token="testtoken",
@@ -1329,7 +1329,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1379,7 +1379,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1435,7 +1435,7 @@ class TestApiPoster(unittest.TestCase):
                     'causes': [
                         {
                             '_class': 'hudson.model.Cause$UserIdCause',
-                            'userId': 'admin'
+                            'userId': 'john.doe'
                         }
                     ]
                 }
@@ -1459,7 +1459,7 @@ class TestApiPoster(unittest.TestCase):
         self.assertIn("no log content available", result['failed_steps'][1]['error_lines'][0])
 
         # Check triggered_by was determined
-        self.assertEqual(result['triggered_by'], 'admin@internal.com')
+        self.assertEqual(result['triggered_by'], 'john.doe@internal.com')
 
         self.token_manager_patcher.start()
 
@@ -1483,7 +1483,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1541,7 +1541,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1589,7 +1589,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1642,7 +1642,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1696,7 +1696,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1744,7 +1744,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1797,7 +1797,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1819,7 +1819,8 @@ class TestApiPoster(unittest.TestCase):
 
         mock_session = MagicMock()
         mock_response = MagicMock()
-        mock_response.json.return_value = {'author_email': 'john.doe@example.com', 'author_name': 'John Doe'}
+        mock_response.json.return_value = {'author_email': 'john.doe@internal.com',
+                                           'author_name': 'John Doe'}
         mock_session.get.return_value = mock_response
         mock_session_class.return_value = mock_session
 
@@ -1852,7 +1853,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1906,7 +1907,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -1954,7 +1955,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2007,7 +2008,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2035,7 +2036,8 @@ class TestApiPoster(unittest.TestCase):
 
         # Second call: get commit
         commit_response = MagicMock()
-        commit_response.json.return_value = {'author_email': 'jane.doe@example.com', 'author_name': 'Jane Doe'}
+        commit_response.json.return_value = {'author_email': 'john.doe@internal.com',
+                                             'author_name': 'John Doe'}
 
         mock_session.get.side_effect = [branch_response, commit_response]
         mock_session_class.return_value = mock_session
@@ -2045,7 +2047,7 @@ class TestApiPoster(unittest.TestCase):
 
         username = poster._get_user_from_branch(12345, 'feature-branch')
 
-        self.assertEqual(username, 'jane.doe')
+        self.assertEqual(username, 'john.doe')
 
         self.token_manager_patcher.start()
 
@@ -2068,7 +2070,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2116,7 +2118,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2223,7 +2225,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2253,7 +2255,7 @@ class TestApiPoster(unittest.TestCase):
                     'causes': [
                         {
                             '_class': 'hudson.model.Cause$UserIdCause',
-                            'userId': 'admin'
+                            'userId': 'john.doe'
                         }
                     ]
                 }
@@ -2262,7 +2264,7 @@ class TestApiPoster(unittest.TestCase):
 
         triggered_by = poster._determine_jenkins_triggered_by(parameters, build_metadata)
 
-        self.assertEqual(triggered_by, 'admin@internal.com')
+        self.assertEqual(triggered_by, 'john.doe@internal.com')
 
         self.token_manager_patcher.start()
 
@@ -2286,7 +2288,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2367,7 +2369,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2395,7 +2397,7 @@ class TestApiPoster(unittest.TestCase):
 
         # Second call: get commit
         commit_response = MagicMock()
-        commit_response.json.return_value = {'author_email': 'commit.author@example.com'}
+        commit_response.json.return_value = {'author_email': 'commit.author@internal.com'}
 
         mock_session.get.side_effect = [project_response, commit_response]
         mock_session_class.return_value = mock_session
@@ -2448,7 +2450,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2532,7 +2534,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2598,7 +2600,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2607,7 +2609,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -2652,7 +2654,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2661,7 +2663,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key=None,
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -2707,7 +2709,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2716,7 +2718,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key="test-key",
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -2777,7 +2779,7 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=True,
             api_post_save_to_file=False,
@@ -2786,7 +2788,7 @@ class TestApiPoster(unittest.TestCase):
             jenkins_user=None,
             jenkins_api_token=None,
             jenkins_webhook_secret=None,
-            bfa_host="https://bfa.example.com",
+            bfa_host="https://bfa-server.example.com/",
             bfa_secret_key=None,  # No secret key
             error_context_lines_before=50,
             error_context_lines_after=10,
@@ -2860,12 +2862,12 @@ class TestApiPoster(unittest.TestCase):
             log_save_job_status=["all"],
             log_save_metadata_always=True,
             api_post_enabled=True,
-            api_post_url="https://api.example.com/logs",
+            api_post_url="https://bfa-server.example.com/logs",
             api_post_timeout=30,
             api_post_retry_enabled=False,
             api_post_save_to_file=False,
             jenkins_enabled=True,
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_user="test",
             jenkins_api_token="token",
             jenkins_webhook_secret=None,

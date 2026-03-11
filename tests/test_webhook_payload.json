@@ -16,23 +16,23 @@
     "id": 100,
     "name": "test-project",
     "description": "Test project for webhook",
-    "web_url": "https://gitlab.com/test/project",
+    "web_url": "https://gitlab.example.com/test/project",
     "path_with_namespace": "test/project"
   },
   "user": {
     "id": 1,
     "name": "Test User",
     "username": "testuser",
-    "email": "test@example.com"
+    "email": "john.doe@internal.com"
   },
   "commit": {
     "id": "abc123def456",
     "message": "Test commit for webhook testing",
     "timestamp": "2024-01-01T10:00:00Z",
-    "url": "https://gitlab.com/test/project/-/commit/abc123def456",
+    "url": "https://gitlab.example.com/test/project/-/commit/abc123def456",
     "author": {
       "name": "Test User",
-      "email": "test@example.com"
+      "email": "john.doe@internal.com"
     }
   },
   "builds": [

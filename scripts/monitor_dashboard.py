@@ -1,5 +1,3 @@
-#!/usr/bin/env bfapython
-# -*- coding: utf-8 -*-
 """
 Pipeline Monitoring Dashboard
 

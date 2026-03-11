@@ -32,25 +32,25 @@ class Config:  # pylint: disable=too-many-instance-attributes
                 from class attributes, eliminating boilerplate code for data classes.
 
     Attributes:
-        gitlab_url                  -> (str)           -> GitLab instance URL
-        gitlab_token                -> (str)           -> GitLab API token
-        webhook_port                -> (int)           -> Webhook listener port
-        webhook_secret              -> (Optional[str]) -> Webhook validation secret
-        log_output_dir              -> (str)           -> Log storage directory
-        retry_attempts              -> (int)           -> API retry attempts
-        retry_delay                 -> (int)           -> Retry delay (seconds)
-        log_level                   -> (str)           -> Logging level
-        log_save_pipeline_status    -> (List[str])     -> Pipeline statuses to save
-        log_save_projects           -> (List[str])     -> Project IDs whitelist
-        log_exclude_projects        -> (List[str])     -> Project IDs blacklist
-        log_save_job_status         -> (List[str])     -> Job statuses to save
-        log_save_metadata_always    -> (bool)          -> Save metadata always
-        api_post_enabled            -> (bool)          -> Enable API posting
-        api_post_url                -> (Optional[str]) -> API endpoint URL
-        api_post_timeout            -> (int)           -> API timeout (seconds)
-        api_post_retry_enabled      -> (bool)          -> Enable API retry
-        api_post_save_to_file       -> (bool)          -> Save to file when posting
-        jenkins_enabled             -> (bool)          -> Enable Jenkins support
+        gitlab_url                       -> (str)           -> GitLab instance URL
+        gitlab_token                     -> (str)           -> GitLab API token
+        webhook_port                     -> (int)           -> Webhook listener port
+        webhook_secret                   -> (Optional[str]) -> Webhook validation secret
+        log_output_dir                   -> (str)           -> Log storage directory
+        retry_attempts                   -> (int)           -> API retry attempts
+        retry_delay                      -> (int)           -> Retry delay (seconds)
+        log_level                        -> (str)           -> Logging level
+        log_save_pipeline_status         -> (List[str])     -> Pipeline statuses to save
+        log_save_projects                -> (List[str])     -> Project IDs whitelist
+        log_exclude_projects             -> (List[str])     -> Project IDs blacklist
+        log_save_job_status              -> (List[str])     -> Job statuses to save
+        log_save_metadata_always         -> (bool)          -> Save metadata always
+        api_post_enabled                 -> (bool)          -> Enable API posting
+        api_post_url                     -> (Optional[str]) -> API endpoint URL
+        api_post_timeout                 -> (int)           -> API timeout (seconds)
+        api_post_retry_enabled           -> (bool)          -> Enable API retry
+        api_post_save_to_file            -> (bool)          -> Save to file when posting
+        jenkins_enabled                  -> (bool)          -> Enable Jenkins support
         jenkins_url                      -> (Optional[str]) -> Jenkins instance URL
         jenkins_user                     -> (Optional[str]) -> Jenkins username
         jenkins_api_token                -> (Optional[str]) -> Jenkins API token
@@ -334,11 +334,8 @@ class ConfigLoader:
     @staticmethod
     def _load_log_limits() -> Dict[str, Any]:
         """Load error context and log handling limits."""
-        # Error context defaults (used as fallback when adaptive is disabled)
-        # With adaptive enabled (default), these are overridden by adaptive_thresholds
-        error_context_lines_before = 50  # Hardcoded default
-        error_context_lines_after = 10   # Hardcoded default
-
+        error_context_lines_before = int(os.getenv('ERROR_CONTEXT_LINES_BEFORE', '50'))
+        error_context_lines_after = int(os.getenv('ERROR_CONTEXT_LINES_AFTER', '10'))
         max_log_lines = int(os.getenv('MAX_LOG_LINES', '100000'))
         tail_log_lines = int(os.getenv('TAIL_LOG_LINES', '5000'))
         stream_chunk_size = int(os.getenv('STREAM_CHUNK_SIZE', '8192'))

@@ -1,5 +1,3 @@
-#!/usr/bin/env bfapython
-# -*- coding: utf-8 -*-
 """
 GitLab Pipeline Log Extractor - Container Management Script
 
@@ -31,8 +29,8 @@ Usage:
     bfapython manage_container.py --help
     bfapython manage_container.py build
     bfapython manage_container.py start
-    ./manage_container.py status
-    ./manage_container.py logs
+    bfapython manage_container.py status
+    bfapython manage_container.py logs
 """
 
 import sys
@@ -250,6 +248,11 @@ else:
             pass
 
     # Assign fallback classes - noqa to suppress false positive F811 warnings
+    # Assign fallback classes - noqa to suppress false positive F811 warnings
+    # Flake8 was reporting F811 "redefinition" warnings for Table, Progress, and Prompt
+    # Root Cause: These aren't actual redefinitions - they're conditional assignments:
+    # When RICH_AVAILABLE=True: Use classes imported from rich library
+    # When RICH_AVAILABLE=False: Use our fallback classes
     console = SimpleConsole()
     Table = SimpleTable  # noqa: F811
     Progress = SimpleProgress  # noqa: F811
@@ -1405,6 +1408,7 @@ def show_status(client: docker.DockerClient) -> bool:  # noqa: C901
         return False
 
 
+# noqa: C901
 def _get_removal_choice(
     container_exists_flag: bool,
     image_exists_flag: bool,
@@ -1708,7 +1712,7 @@ def _test_gitlab_webhook(host: str, port: int) -> bool:
         "project": {
             "id": 100,
             "name": "test-project",
-            "web_url": "https://gitlab.com/test/project"
+            "web_url": "https://gitlab.example.com/test/project"
         },
         "builds": [
             {
@@ -1776,7 +1780,7 @@ def _test_jenkins_webhook(host: str, port: int, jenkins_url: str = None) -> bool
 
         # Final fallback to example URL
         if not test_jenkins_url:
-            test_jenkins_url = "https://jenkins.example.com"
+            test_jenkins_url = "https://jenkins1.example.com"
             console.print("[dim]Using example Jenkins URL "
                           "(configure JENKINS_URL in .env or jenkins_instances.json)[/dim]\n")
 

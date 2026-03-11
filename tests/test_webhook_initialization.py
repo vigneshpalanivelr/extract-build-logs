@@ -47,7 +47,7 @@ class TestInitApp(unittest.TestCase):
         mock_config.bfa_host = None
         mock_config.bfa_secret_key = "secret123"
         mock_config.api_post_enabled = True
-        mock_config.api_post_url = "https://api.example.com"
+        mock_config.api_post_url = "https://bfa-server.example.com"
         mock_config.api_post_timeout = 30
         mock_config.api_post_retry_enabled = True
         mock_config.api_post_save_to_file = False
@@ -94,7 +94,7 @@ class TestInitApp(unittest.TestCase):
         mock_config.webhook_port = 8000
         mock_config.retry_attempts = 3
         mock_config.gitlab_token = "test-token"
-        mock_config.bfa_host = "https://bfa.example.com"
+        mock_config.bfa_host = "https://bfa-server.example.com"
         mock_config.bfa_secret_key = None
         mock_config.api_post_enabled = False
         mock_config.jenkins_enabled = False
@@ -170,7 +170,7 @@ class TestInitApp(unittest.TestCase):
         mock_config.bfa_secret_key = None
         mock_config.api_post_enabled = False
         mock_config.jenkins_enabled = True
-        mock_config.jenkins_url = "https://jenkins.example.com"
+        mock_config.jenkins_url = "https://jenkins1.example.com"
         mock_config.jenkins_user = "testuser"
 
         mock_config_loader.load.return_value = mock_config

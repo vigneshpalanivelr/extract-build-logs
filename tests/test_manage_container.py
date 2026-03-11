@@ -64,7 +64,7 @@ class TestLoadConfig(unittest.TestCase):
         """Test loading config with all values set."""
         mock_exists.return_value = True
         mock_dotenv.return_value = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'glpat-test123',
             'WEBHOOK_PORT': '9000',
             'WEBHOOK_SECRET': 'secret123',
@@ -77,7 +77,7 @@ class TestLoadConfig(unittest.TestCase):
         result = manage_container.load_config(Path('.env'))
 
         self.assertIsNotNone(result)
-        self.assertEqual(result['GITLAB_URL'], 'https://gitlab.com')
+        self.assertEqual(result['GITLAB_URL'], 'https://gitlab.example.com')
         self.assertEqual(result['GITLAB_TOKEN'], 'glpat-test123')
         self.assertEqual(result['WEBHOOK_PORT'], '9000')
 
@@ -87,7 +87,7 @@ class TestLoadConfig(unittest.TestCase):
         """Test loading config without defaults returns only provided values."""
         mock_exists.return_value = True
         mock_dotenv.return_value = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'glpat-test123',
         }
 
@@ -107,7 +107,7 @@ class TestValidateConfig(unittest.TestCase):
         """Test validation of a fully valid configuration."""
         mock_exists.return_value = False  # Pretend .env doesn't exist to skip permission check
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'glpat-test123',
             'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
             'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
@@ -147,7 +147,7 @@ class TestValidateConfig(unittest.TestCase):
     def test_validate_missing_gitlab_token(self):
         """Test validation catches missing GITLAB_TOKEN."""
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
             'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
             'DOCKER_LOGS_DIR': './logs',
@@ -166,7 +166,7 @@ class TestValidateConfig(unittest.TestCase):
     def test_validate_invalid_port(self):
         """Test validation errors on invalid port."""
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'glpat-test123',
             'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
             'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
@@ -1118,13 +1118,13 @@ class TestValidationFunctions(unittest.TestCase):
 
     def test_validate_required_fields_missing_token(self):
         """Test validation with missing GitLab token."""
-        config = {'GITLAB_URL': 'https://gitlab.com'}
+        config = {'GITLAB_URL': 'https://gitlab.example.com'}
         errors, warnings = manage_container.validate_required_fields(config)
         self.assertIn("GITLAB_TOKEN is not set (required)", errors)
 
     def test_validate_required_fields_valid(self):
         """Test validation with valid required fields."""
-        config = {'GITLAB_URL': 'https://gitlab.com', 'GITLAB_TOKEN': 'test', 'WEBHOOK_SECRET': 'secret'}
+        config = {'GITLAB_URL': 'https://gitlab.example.com', 'GITLAB_TOKEN': 'test', 'WEBHOOK_SECRET': 'secret'}
         errors, warnings = manage_container.validate_required_fields(config)
         self.assertEqual(len(errors), 0)
 
@@ -1313,7 +1313,7 @@ class TestShowConfigTable(unittest.TestCase):
     @patch('manage_container.console')
     def test_show_config_table_quiet_mode(self, mock_console):
         """Test show_config_table in quiet mode."""
-        config = {'GITLAB_URL': 'https://gitlab.com', 'GITLAB_TOKEN': 'token'}
+        config = {'GITLAB_URL': 'https://gitlab.example.com', 'GITLAB_TOKEN': 'token'}
         manage_container.show_config_table(config, quiet=True)
         # In quiet mode, should not print anything
         mock_console.print.assert_not_called()
@@ -1323,7 +1323,7 @@ class TestShowConfigTable(unittest.TestCase):
     def test_show_config_table_basic(self, mock_create_table, mock_console):
         """Test show_config_table with basic config."""
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'test_token',
             'WEBHOOK_PORT': '8000',
             'LOG_LEVEL': 'INFO',
@@ -1343,7 +1343,7 @@ class TestShowConfigTable(unittest.TestCase):
     def test_show_config_table_with_api_enabled(self, mock_create_table, mock_console):
         """Test show_config_table with API posting enabled."""
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'token',
             'API_POST_ENABLED': 'true',
             'BFA_HOST': 'localhost',
@@ -1362,10 +1362,10 @@ class TestShowConfigTable(unittest.TestCase):
     def test_show_config_table_with_jenkins_enabled(self, mock_create_table, mock_console):
         """Test show_config_table with Jenkins integration enabled."""
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'token',
             'JENKINS_ENABLED': 'true',
-            'JENKINS_URL': 'http://jenkins.local',
+            'JENKINS_URL': 'http://jenkins1.example.com',
             'JENKINS_USER': 'admin',
             'JENKINS_API_TOKEN': 'jenkins_token'
         }
@@ -1416,7 +1416,7 @@ class TestStartContainerEdgeCases(unittest.TestCase):
         mock_client.containers.get.return_value = mock_container
 
         config = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'token',
             'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
             'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
@@ -1532,7 +1532,7 @@ class TestCmdFunctionsExtended(unittest.TestCase):
         args.yes = True
         mock_client.return_value = MagicMock()
         mock_config.return_value = {
-            'GITLAB_URL': 'https://gitlab.com',
+            'GITLAB_URL': 'https://gitlab.example.com',
             'GITLAB_TOKEN': 'token',
             'DOCKER_IMAGE_NAME': 'bfa-gitlab-pipeline-extractor',
             'DOCKER_CONTAINER_NAME': 'bfa-gitlab-pipeline-extractor',
@@ -1588,7 +1588,7 @@ class TestCmdFunctionsExtended(unittest.TestCase):
         args = MagicMock()
         args.env_file = '.env'
         mock_client.return_value = MagicMock()
-        mock_config.return_value = {'GITLAB_URL': 'https://gitlab.com'}
+        mock_config.return_value = {'GITLAB_URL': 'https://gitlab.example.com'}
         mock_restart.return_value = True
 
         manage_container.cmd_restart(args)
@@ -1945,7 +1945,7 @@ class TestCmdFunctionsErrorPaths(unittest.TestCase):
         args = MagicMock()
         args.env_file = '.env'
         args.quiet = False
-        mock_config.return_value = {'GITLAB_URL': 'https://gitlab.com'}
+        mock_config.return_value = {'GITLAB_URL': 'https://gitlab.example.com'}
         mock_validate.return_value = (['Error 1'], [])
 
         with self.assertRaises(SystemExit):

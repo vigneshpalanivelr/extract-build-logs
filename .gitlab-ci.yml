@@ -1,20 +1,18 @@
 stages:
-  - formatcheck
   - test
-  - coverage
   - build
 
 
 flake8:
   image: artifactory.internal.com:9999/bfa-pre-built:latest
-  stage: formatcheck
+  stage: test
   script:
     - flake8 --max-line-length 120
   allow_failure: true
 
 pylint:
   image: artifactory.internal.com:9999/bfa-pre-built:latest
-  stage: formatcheck
+  stage: test
   script:
     - pylint src/ --max-line-length=120
   allow_failure: true
@@ -23,7 +21,7 @@ pytest:
   image: artifactory.internal.com:9999/bfa-pre-built:latest
   stage: test
   script:
-    - pytest tests/ -v --tb=short --cov=src --cov-report=term-missing --cov-fail-under=90
+    - pytest tests/ -v --tb=short --cov=src --cov=manage_container --cov-report=term-missing --cov-fail-under=90
   allow_failure: true
 
 
@@ -32,7 +30,7 @@ build-docker-image:
   image: docker:24-dind
   services:
     - name: docker:24-dind
-      command: ["--registry-mirror", "https://artifactory.internal.com:9999/"]
+      command: ["--registry-mirror", "https://artifactory.internal.com:9998/"]
   tags:
     - executor:dind-socket
   variables:
@@ -40,7 +38,7 @@ build-docker-image:
     # Use branch name for tagging instead of commit SHA
     IMAGE_TAG: ${CI_PROJECT_PATH}:${CI_COMMIT_REF_NAME}
     LATEST_TAG: ${CI_PROJECT_PATH}:latest
-    ARTIFACTORY_PUSH: "artifactory.internal.com:9999"
+    ARTIFACTORY_PUSH: "artifactory.internal.com:9998"
   script:
     - export
     - echo "Gitlab Registry ${CI_REGISTRY}"

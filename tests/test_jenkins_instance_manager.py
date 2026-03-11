@@ -18,14 +18,14 @@ class TestJenkinsInstance:
     def test_jenkins_instance_creation(self):
         """Test creating a JenkinsInstance with all fields."""
         instance = JenkinsInstance(
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_user="admin",
             jenkins_api_token="token123",
             jenkins_webhook_secret="secret123",
             description="Test Jenkins"
         )
 
-        assert instance.jenkins_url == "https://jenkins.example.com"
+        assert instance.jenkins_url == "https://jenkins1.example.com"
         assert instance.jenkins_user == "admin"
         assert instance.jenkins_api_token == "token123"
         assert instance.jenkins_webhook_secret == "secret123"
@@ -34,12 +34,12 @@ class TestJenkinsInstance:
     def test_jenkins_instance_without_optionals(self):
         """Test creating a JenkinsInstance without optional fields."""
         instance = JenkinsInstance(
-            jenkins_url="https://jenkins.example.com",
+            jenkins_url="https://jenkins1.example.com",
             jenkins_user="admin",
             jenkins_api_token="token123"
         )
 
-        assert instance.jenkins_url == "https://jenkins.example.com"
+        assert instance.jenkins_url == "https://jenkins1.example.com"
         assert instance.jenkins_user == "admin"
         assert instance.jenkins_api_token == "token123"
         assert instance.jenkins_webhook_secret is None
@@ -172,7 +172,7 @@ class TestJenkinsInstanceManager:
         config_data = {
             "instances": [
                 {
-                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin",
                     "jenkins_api_token": "token123"
                     # No jenkins_webhook_secret
@@ -186,14 +186,14 @@ class TestJenkinsInstanceManager:
 
         # Should return True when no secret is configured
         result = manager.validate_webhook_secret(
-            "https://jenkins.example.com",
+            "https://jenkins1.example.com",
             "any_secret"
         )
         assert result is True
 
         # Should also return True when no secret provided
         result = manager.validate_webhook_secret(
-            "https://jenkins.example.com",
+            "https://jenkins1.example.com",
             None
         )
         assert result is True
@@ -245,7 +245,7 @@ class TestJenkinsInstanceManager:
         invalid_config = {
             "instances": [
                 {
-                    "jenkins_url": "https://jenkins.example.com"
+                    "jenkins_url": "https://jenkins1.example.com"
                     # Missing jenkins_user and jenkins_api_token
                 }
             ]
@@ -271,7 +271,7 @@ class TestJenkinsInstanceManager:
         config_data = {
             "instances": [
                 {
-                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin",
                     "jenkins_api_token": "token123",
                     "jenkins_webhook_secret": "secret123"
@@ -282,7 +282,7 @@ class TestJenkinsInstanceManager:
             json.dump(config_data, f)
 
         manager = JenkinsInstanceManager(config_file=temp_config_file)
-        instance = manager.get_instance("https://jenkins.example.com")
+        instance = manager.get_instance("https://jenkins1.example.com")
 
         assert instance is not None
         assert instance.description is None
@@ -292,13 +292,13 @@ class TestJenkinsInstanceManager:
         config_data = {
             "instances": [
                 {
-                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin1",
                     "jenkins_api_token": "token1",
                     "description": "First"
                 },
                 {
-                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin2",
                     "jenkins_api_token": "token2",
                     "description": "Second"
@@ -313,7 +313,7 @@ class TestJenkinsInstanceManager:
         # Should have only one instance (the second one)
         assert len(manager.instances) == 1
 
-        instance = manager.get_instance("https://jenkins.example.com")
+        instance = manager.get_instance("https://jenkins1.example.com")
         assert instance.jenkins_user == "admin2"
         assert instance.description == "Second"
 
@@ -352,7 +352,7 @@ class TestJenkinsInstanceManager:
         config_data = {
             "instances": [
                 {
-                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin",
                     "jenkins_api_token": "not_valid_base64!!!",  # Invalid base64
                     "token_encoding": "base64"
@@ -376,7 +376,7 @@ class TestJenkinsInstanceManager:
         config_data = {
             "instances": [
                 {
-                    "jenkins_url": "https://jenkins.example.com",
+                    "jenkins_url": "https://jenkins1.example.com",
                     "jenkins_user": "admin",
                     "jenkins_api_token": encoded_token,
                     "token_encoding": "base64"
@@ -387,7 +387,7 @@ class TestJenkinsInstanceManager:
             json.dump(config_data, f)
 
         manager = JenkinsInstanceManager(config_file=temp_config_file)
-        instance = manager.get_instance("https://jenkins.example.com")
+        instance = manager.get_instance("https://jenkins1.example.com")
 
         # Should have decoded the base64 token
         assert instance is not None

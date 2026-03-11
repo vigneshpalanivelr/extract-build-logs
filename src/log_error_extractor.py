@@ -25,38 +25,35 @@ class LogErrorExtractor:
     each error to provide meaningful context for LLM analysis.
     """
 
-    # Error patterns to search for (case-sensitive)
+    # Error patterns to search for (case-insensitive)
     ERROR_PATTERNS = [
-        'make: ***',                                    # Make errors
-        'Sending interrupt signal to process',         # Process interruption
-        'killed by signal',                            # Signal termination
-        'git clone failed',                            # Git failures
-        'ERR!',                                        # npm errors (uppercase)
-        'subprocess.CalledProcessError: Command',      # Python subprocess errors
-        'unknown: Bad credentials',                    # Git auth errors
-        'npm ERR! EBUSY: resource busy',              # npm resource errors
+        'make: ***',                                      # Make errors
+        'Sending interrupt signal to process',            # Process interruption
+        'killed by signal',                               # Signal termination
+        'git clone failed',                               # Git failures
+        'err!',                                           # npm errors (uppercase)
+        'subprocess.calledprocesserror: command',         # Python subprocess errors
+        'unknown: bad credentials',                       # Git auth errors
+        'npm err! ebusy: resource busy',                  # npm resource errors
         'build-packetlogic2/packages/buildenv/11_llvm:',  # Specific build path errors
-        'docker.errors',                               # Docker errors
-        'Exception:',                                  # Python/Java exceptions (with colon)
-        'Traceback (most recent call last):',         # Python tracebacks
-        'could not resolve',                           # Dependency resolution
-        'compilation error',                           # Compilation failures
-        'BUILD FAILED',                                # Build failures (uppercase)
-        'aseline.tar.lzma: unexpected end of input',  # Archive errors
-        'Error: ',                                     # Generic errors (capital E with colon-space)
-        'ERROR:',                                      # Log level errors (uppercase with colon)
-        'FAILED:',                                     # Build step failures
+        'docker.errors',                                  # Docker errors
+        'exception:',                                     # Python/Java exceptions (with colon)
+        'traceback',                                      # Python tracebacks
+        'could not resolve',                              # Dependency resolution
+        'compilation error',                              # Compilation failures
+        'build failed',                                   # Build failures (uppercase)
+        'baseline.tar.lzma: unexpected end of input',     # Archive errors
+        'error: ',                                        # Generic errors (capital E with colon-space)
     ]
 
     # Ignore patterns - lines matching these are NOT considered errors even if they match ERROR_PATTERNS
-    # This filters out false positives (case-sensitive)
+    # This filters out false positives (case-insensitive)
     IGNORE_PATTERNS: List[str] = [
-        'Error: tag ',          # Git tag operations (capital E)
-        '[ FAIL ]',             # Test framework markers
-        '[new branch]',         # Git branch operations
-        'INFO: I/O exception',  # Info-level exceptions
-        '-exception-',          # Exception in variable names
-        'error: warning:',      # Compiler warnings marked as errors
+        'error: tag ',                                    # Git tag operations (capital E)
+        '[ FAIL ]',                                       # Test framework markers
+        '[new branch]',                                   # Git branch operations
+        'INFO: I/O exception',                            # Info-level exceptions
+        '-exception-',                                    # Exception in variable names
     ]
 
     def __init__(self, lines_before: int = 50, lines_after: int = 10, max_line_length: int = 1000,
@@ -179,11 +176,9 @@ class LogErrorExtractor:
         """
         Find all line indices that contain error patterns but not ignore patterns.
 
-        Pattern matching is case-sensitive to avoid false positives from generic words.
-
         A line is considered an error if:
-        - It matches at least one ERROR_PATTERN (case-sensitive), AND
-        - It does NOT match any IGNORE_PATTERN (case-sensitive)
+        - It matches at least one ERROR_PATTERN, AND
+        - It does NOT match any IGNORE_PATTERN
 
         Args:
             lines: List of cleaned log lines
@@ -197,10 +192,12 @@ class LogErrorExtractor:
             if not line:
                 continue
 
-            # Case-sensitive pattern matching
-            if any(pattern in line for pattern in self.ERROR_PATTERNS):
-                # Check if line should be ignored (case-sensitive)
-                if self.ignore_patterns and any(ignore in line for ignore in self.ignore_patterns):
+            line_lower = line.lower()
+
+            # Check if line matches any error pattern
+            if any(pattern in line_lower for pattern in self.ERROR_PATTERNS):
+                # Check if line should be ignored (matches any ignore pattern)
+                if self.ignore_patterns and any(ignore.lower() in line_lower for ignore in self.ignore_patterns):
                     continue  # Skip this line - it matches an ignore pattern
                 error_indices.append(idx)
 
@@ -281,8 +278,6 @@ class LogErrorExtractor:
         """
         Check if a single line matches error patterns but not ignore patterns.
 
-        Pattern matching is case-sensitive to avoid false positives from generic words.
-
         Args:
             line: A single cleaned log line
 
@@ -292,10 +287,12 @@ class LogErrorExtractor:
         if not line:
             return False
 
-        # Case-sensitive pattern matching
-        if any(pattern in line for pattern in self.ERROR_PATTERNS):
-            # Check if line should be ignored (case-sensitive)
-            if self.ignore_patterns and any(ignore in line for ignore in self.ignore_patterns):
+        line_lower = line.lower()
+
+        # Check if line matches any error pattern
+        if any(pattern in line_lower for pattern in self.ERROR_PATTERNS):
+            # Check if line should be ignored (matches any ignore pattern)
+            if self.ignore_patterns and any(ignore.lower() in line_lower for ignore in self.ignore_patterns):
                 return False  # Not an error - matches ignore pattern
             return True  # It's an error
 
@@ -369,8 +366,6 @@ class LogErrorExtractor:
         """
         Analyze error patterns in log lines and return detailed breakdown.
 
-        Pattern matching is case-sensitive to avoid false positives from generic words.
-
         Args:
             lines: List of cleaned log lines
 
@@ -385,21 +380,22 @@ class LogErrorExtractor:
             if not line:
                 continue
 
+            line_lower = line.lower()
             line_num = idx + 1  # 1-indexed for user readability
 
-            # Check for error patterns (case-sensitive)
+            # Check for error patterns
             matched_pattern = None
             for pattern in self.ERROR_PATTERNS:
-                if pattern in line:
+                if pattern in line_lower:
                     matched_pattern = pattern
                     break
 
             if matched_pattern:
-                # Check if this should be ignored (case-sensitive)
+                # Check if this should be ignored
                 ignored = False
                 if self.ignore_patterns:
                     for ignore_pattern in self.ignore_patterns:
-                        if ignore_pattern in line:
+                        if ignore_pattern.lower() in line_lower:
                             ignored_patterns[ignore_pattern] += 1
                             ignored = True
                             break

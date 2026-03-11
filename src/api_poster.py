@@ -135,7 +135,7 @@ class ApiPoster:
         if isinstance(user_info, dict):
             triggered_by = user_info.get('username') or user_info.get('name')
             if triggered_by:
-                triggered_by = f"{triggered_by}@sandvine.com"
+                triggered_by = f"{triggered_by}@internal.com"
         else:
             triggered_by = None
 
@@ -231,7 +231,7 @@ class ApiPoster:
                     "commit": str,            # From parameters or "unknown"
                     "job_name": str,          # job_name
                     "pipeline_id": str,       # Full build URL
-                    "triggered_by": str,      # Username@internal.com
+                    "triggered_by": str,      # john.doe@internal.com
                     "failed_steps": [
                         {
                             "step_name": str,
@@ -322,7 +322,7 @@ class ApiPoster:
         Get GitLab project ID from namespace and repo name.
 
         Args:
-            namespace: GitLab namespace/group (e.g., "sandvine-platform")
+            namespace: GitLab namespace/group (e.g., "internal-platform")
             repo_name: Repository name (e.g., "ci_build")
 
         Returns:
@@ -535,7 +535,7 @@ class ApiPoster:
             build_metadata: Jenkins build metadata
 
         Returns:
-            Username formatted as "username@internal.com"
+            Username formatted as "john.doe@internal.com"
         """
         # Step 1: Extract Jenkins user from metadata
         jenkins_user = self._extract_jenkins_user_from_metadata(build_metadata)

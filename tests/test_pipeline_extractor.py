@@ -235,7 +235,7 @@ class TestPipelineExtractor(unittest.TestCase):
                 "message": "Fix bug",
                 "author": {
                     "name": "Jane Doe",
-                    "email": "jane@example.com"
+                    "email": "john.doe@internal.com"
                 }
             }
         }
