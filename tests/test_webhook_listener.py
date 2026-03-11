@@ -592,7 +592,7 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
             'job_name': 'test-job',
             'build_number': 42,
             'status': 'SUCCESS',
-            'url': 'https://jenkins.example.com/job/test-job/42/'
+            'url': 'https://jenkins1.example.com/job/test-job/42/'
         }
 
         process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
@@ -628,7 +628,7 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
             'job_name': 'test-job',
             'build_number': 42,
             'status': 'SUCCESS',
-            'url': 'https://jenkins.example.com/job/test-job/42/'
+            'url': 'https://jenkins1.example.com/job/test-job/42/'
         }
 
         process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
@@ -659,7 +659,7 @@ class TestProcessJenkinsEdgeCases(unittest.TestCase):
             'job_name': 'test-job',
             'build_number': 42,
             'status': 'SUCCESS',
-            'url': 'https://jenkins.example.com/job/test-job/42/'
+            'url': 'https://jenkins1.example.com/job/test-job/42/'
         }
 
         process_jenkins_build(build_info, db_request_id=1, req_id='test-123')
@@ -729,7 +729,7 @@ Finished: FAILURE"""
         build_info = {
             'job_name': 'test-job',
             'build_number': 123,
-            'build_url': 'https://jenkins.example.com/job/test-job/123/',
+            'build_url': 'https://jenkins1.example.com/job/test-job/123/',
             'status': 'FAILURE',
             'duration_ms': 45000,
             'timestamp': '2024-01-01T12:00:00Z',

@@ -2,27 +2,27 @@
   "instances": [
     {
       "jenkins_url": "https://jenkins1.example.com",
-      "jenkins_user": "admin",
-      "jenkins_api_token": "your_jenkins_1_api_token_here",
+      "jenkins_user": "jenkins",
+      "jenkins_api_token": "jenkins_user_token",
       "token_encoding": "plain",
-      "jenkins_webhook_secret": "your_webhook_secret_1",
+      "jenkins_webhook_secret": "webhook_secret_token_1",
       "secret_encoding": "plain",
-      "description": "Main Jenkins instance for Team A (plain text credentials)"
+      "description": "Old Jenkins instance"
     },
     {
       "jenkins_url": "https://jenkins2.example.com",
-      "jenkins_user": "ci-user",
-      "jenkins_api_token": "MTEyNDU2Nzg5MGFiY2RlZmdoaWprbG1ub3BxcnN0dXY=",
+      "jenkins_user": "jenkins",
+      "jenkins_api_token": "jenkins_user_token",
       "token_encoding": "base64",
-      "jenkins_webhook_secret": "bXktc2VjcmV0LXdlYmhvb2stdG9rZW4=",
+      "jenkins_webhook_secret": "webhook_secret_token_2==",
       "secret_encoding": "base64",
-      "description": "Jenkins instance for Team B (base64 encoded credentials)"
+      "description": "DAS Jenkins instance"
     },
     {
       "jenkins_url": "https://jenkins3.example.com",
-      "jenkins_user": "deploy-user",
-      "jenkins_api_token": "your_jenkins_3_api_token_here",
-      "description": "Jenkins instance for Team C (no webhook secret, plain text token)"
+      "jenkins_user": "jenkins",
+      "jenkins_api_token": "jenkins_user_token",
+      "description": "Jenkins instance (no webhook secret, plain text token)"
     }
   ],
   "_comment": "Note: token_encoding and secret_encoding are optional and default to 'plain'. Set to 'base64' to decode credentials. Use: echo -n 'your_token' | base64 to encode."

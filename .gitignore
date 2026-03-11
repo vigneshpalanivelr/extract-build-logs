@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+jenkins_instances.json
 
 # Distribution / packaging
 .Python
@@ -136,13 +137,16 @@ celerybeat.pid
 
 # Environments
 .env
+.env_bkp*
 .envrc
 .venv
 env/
 venv/
+log-extractor/
 ENV/
 env.bak/
 venv.bak/
+data*.csv
 
 # Spyder project settings
 .spyderproject

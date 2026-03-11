@@ -1,6 +1,6 @@
 # GitLab & Jenkins Pipeline Log Extraction System
 
-A production-ready webhook server that automatically extracts and stores pipeline logs from GitLab and Jenkins with comprehensive error handling, retry logic, and structured metadata. Supports parallel execution blocks and API posting.
+A webhook server that automatically extracts and stores pipeline logs from GitLab and Jenkins with comprehensive error handling, retry logic, structured metadata and logging. Supports parallel execution blocks and API posting to BFA service to analyze and get the recomended solution.
 
 ## Table of Contents
 
@@ -64,58 +64,58 @@ STREAM_CHUNK_SIZE=8192      # Streaming chunk size in bytes
 ### System Architecture Diagram
 
 ```mermaid
-flowchart TB
-    subgraph Sources["CI/CD Sources"]
-        direction LR
-        GL[GitLab Pipelines]
-        JK[Jenkins Builds]
+graph TB
+    subgraph "Build Source"
+        GPIPE[Pipeline Events]
+        JPIPE[Pipeline Failure]
     end
 
-    WH[Webhook Listener :8000]
-
-    subgraph Parse["Event Parsing"]
-        direction LR
-        GLP[GitLab Parser]
-        JKP[Jenkins Parser]
+    subgraph "Webhook Server (Port 8000)"
+        WH[Webhook Listener<br/>FastAPI Server]
+        VAL[Webhook Validator<br/>Secret Token Check]
+        PARSE[Pipeline Extractor<br/>Event Parser]
     end
 
-    subgraph Fetch["Log Fetching"]
-        direction LR
-        GLF[GitLab API]
-        JKF[Jenkins API]
+    subgraph "Processing Layer"
+        FETCH[Log Fetcher<br/>GitLab API Client]
+        RETRY[Error Handler<br/>Retry Logic]
     end
 
-    ERR[Error Extraction]
+    subgraph "Storage Layer"
+        STORE[Storage Manager<br/>File System]
+        META[Metadata Files<br/>JSON]
+        LOGS[Log Files<br/>.log]
+    end
 
-    API[API Poster<br/>JWT Auth]
+    subgraph "Configuration"
+        CONFIG[Config Loader<br/>Environment Variables]
+    end
 
-    BFA[BFA API Endpoint]
+    GPIPE -->|POST /webhook/gitlab| WH
+    JPIPE -->|POST /webhook/jenkins| WH
+    WH --> VAL
+    VAL -->|Valid| PARSE
+    PARSE -->|Extract Info| FETCH
+    FETCH -.->|On Error| RETRY
+    RETRY -.->|Retry| FETCH
+    FETCH --> STORE
+    STORE --> META
+    STORE --> LOGS
+    CONFIG -.->|Configuration| WH
+    CONFIG -.->|Configuration| FETCH
+    CONFIG -.->|Configuration| STORE
 
-    SAVE[Optional File Storage]
-
-    GL -->|webhook| WH
-    JK -->|webhook| WH
-    WH --> GLP
-    WH --> JKP
-    GLP --> GLF
-    JKP --> JKF
-    GLF --> ERR
-    JKF --> ERR
-    ERR --> API
-    API -->|POST| BFA
-    API -.->|dual mode| SAVE
-
-    style GL fill:#e8f4ea,stroke:#9db5a0,stroke-width:2px
-    style JK fill:#fff4e6,stroke:#e6c599,stroke-width:2px
     style WH fill:#a8d5ba,stroke:#6b9e78,stroke-width:3px
-    style GLP fill:#b3d9ff,stroke:#6ba8e6
-    style JKP fill:#ffd699,stroke:#e6a84d
-    style GLF fill:#b3d9ff,stroke:#6ba8e6
-    style JKF fill:#ffd699,stroke:#e6a84d
-    style ERR fill:#ffb3d9,stroke:#e66ba8,stroke-width:2px
-    style API fill:#a8d5ba,stroke:#6b9e78,stroke-width:2px
-    style BFA fill:#d4f4dd,stroke:#9bcca8,stroke-width:3px
-    style SAVE fill:#d9b3ff,stroke:#a86be6
+    style VAL fill:#c1e1c1,stroke:#7eb07e
+    style PARSE fill:#b3d9ff,stroke:#6ba8e6
+    style FETCH fill:#ffd699,stroke:#e6a84d
+    style RETRY fill:#ffb3b3,stroke:#e66b6b
+    style STORE fill:#d9b3ff,stroke:#a86be6
+    style META fill:#e6ccff,stroke:#b380e6
+    style LOGS fill:#f0d9ff,stroke:#c699e6
+    style CONFIG fill:#c5ccd4,stroke:#8b95a1
+    style GPIPE fill:#f0f7f2,stroke:#b0c5b3
+    style JPIPE fill:#f0f7f2,stroke:#b0c5b3
 ```
 
 ### Data Flow Diagram
@@ -164,11 +164,12 @@ sequenceDiagram
 
 ### Prerequisites
 
-- **Python 3.8+** or **Docker** (Docker recommended for production)
-- GitLab instance (GitLab.com)
-- GitLab Personal Access Token with `api` scope
+- **Python 3.8+** or **Docker**
+- GitLab instance (git.example.com)
+- GitLab Personal Access Token with `api` scope for jenkins user
+- Jenkins instance details in `jenkins_instances.json`
 
-### Docker Deployment (Recommended)
+### Docker Deployment
 
 **1. Create configuration file:**
 ```bash
@@ -185,12 +186,12 @@ vi .env  # Edit GITLAB_URL and GITLAB_TOKEN
 **3. Verify it's running:**
 ```bash
 ./manage_container.py status
-curl http://localhost:8000/health
+curl http://build-server-10:8000/health
 ```
 
-**Your webhook endpoints are now available:**
-- GitLab: `http://your-server:8000/webhook/gitlab`
-- Jenkins: `http://your-server:8000/webhook/jenkins`
+**Webhook endpoints are now available at:**
+- GitLab: `http://build-server-10:8000/webhook/gitlab`
+- Jenkins: `http://build-server-10:8000/webhook/jenkins`
 
 **Complete Docker guide:** [DOCUMENTATION.md - Docker Operations](DOCUMENTATION.md#23-docker-operations)
 
@@ -219,7 +220,7 @@ python src/webhook_listener.py
 
 **4. Verify:**
 ```bash
-curl http://localhost:8000/health
+curl http://build-server-10:8000/health
 ```
 
 </details>
@@ -230,12 +231,11 @@ curl http://localhost:8000/health
 
 ```bash
 # Required
-GITLAB_URL=https://gitlab.com
-GITLAB_TOKEN=your_gitlab_token_here
+GITLAB_URL=https://gitlab.example.com
+GITLAB_TOKEN=jenkins_user_token_for_gitlab
 
 # Optional (with defaults)
 WEBHOOK_PORT=8000
-WEBHOOK_SECRET=your_webhook_secret
 LOG_OUTPUT_DIR=./logs
 LOG_LEVEL=INFO
 ```
@@ -244,14 +244,13 @@ LOG_LEVEL=INFO
 
 **1. Save only failed pipeline logs:**
 ```bash
-LOG_SAVE_PIPELINE_STATUS=failed,canceled
+LOG_SAVE_PIPELINE_STATUS=failed
 LOG_SAVE_METADATA_ALWAYS=true
 ```
 
 **2. Enable API posting:**
 ```bash
 BFA_HOST=bfa-server.example.com
-BFA_SECRET_KEY=your_bfa_secret_key
 API_POST_ENABLED=true
 API_POST_SAVE_TO_FILE=false  # API only, no file storage
 ```
@@ -259,10 +258,9 @@ API_POST_SAVE_TO_FILE=false  # API only, no file storage
 **3. Jenkins integration (single instance):**
 ```bash
 JENKINS_ENABLED=true
-JENKINS_URL=https://jenkins.example.com
-JENKINS_USER=your_username
-JENKINS_API_TOKEN=your_jenkins_token
-JENKINS_WEBHOOK_SECRET=your_jenkins_webhook_secret
+JENKINS_URL=https://jenkins1.example.com
+JENKINS_USER=jenkins
+JENKINS_API_TOKEN=jenkins_token
 ```
 
 **4. Jenkins integration (multiple instances):**
@@ -273,18 +271,21 @@ Create `jenkins_instances.json` in the project root:
   "instances": [
     {
       "jenkins_url": "https://jenkins1.example.com",
-      "username": "jenkins_user1",
-      "api_token": "token_for_jenkins1"
+      "jenkins_user": "jenkins",
+      "jenkins_api_token": "jenkins_token",
+      "description": "Old Jenkins instance for MPE and others"
     },
     {
       "jenkins_url": "https://jenkins2.example.com",
-      "username": "jenkins_user2",
-      "api_token": "token_for_jenkins2"
+      "jenkins_user": "jenkins",
+      "jenkins_api_token": "jenkins_token",
+      "description": "DAS Jenkins instance"
     },
     {
       "jenkins_url": "https://jenkins3.example.com",
-      "username": "jenkins_user3",
-      "api_token": "token_for_jenkins3"
+      "jenkins_user": "jenkins",
+      "jenkins_api_token": "jenkins_token",
+      "description": "DAS Jenkins instance"
     }
   ]
 }
@@ -293,7 +294,6 @@ Create `jenkins_instances.json` in the project root:
 Then in `.env`:
 ```bash
 JENKINS_ENABLED=true
-JENKINS_WEBHOOK_SECRET=your_jenkins_webhook_secret
 # No need for JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
 # Credentials are loaded from jenkins_instances.json
 ```
@@ -326,6 +326,6 @@ For detailed documentation on all features, configuration options, operations, a
 ---
 
 **Quick Links:**
-- [Health Check](http://localhost:8000/health) - Server health status
-- [API Docs (Swagger)](http://localhost:8000/docs) - Interactive API documentation
-- [Monitoring Dashboard](http://localhost:8000/monitor/summary) - Statistics and metrics
+- [Health Check](http://build-server-10:8000/health) - Server health status
+- [API Docs (Swagger)](http://build-server-10:8000/docs) - Interactive API documentation
+- [Monitoring Dashboard](http://build-server-10:8000/monitor/summary) - Statistics and metrics

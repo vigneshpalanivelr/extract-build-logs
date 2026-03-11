@@ -45,12 +45,12 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_load_with_minimum_required_config(self):
         """Test loading with only required environment variables."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
 
-        self.assertEqual(config.gitlab_url, 'https://gitlab.com')
+        self.assertEqual(config.gitlab_url, 'https://gitlab.example.com')
         self.assertEqual(config.gitlab_token, 'glpat-1234567890')
         self.assertEqual(config.webhook_port, 8000)  # Default
         self.assertEqual(config.log_output_dir, './logs/pipeline-logs')  # Default
@@ -69,7 +69,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_load_missing_gitlab_token(self):
         """Test that missing GITLAB_TOKEN raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
 
         with self.assertRaises(ValueError) as context:
             ConfigLoader.load()
@@ -78,16 +78,16 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_gitlab_url_trailing_slash_removal(self):
         """Test that trailing slash is removed from GitLab URL."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com/'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com/'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
 
-        self.assertEqual(config.gitlab_url, 'https://gitlab.com')
+        self.assertEqual(config.gitlab_url, 'https://gitlab.example.com')
 
     def test_webhook_port_custom_value(self):
         """Test loading custom webhook port."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['WEBHOOK_PORT'] = '9000'
 
@@ -97,7 +97,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_webhook_port_invalid_too_low(self):
         """Test that port number below 1 raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['WEBHOOK_PORT'] = '0'
 
@@ -109,7 +109,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_webhook_port_invalid_too_high(self):
         """Test that port number above 65535 raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['WEBHOOK_PORT'] = '65536'
 
@@ -120,7 +120,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_level_valid_values(self):
         """Test valid log level values."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         for level in ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']:
@@ -130,7 +130,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_level_case_insensitive(self):
         """Test that log level is converted to uppercase."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_LEVEL'] = 'debug'
 
@@ -140,7 +140,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_level_invalid(self):
         """Test that invalid log level raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_LEVEL'] = 'INVALID'
 
@@ -151,7 +151,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_save_pipeline_status_parsing(self):
         """Test parsing of pipeline status filter."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_SAVE_PIPELINE_STATUS'] = 'failed,canceled,skipped'
 
@@ -161,7 +161,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_save_pipeline_status_default(self):
         """Test default value for pipeline status filter."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -170,7 +170,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_save_projects_parsing(self):
         """Test parsing of project ID whitelist."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_SAVE_PROJECTS'] = '123,456,789'
 
@@ -180,7 +180,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_exclude_projects_parsing(self):
         """Test parsing of project ID blacklist."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_EXCLUDE_PROJECTS'] = '999,888'
 
@@ -190,7 +190,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_log_save_metadata_always_boolean_parsing(self):
         """Test boolean parsing for log_save_metadata_always."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         # Test truthy values
@@ -207,7 +207,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_enabled_default(self):
         """Test API POST is disabled by default."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -216,7 +216,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_enabled_with_bfa_host(self):
         """Test API POST configuration with BFA_HOST."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['API_POST_ENABLED'] = 'true'
         os.environ['BFA_HOST'] = 'bfa-server.example.com'
@@ -229,7 +229,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_enabled_without_bfa_host_raises_error(self):
         """Test that API_POST_ENABLED without BFA_HOST raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['API_POST_ENABLED'] = 'true'
 
@@ -240,7 +240,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_timeout_validation(self):
         """Test API POST timeout validation."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['API_POST_ENABLED'] = 'true'
         os.environ['BFA_HOST'] = 'bfa-server.example.com'
@@ -264,7 +264,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_jenkins_disabled_by_default(self):
         """Test Jenkins is disabled by default."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -273,23 +273,23 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_jenkins_enabled_with_full_config(self):
         """Test Jenkins configuration with all required settings."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['JENKINS_ENABLED'] = 'true'
-        os.environ['JENKINS_URL'] = 'https://jenkins.example.com/'
+        os.environ['JENKINS_URL'] = 'https://jenkins1.example.com/'
         os.environ['JENKINS_USER'] = 'jenkins-user'
         os.environ['JENKINS_API_TOKEN'] = 'jenkins-token-123'
 
         config = ConfigLoader.load()
 
         self.assertTrue(config.jenkins_enabled)
-        self.assertEqual(config.jenkins_url, 'https://jenkins.example.com')  # Trailing slash removed
+        self.assertEqual(config.jenkins_url, 'https://jenkins1.example.com')  # Trailing slash removed
         self.assertEqual(config.jenkins_user, 'jenkins-user')
         self.assertEqual(config.jenkins_api_token, 'jenkins-token-123')
 
     def test_jenkins_enabled_missing_url(self):
         """Test that JENKINS_ENABLED without JENKINS_URL raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['JENKINS_ENABLED'] = 'true'
 
@@ -300,10 +300,10 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_jenkins_url_invalid_protocol(self):
         """Test that invalid Jenkins URL protocol raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['JENKINS_ENABLED'] = 'true'
-        os.environ['JENKINS_URL'] = 'ftp://jenkins.example.com'
+        os.environ['JENKINS_URL'] = 'ftp://jenkins1.example.com'
         os.environ['JENKINS_USER'] = 'user'
         os.environ['JENKINS_API_TOKEN'] = 'token'
 
@@ -315,10 +315,10 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_jenkins_enabled_missing_user(self):
         """Test that JENKINS_ENABLED without JENKINS_USER raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['JENKINS_ENABLED'] = 'true'
-        os.environ['JENKINS_URL'] = 'https://jenkins.example.com'
+        os.environ['JENKINS_URL'] = 'https://jenkins1.example.com'
 
         with self.assertRaises(ValueError) as context:
             ConfigLoader.load()
@@ -327,10 +327,10 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_jenkins_enabled_missing_api_token(self):
         """Test that JENKINS_ENABLED without JENKINS_API_TOKEN raises ValueError."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['JENKINS_ENABLED'] = 'true'
-        os.environ['JENKINS_URL'] = 'https://jenkins.example.com'
+        os.environ['JENKINS_URL'] = 'https://jenkins1.example.com'
         os.environ['JENKINS_USER'] = 'jenkins-user'
 
         with self.assertRaises(ValueError) as context:
@@ -340,7 +340,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_error_context_lines_custom_values(self):
         """Test custom error context line settings."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['ERROR_CONTEXT_LINES_BEFORE'] = '100'
         os.environ['ERROR_CONTEXT_LINES_AFTER'] = '20'
@@ -352,7 +352,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_error_context_lines_defaults(self):
         """Test default error context line settings."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -362,7 +362,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_validate_valid_config(self):
         """Test validation of a valid configuration."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -372,7 +372,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_validate_invalid_gitlab_url_protocol(self):
         """Test validation fails for invalid GitLab URL protocol."""
-        os.environ['GITLAB_URL'] = 'ftp://gitlab.com'
+        os.environ['GITLAB_URL'] = 'ftp://git.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -385,7 +385,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_validate_short_gitlab_token(self):
         """Test validation fails for too short GitLab token."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'short'
 
         config = ConfigLoader.load()
@@ -398,7 +398,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_retry_settings(self):
         """Test retry attempt and delay settings."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['RETRY_ATTEMPTS'] = '5'
         os.environ['RETRY_DELAY'] = '10'
@@ -410,7 +410,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_webhook_secret_optional(self):
         """Test that webhook secret is optional."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -425,7 +425,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_bfa_secret_key_optional(self):
         """Test that BFA secret key is optional when API posting is disabled."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -434,7 +434,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_url_none_when_bfa_host_not_set(self):
         """Test that API POST URL is None when BFA_HOST is not set."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -443,7 +443,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_list_parsing_with_spaces(self):
         """Test that list parsing handles spaces correctly."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_SAVE_PIPELINE_STATUS'] = 'failed , canceled , skipped'
 
@@ -454,7 +454,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_list_parsing_empty_string(self):
         """Test that empty string results in empty list."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['LOG_SAVE_PROJECTS'] = ''
 
@@ -464,7 +464,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_retry_enabled_default(self):
         """Test API POST retry is enabled by default."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -473,7 +473,7 @@ class TestConfigLoader(unittest.TestCase):
 
     def test_api_post_save_to_file_default(self):
         """Test API POST save to file is disabled by default."""
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
 
         config = ConfigLoader.load()
@@ -500,7 +500,7 @@ class TestConfigLoader(unittest.TestCase):
             json.dump(instances_data, f)
 
         try:
-            os.environ['GITLAB_URL'] = 'https://gitlab.com'
+            os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
             os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
             os.environ['JENKINS_ENABLED'] = 'true'
             # Note: NOT setting JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
@@ -525,7 +525,7 @@ class TestConfigLoader(unittest.TestCase):
         if os.path.exists('jenkins_instances.json'):
             os.remove('jenkins_instances.json')
 
-        os.environ['GITLAB_URL'] = 'https://gitlab.com'
+        os.environ['GITLAB_URL'] = 'https://gitlab.example.com'
         os.environ['GITLAB_TOKEN'] = 'glpat-1234567890'
         os.environ['JENKINS_ENABLED'] = 'true'
         # Not setting JENKINS_URL, JENKINS_USER, JENKINS_API_TOKEN
@@ -648,8 +648,8 @@ class TestConfigLoaderHelpers(unittest.TestCase):
     def test_load_jenkins_config_enabled(self):
         """Test _load_jenkins_config with full Jenkins configuration."""
         os.environ['JENKINS_ENABLED'] = 'yes'
-        os.environ['JENKINS_URL'] = 'https://jenkins.example.com/'
-        os.environ['JENKINS_USER'] = 'admin'
+        os.environ['JENKINS_URL'] = 'https://jenkins1.example.com/'
+        os.environ['JENKINS_USER'] = 'jenkins'
         os.environ['JENKINS_API_TOKEN'] = 'token123'
         os.environ['JENKINS_WEBHOOK_SECRET'] = 'webhook_secret'
 
@@ -657,8 +657,8 @@ class TestConfigLoaderHelpers(unittest.TestCase):
 
         self.assertTrue(result['jenkins_enabled'])
         # URL should have trailing slash removed
-        self.assertEqual(result['jenkins_url'], 'https://jenkins.example.com')
-        self.assertEqual(result['jenkins_user'], 'admin')
+        self.assertEqual(result['jenkins_url'], 'https://jenkins1.example.com')
+        self.assertEqual(result['jenkins_user'], 'jenkins')
         self.assertEqual(result['jenkins_api_token'], 'token123')
         self.assertEqual(result['jenkins_webhook_secret'], 'webhook_secret')
 

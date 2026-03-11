@@ -23,9 +23,9 @@ class TestJenkinsExtractor(unittest.TestCase):
         payload = {
             'job_name': 'my-job',
             'build_number': 123,
-            'build_url': 'http://jenkins.example.com/job/my-job/123',
+            'build_url': 'http://jenkins1.example.com/job/my-job/123',
             'status': 'SUCCESS',
-            'jenkins_url': 'http://jenkins.example.com',
+            'jenkins_url': 'http://jenkins1.example.com',
             'timestamp': '2024-01-01T12:00:00Z'
         }
 
@@ -34,7 +34,7 @@ class TestJenkinsExtractor(unittest.TestCase):
         self.assertEqual(result['job_name'], 'my-job')
         self.assertEqual(result['build_number'], 123)
         self.assertEqual(result['status'], 'SUCCESS')
-        self.assertEqual(result['jenkins_url'], 'http://jenkins.example.com')
+        self.assertEqual(result['jenkins_url'], 'http://jenkins1.example.com')
 
     def test_extract_webhook_data_custom_format_minimal(self):
         """Test custom format with minimal required fields."""
@@ -55,11 +55,11 @@ class TestJenkinsExtractor(unittest.TestCase):
         payload = {
             'job': {
                 'name': 'my-pipeline',
-                'url': 'http://jenkins.example.com/job/my-pipeline'
+                'url': 'http://jenkins1.example.com/job/my-pipeline'
             },
             'build': {
                 'number': 789,
-                'url': 'http://jenkins.example.com/job/my-pipeline/789',
+                'url': 'http://jenkins1.example.com/job/my-pipeline/789',
                 'status': 'FAILURE'
             }
         }
@@ -77,7 +77,7 @@ class TestJenkinsExtractor(unittest.TestCase):
             'name': 'test-job',
             'build': {
                 'number': 111,
-                'url': 'http://jenkins.example.com/job/test-job/111',
+                'url': 'http://jenkins1.example.com/job/test-job/111',
                 'status': 'UNSTABLE'
             }
         }
@@ -117,7 +117,7 @@ class TestJenkinsExtractor(unittest.TestCase):
         payload = {
             'job_name': 'custom-job',
             'build_number': '333',
-            'build_url': 'http://example.com/job/333',
+            'build_url': 'http://jenkins1.example.com/job/333',
             'status': 'SUCCESS'
         }
 
@@ -131,8 +131,8 @@ class TestJenkinsExtractor(unittest.TestCase):
     def test_extract_generic_webhook_format(self):
         """Test _extract_generic_webhook_format method."""
         payload = {
-            'job': {'name': 'webhook-job', 'url': 'http://jenkins.example.com/job/webhook-job'},
-            'build': {'number': '444', 'url': 'http://example.com/build/444', 'status': 'ABORTED'}
+            'job': {'name': 'webhook-job', 'url': 'http://jenkins1.example.com/job/webhook-job'},
+            'build': {'number': '444', 'url': 'http://jenkins1.example.com/build/444', 'status': 'ABORTED'}
         }
 
         result = self.extractor._extract_generic_webhook_format(payload)
@@ -145,7 +145,7 @@ class TestJenkinsExtractor(unittest.TestCase):
         """Test _extract_notification_format method."""
         payload = {
             'name': 'notify-job',
-            'build': {'number': '555', 'url': 'http://example.com/555', 'status': 'SUCCESS'}
+            'build': {'number': '555', 'url': 'http://jenkins1.example.com/555', 'status': 'SUCCESS'}
         }
 
         result = self.extractor._extract_notification_format(payload)
@@ -159,7 +159,7 @@ class TestJenkinsExtractor(unittest.TestCase):
         payload = {
             'job_name': 'fallback-test',
             'build_number': 666,
-            'build_url': 'http://example.com/666',
+            'build_url': 'http://jenkins1.example.com/666',
             'status': 'FAILURE'
         }
 

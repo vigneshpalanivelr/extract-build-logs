@@ -131,7 +131,7 @@ class TestTokenManager(unittest.TestCase):
         subject = "gitlab_project_789"
         additional_claims = {
             'user': 'test-user',
-            'role': 'admin',
+            'role': 'john.doe',
             'custom_field': 'value'
         }
 
@@ -139,7 +139,7 @@ class TestTokenManager(unittest.TestCase):
 
         payload = self.manager.validate_token(token)
         self.assertEqual(payload['user'], 'test-user')
-        self.assertEqual(payload['role'], 'admin')
+        self.assertEqual(payload['role'], 'john.doe')
         self.assertEqual(payload['custom_field'], 'value')
 
     def test_generate_token_unique_jti(self):

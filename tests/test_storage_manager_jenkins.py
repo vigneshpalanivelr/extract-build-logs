@@ -137,8 +137,8 @@ class TestJenkinsStorageManager:
         build_data = {
             "job_name": "ci-build",
             "build_number": 123,
-            "build_url": "https://jenkins.example.com/job/ci-build/123/",
-            "jenkins_url": "https://jenkins.example.com",
+            "build_url": "https://jenkins1.example.com/job/ci-build/123/",
+            "jenkins_url": "https://jenkins1.example.com",
             "status": "FAILED",
             "duration_ms": 45000,
             "stages": [
@@ -231,7 +231,7 @@ class TestJenkinsStorageManager:
             build_number=555,
             build_data={
                 "status": "FAILED",
-                "build_url": "https://jenkins.example.com/job/full-build/555/",
+                "build_url": "https://jenkins1.example.com/job/full-build/555/",
                 "stages": [
                     {"name": "Build", "status": "SUCCESS"},
                     {"name": "Test", "status": "FAILED"}

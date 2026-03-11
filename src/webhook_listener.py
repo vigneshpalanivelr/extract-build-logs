@@ -652,47 +652,6 @@ async def webhook_gitlab_handler(
                     "request_id": req_id
                 }
 
-            # Check if "external" stage is present (indicates external analysis already running)
-            # When external scripts update commit status, they add "external" stage which triggers
-            # redundant webhook events. Skip processing entirely to avoid unnecessary API calls.
-            stages = pipeline_info.get('stages', [])
-            if 'external' in stages:
-                logger.info(
-                    "Pipeline %s skipped - 'external' stage detected (redundant webhook event)",
-                    pipeline_info['pipeline_id'],
-                    extra={
-                        'pipeline_id': pipeline_info['pipeline_id'],
-                        'project_id': pipeline_info['project_id'],
-                        'project_name': pipeline_info.get('project_name', 'unknown'),
-                        'stages': stages,
-                        'reason': 'external_stage_present'
-                    }
-                )
-
-                # Track skipped request
-                monitor.track_request(
-                    pipeline_info=pipeline_info,
-                    status=RequestStatus.SKIPPED,
-                    event_type=x_gitlab_event,
-                    client_ip=client_host
-                )
-
-                duration_ms = int((time.time() - start_time) * 1000)
-                logger.info("Pipeline skipped", extra={
-                    'pipeline_id': pipeline_info['pipeline_id'],
-                    'project_id': pipeline_info['project_id'],
-                    'project_name': pipeline_info.get('project_name', 'unknown'),
-                    'reason': 'external_stage_present',
-                    'duration_ms': duration_ms
-                })
-
-                return {
-                    "status": "skipped",
-                    "message": "External stage detected - redundant webhook event",
-                    "pipeline_id": pipeline_info['pipeline_id'],
-                    "request_id": req_id
-                }
-
             # Track queued request
             db_request_id = monitor.track_request(
                 pipeline_info=pipeline_info,
@@ -797,9 +756,9 @@ async def webhook_jenkins_handler(
         {
             "job_name": "my-pipeline",
             "build_number": 123,
-            "build_url": "https://jenkins.example.com/job/my-pipeline/123/",
+            "build_url": "https://jenkins1.example.com/job/my-pipeline/123/",
             "status": "FAILURE",
-            "jenkins_url": "https://jenkins.example.com"
+            "jenkins_url": "https://jenkins1.example.com"
         }
 
     Returns:
@@ -2055,31 +2014,6 @@ def process_pipeline_event(
     project_id = pipeline_info['project_id']
     project_name = pipeline_info.get('project_name', 'unknown')
 
-    # Safety check: Skip if external stage is present (should be caught by webhook handler)
-    # This is a defensive check in case the event bypassed the early validation
-    stages = pipeline_info.get('stages', [])
-    if 'external' in stages:
-        logger.warning(
-            "Pipeline %s has 'external' stage but reached background processing (should have been skipped earlier)",
-            pipeline_id,
-            extra={
-                'pipeline_id': pipeline_id,
-                'project_id': project_id,
-                'project_name': project_name,
-                'stages': stages,
-                'reason': 'external_stage_present_late_detection'
-            }
-        )
-        # Mark as completed (skipped)
-        monitor.update_request(
-            request_id=db_request_id,
-            status=RequestStatus.COMPLETED,
-            processing_time=0.0,
-            success_count=0,
-            error_count=0
-        )
-        return
-
     logger.info("Starting pipeline log extraction for '%s'", project_name, extra={
         'pipeline_id': pipeline_id,
         'project_id': project_id,
@@ -2130,9 +2064,30 @@ def process_pipeline_event(
         fetch_duration_ms = int((time.time() - fetch_start) * 1000)
         job_count = len(all_logs)
 
-        # Post to API if enabled
+        # Check if "external" stage is present (indicates external analysis already running)
+        # When external scripts update commit status, they add "external" stage which triggers
+        # redundant webhook events. Skip API posting to avoid duplicate BFA analysis.
+        stages = pipeline_info.get('stages', [])
+        has_external_stage = 'external' in stages
+
+        # Post to API if enabled (skip if external stage present)
         save_start = time.time()
-        api_post_success = _post_pipeline_logs_to_api(pipeline_info, all_logs, project_name)
+        api_post_success = False
+
+        if has_external_stage:
+            logger.info(
+                "Skipping API post for pipeline %s - 'external' stage detected (redundant webhook event)",
+                pipeline_id,
+                extra={
+                    'pipeline_id': pipeline_id,
+                    'project_id': project_id,
+                    'project_name': project_name,
+                    'stages': stages,
+                    'reason': 'external_stage_present'
+                }
+            )
+        else:
+            api_post_success = _post_pipeline_logs_to_api(pipeline_info, all_logs, project_name)
 
         # Determine if we should save to files and do so
         success_count = 0
