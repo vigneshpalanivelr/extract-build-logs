@@ -7,11 +7,13 @@
 """
 
 import os
+import re
+import math
 import json
 import time
 import hashlib
 import logging
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 
 import chromadb
 import requests
@@ -28,6 +30,29 @@ OLLAMA_HTTP_URL = os.getenv("OLLAMA_HTTP_URL", "http://127.0.0.1:99999")
 OLLAMA_CLI_PATH = os.getenv("OLLAMA_CLI_PATH", "ollama")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "granite-embedding")
 SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.78"))
+
+# Normalization limits
+MAX_ERROR_LINES = int(os.getenv("MAX_ERROR_LINES", "80"))
+MAX_ERROR_CHARS = int(os.getenv("MAX_ERROR_CHARS", "4000"))
+
+# Length penalty for similarity scoring
+LENGTH_PENALTY_ALPHA = float(os.getenv("LENGTH_PENALTY_ALPHA", "0.15"))
+
+# Regex: strip "Line 123: " prefixes added by log-extraction service
+_LINE_PREFIX_RE = re.compile(r"^Line\s+\d+:\s*", re.IGNORECASE)
+
+# Error-signal keywords (case-insensitive match)
+_ERROR_KEYWORDS = re.compile(
+    r"(?i)\b("
+    r"error|err!|fail|fatal|exception|traceback|panic|denied|timeout|refused|"
+    r"killed|oom|segfault|abort|critical|undefined.reference|cannot.find|"
+    r"no.such.file|permission|not.found|exit.code|returned.\d+|"
+    r"compilation.error|build.failed|npm.err|syntaxerror|"
+    r"importerror|modulenotfounderror|keyerror|typeerror|"
+    r"valueerror|attributeerror|runtimeerror|nullpointer|"
+    r"outofmemory|stacktrace|coredump|signal.\d+"
+    r")\b"
+)
 
 # Logging
 logger = logging.getLogger("vector_db")
@@ -144,6 +169,64 @@ class VectorDBClient:
         return None
 
     # -----------------------
+    # Text normalization
+    # -----------------------
+    def _normalize_error_text(self, error_text: str) -> str:
+        """
+        Normalize error text before embedding to improve match quality.
+
+        Steps:
+        1. Strip 'Line NNN:' prefixes (added by log-extraction, not useful for matching)
+        2. Remove empty / whitespace-only lines
+        3. Deduplicate exact-match lines (keep first occurrence)
+        4. Prioritize lines containing error-signal keywords
+        5. Cap at MAX_ERROR_LINES and MAX_ERROR_CHARS
+
+        This ensures embeddings are driven by actual error signals rather than
+        pages of build output, preventing oversized logs from creating generic
+        embeddings that match everything.
+        """
+        lines = error_text.split("\n")
+
+        # Step 1+2: Strip line-number prefixes and remove empty lines
+        cleaned = []
+        for line in lines:
+            stripped = _LINE_PREFIX_RE.sub("", line).strip()
+            if stripped:
+                cleaned.append(stripped)
+
+        # Step 3: Deduplicate (preserve order, keep first occurrence)
+        seen = set()
+        deduped = []
+        for line in cleaned:
+            if line not in seen:
+                seen.add(line)
+                deduped.append(line)
+
+        # Step 4: Separate error-signal lines from context lines
+        error_lines = []
+        context_lines = []
+        for line in deduped:
+            if _ERROR_KEYWORDS.search(line):
+                error_lines.append(line)
+            else:
+                context_lines.append(line)
+
+        # Step 5: Fill slots — error-signal lines first, then context
+        selected = error_lines[:MAX_ERROR_LINES]
+        remaining_slots = MAX_ERROR_LINES - len(selected)
+        if remaining_slots > 0:
+            selected.extend(context_lines[:remaining_slots])
+
+        result = "\n".join(selected)
+
+        # Hard character cap
+        if len(result) > MAX_ERROR_CHARS:
+            result = result[:MAX_ERROR_CHARS]
+
+        return result
+
+    # -----------------------
     # ID helper
     # -----------------------
     def _generate_id(self, error_text: str) -> str:
@@ -170,9 +253,15 @@ class VectorDBClient:
         Only BEST valid match is considered.
         """
 
-        # Compute embedding for the query
+        # Keep original length for length-penalty calculation
+        original_query_len = len(error_text)
+
+        # Normalize query text before embedding (same normalization as save)
+        normalized_query = self._normalize_error_text(error_text)
+
+        # Compute embedding for the normalized query
         if embedding_vector is None:
-            vector = self._get_embedding(error_text)
+            vector = self._get_embedding(normalized_query)
             if vector is None:
                 logger.info("[VectorDB] No embedding produced, skipping lookup.")
                 return None
@@ -198,41 +287,65 @@ class VectorDBClient:
         docs = res.get("documents", [[]])[0]
         metas = res.get("metadatas", [[]])[0]
 
-        # Build list of valid candidates
-        candidates = []
+        # Build list of valid candidates with length-penalized scoring
+        candidates = []  # (adjusted_sim, raw_sim, index)
         for i, dist in enumerate(distances):
             doc = docs[i]
-            meta = metas[i]
+            meta = metas[i] or {}
 
             # Skip empty / padded chroma entries
             if not doc or doc.strip() == "" or doc.strip() == "(empty fix)":
                 continue
 
             try:
-                sim = 1 - dist
+                raw_sim = 1 - dist
             except Exception:
                 continue
 
-            candidates.append((sim, i))
+            # Length-aware penalty: if stored error_text is much longer than
+            # query, the match is less trustworthy because the embedding is
+            # more generic. See ENHANCED_VECTOR_DB.md for detailed examples.
+            stored_error = meta.get("error_text") or ""
+            stored_len = len(stored_error)
+            query_len = original_query_len
+
+            if stored_len > 0 and query_len > 0:
+                length_ratio = max(stored_len, query_len) / max(min(stored_len, query_len), 1)
+                penalty = 1.0 / (1.0 + LENGTH_PENALTY_ALPHA * math.log(max(length_ratio, 1.0)))
+                adjusted_sim = raw_sim * penalty
+            else:
+                adjusted_sim = raw_sim
+                penalty = 1.0
+
+            logger.debug(
+                f"[VectorDB] Candidate {i}: raw_sim={raw_sim:.4f}, "
+                f"stored_len={stored_len}, query_len={query_len}, "
+                f"penalty={penalty:.4f}, adjusted_sim={adjusted_sim:.4f}"
+            )
+            candidates.append((adjusted_sim, raw_sim, i))
 
         # No valid candidates
         if not candidates:
             return None
 
-        # From all candidates → pick BEST similarity only
+        # From all candidates -> pick BEST adjusted similarity only
         candidates.sort(reverse=True, key=lambda x: x[0])
-        best_sim, idx = candidates[0]
+        best_adjusted, best_raw, idx = candidates[0]
 
-        logger.info(f"============== Best Similarity Score: {best_sim} =============")
+        logger.info(
+            f"============== Best Similarity Score: {best_adjusted:.4f} "
+            f"(raw: {best_raw:.4f}) ============="
+        )
 
-        # Validate threshold
-        if best_sim <= similarity_threshold:
+        # Validate threshold using adjusted score
+        if best_adjusted <= similarity_threshold:
             return None
 
         # Return in your required format
         return {
             "fix_text": docs[idx],
-            "confidence": best_sim,
+            "confidence": best_adjusted,
+            "raw_confidence": best_raw,
             "source": "vector_db",
             "metadata": metas[idx],
         }
@@ -266,8 +379,12 @@ class VectorDBClient:
                 flat_metadata[key] = str(value)
 
         try:
-            # Always embed based on error_text
-            embedding = self._get_embedding(error_text)
+            # Normalize error text for embedding quality; keep original in metadata
+            normalized_error = self._normalize_error_text(error_text)
+            flat_metadata["original_error_length"] = len(error_text)
+            flat_metadata["normalized"] = "true"
+
+            embedding = self._get_embedding(normalized_error)
             if not embedding:
                 logging.warning("[VectorDB] No embedding available, skipping save.")
                 return False
@@ -294,6 +411,213 @@ class VectorDBClient:
         except Exception as e:
             logging.exception(f"[VectorDB] save_fix_to_db() failed: {e}")
             return False
+
+    # -----------------------
+    # Fix management methods
+    # -----------------------
+    def get_all_fixes(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        search: Optional[str] = None,
+        status: Optional[str] = None,
+        approver: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Fetch all fixes with optional filtering and pagination.
+        ChromaDB doesn't support complex queries, so we filter in Python.
+        """
+        all_docs = self.collection.get(include=["documents", "metadatas"])
+        ids = all_docs.get("ids", [])
+        docs = all_docs.get("documents", [])
+        metas = all_docs.get("metadatas", [])
+
+        # Build result list with filtering
+        fixes = []
+        for i, doc_id in enumerate(ids):
+            meta = metas[i] or {}
+            error_text = meta.get("error_text", "")
+            fix_text = docs[i] or ""
+
+            # Apply filters
+            if search and search.lower() not in error_text.lower() and search.lower() not in fix_text.lower():
+                continue
+            if status and meta.get("status", "") != status:
+                continue
+            if approver and meta.get("approved_by", "") != approver:
+                continue
+
+            fixes.append({
+                "id": doc_id,
+                "error_text": error_text,
+                "error_text_length": len(error_text),
+                "fix_text": fix_text,
+                "status": meta.get("status", "unknown"),
+                "approved_by": meta.get("approved_by", ""),
+                "normalized": meta.get("normalized", "false"),
+                "metadata": meta,
+            })
+
+        # Sort by error_text_length descending (largest first for visibility)
+        fixes.sort(key=lambda x: x["error_text_length"], reverse=True)
+
+        total = len(fixes)
+        start = (page - 1) * page_size
+        end = start + page_size
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "fixes": fixes[start:end],
+        }
+
+    def get_fix_by_id(self, fix_id: str) -> Optional[Dict[str, Any]]:
+        """Get a single fix by its ID."""
+        try:
+            result = self.collection.get(ids=[fix_id], include=["documents", "metadatas"])
+            ids = result.get("ids", [])
+            if not ids:
+                return None
+            meta = (result.get("metadatas") or [{}])[0] or {}
+            doc = (result.get("documents") or [""])[0] or ""
+            return {
+                "id": fix_id,
+                "error_text": meta.get("error_text", ""),
+                "error_text_length": len(meta.get("error_text", "")),
+                "fix_text": doc,
+                "status": meta.get("status", "unknown"),
+                "approved_by": meta.get("approved_by", ""),
+                "normalized": meta.get("normalized", "false"),
+                "metadata": meta,
+            }
+        except Exception:
+            return None
+
+    def update_fix(self, fix_id: str, fix_text: Optional[str] = None, metadata_updates: Optional[Dict] = None) -> bool:
+        """
+        Update a fix's document and/or metadata. Re-embeds with normalized error text.
+        """
+        try:
+            existing = self.collection.get(ids=[fix_id], include=["documents", "metadatas"])
+            if not existing.get("ids"):
+                return False
+
+            current_doc = (existing.get("documents") or [""])[0] or ""
+            current_meta = (existing.get("metadatas") or [{}])[0] or {}
+
+            new_doc = fix_text if fix_text is not None else current_doc
+            new_meta = dict(current_meta)
+            if metadata_updates:
+                new_meta.update(metadata_updates)
+
+            # Re-embed with normalized error text
+            error_text = new_meta.get("error_text", "")
+            normalized = self._normalize_error_text(error_text)
+            embedding = self._get_embedding(normalized)
+
+            new_meta["normalized"] = "true"
+            new_meta["original_error_length"] = len(error_text)
+
+            update_kwargs = {
+                "ids": [fix_id],
+                "documents": [new_doc],
+                "metadatas": [new_meta],
+            }
+            if embedding:
+                update_kwargs["embeddings"] = [embedding]
+
+            self.collection.update(**update_kwargs)
+            return True
+        except Exception as e:
+            logger.exception(f"[VectorDB] update_fix failed: {e}")
+            return False
+
+    def delete_fix(self, fix_id: str) -> bool:
+        """Delete a fix by ID."""
+        try:
+            self.collection.delete(ids=[fix_id])
+            return True
+        except Exception as e:
+            logger.exception(f"[VectorDB] delete_fix failed: {e}")
+            return False
+
+    def reindex_all(self) -> Dict[str, Any]:
+        """
+        Re-embed all entries using normalized error text.
+        Returns summary of reindexed/failed/skipped counts.
+        """
+        all_docs = self.collection.get(include=["documents", "metadatas"])
+        ids = all_docs.get("ids", [])
+        docs = all_docs.get("documents", [])
+        metas = all_docs.get("metadatas", [])
+
+        reindexed = 0
+        failed = 0
+        skipped = 0
+
+        for i, doc_id in enumerate(ids):
+            meta = metas[i] or {}
+            error_text = meta.get("error_text", "")
+            if not error_text:
+                skipped += 1
+                continue
+
+            normalized = self._normalize_error_text(error_text)
+            embedding = self._get_embedding(normalized)
+            if not embedding:
+                failed += 1
+                continue
+
+            try:
+                updated_meta = dict(meta)
+                updated_meta["normalized"] = "true"
+                updated_meta["original_error_length"] = len(error_text)
+
+                self.collection.update(
+                    ids=[doc_id],
+                    embeddings=[embedding],
+                    metadatas=[updated_meta],
+                )
+                reindexed += 1
+            except Exception as e:
+                logger.warning(f"[VectorDB] Failed to reindex {doc_id}: {e}")
+                failed += 1
+
+        return {
+            "total": len(ids),
+            "reindexed": reindexed,
+            "failed": failed,
+            "skipped": skipped,
+        }
+
+    def audit_oversized(self, max_chars: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        List entries where error_text exceeds max_chars, sorted by length descending.
+        Helps identify problematic entries that may cause generic matching.
+        """
+        threshold = max_chars or MAX_ERROR_CHARS
+        all_docs = self.collection.get(include=["documents", "metadatas"])
+        ids = all_docs.get("ids", [])
+        docs = all_docs.get("documents", [])
+        metas = all_docs.get("metadatas", [])
+
+        oversized = []
+        for i, doc_id in enumerate(ids):
+            meta = metas[i] or {}
+            error_text = meta.get("error_text", "")
+            if len(error_text) > threshold:
+                oversized.append({
+                    "id": doc_id,
+                    "error_text_length": len(error_text),
+                    "error_text_preview": error_text[:200] + "..." if len(error_text) > 200 else error_text,
+                    "fix_text_preview": (docs[i] or "")[:200],
+                    "status": meta.get("status", "unknown"),
+                    "approved_by": meta.get("approved_by", ""),
+                    "normalized": meta.get("normalized", "false"),
+                })
+
+        oversized.sort(key=lambda x: x["error_text_length"], reverse=True)
+        return oversized
 
     # -----------------------
     # Passthrough helpers (so helper scripts can keep using collection methods)

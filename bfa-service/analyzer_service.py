@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Any
 
 import redis
 import jwt
-from fastapi import FastAPI, Header, HTTPException, Request, Depends, Form
+from fastapi import FastAPI, Header, HTTPException, Request, Depends, Form, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -947,6 +947,110 @@ def _save_manual_fix_entry(entry: Dict[str, Any], source: str = "manual_api") ->
             "status": "failed",
             "reason": str(e),
         }
+
+# -------------------------------------------------------------------
+# API: Fix Management — browse, search, edit, delete, reindex, audit
+# -------------------------------------------------------------------
+
+
+class UpdateFixPayload(BaseModel):
+    fix_text: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@app.get("/api/fixes")
+async def list_fixes(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: Optional[str] = Query(None, description="Text search in error_text and fix_text"),
+    status: Optional[str] = Query(None, description="Filter by status (approved, edited, manual)"),
+    approver: Optional[str] = Query(None, description="Filter by approved_by"),
+    claims=Depends(require_jwt),
+):
+    """
+    List all stored fixes with optional filtering and pagination.
+    Results sorted by error_text_length descending (largest first).
+    """
+    return db.get_all_fixes(
+        page=page,
+        page_size=page_size,
+        search=search,
+        status=status,
+        approver=approver,
+    )
+
+
+@app.get("/api/fixes/audit")
+async def audit_fixes(
+    max_chars: int = Query(4000, ge=100, description="Char threshold for oversized detection"),
+    claims=Depends(require_jwt),
+):
+    """
+    Find oversized entries that may cause generic matching problems.
+    Returns entries where error_text exceeds max_chars, sorted by length descending.
+    """
+    entries = db.audit_oversized(max_chars=max_chars)
+    return {
+        "threshold": max_chars,
+        "oversized_count": len(entries),
+        "entries": entries,
+    }
+
+
+@app.get("/api/fixes/{fix_id}")
+async def get_fix_detail(fix_id: str, claims=Depends(require_jwt)):
+    """Get full details of a single fix by ID."""
+    result = db.get_fix_by_id(fix_id)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"Fix '{fix_id}' not found")
+    return result
+
+
+@app.put("/api/fixes/{fix_id}")
+async def update_fix_endpoint(
+    fix_id: str,
+    payload: UpdateFixPayload,
+    claims=Depends(require_jwt),
+):
+    """
+    Update a fix's text and/or metadata. Re-embeds with normalized error text.
+    """
+    existing = db.get_fix_by_id(fix_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Fix '{fix_id}' not found")
+
+    ok = db.update_fix(
+        fix_id=fix_id,
+        fix_text=payload.fix_text,
+        metadata_updates=payload.metadata,
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update fix")
+    return {"status": "ok", "id": fix_id}
+
+
+@app.delete("/api/fixes/{fix_id}")
+async def delete_fix_endpoint(fix_id: str, claims=Depends(require_jwt)):
+    """Delete a fix from the vector database by ID."""
+    existing = db.get_fix_by_id(fix_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Fix '{fix_id}' not found")
+
+    ok = db.delete_fix(fix_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to delete fix")
+    return {"status": "ok", "id": fix_id}
+
+
+@app.post("/api/fixes/reindex")
+async def reindex_fixes(claims=Depends(require_jwt)):
+    """
+    Re-embed all entries using normalized error text.
+    Run this once after deploying normalization to fix existing oversized entries.
+    """
+    result = db.reindex_all()
+    return {"status": "ok", **result}
+
 
 # -------------------------------------------------------------------
 #  Slack: Events + Interactivity
