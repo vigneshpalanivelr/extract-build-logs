@@ -1,16 +1,13 @@
 #!/home/build-failure-analyzer/build-failure-analyzer/.venv/bin/python3
 
 import json
-import os
 from typing import List, Dict, Any
 
-from dotenv import load_dotenv
 from vector_db import VectorDBClient  # reuse embedding + Chroma client
 from logging_config import get_logger
+from config_loader import config as cfg
 
-load_dotenv()
-
-DOMAIN_CONTEXT_COLLECTION = os.getenv("DOMAIN_CONTEXT_COLLECTION", "pipeline_context")
+DOMAIN_CONTEXT_COLLECTION = cfg.domain_context_collection
 
 logger = get_logger("pipeline_context_rag")
 

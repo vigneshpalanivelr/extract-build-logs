@@ -4,17 +4,23 @@
 Small utility for CI agents to generate short-lived JWTs for the Analyzer.
 This should run inside your corporate network and keep the private key secure.
 """
+import sys
+import os
 import jwt
 import time
-import os
 
-from dotenv import load_dotenv
+# Add src/ to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-load_dotenv()
+from logging_config import setup_logging, get_logger
+from config_loader import config as cfg
 
-PRIVATE_KEY_PATH = os.getenv("JWT_PRIVATE_KEY_PATH", "/mount/keys/private.pem")
-ISSUER = os.getenv("JWT_ISS", "corp-ci-system")
-AUD = os.getenv("JWT_AUD", "build-failure-analyzer")
+setup_logging(log_dir=cfg.bfa_log_dir, log_level=cfg.bfa_log_level)
+logger = get_logger("jwt_sign_helper")
+
+PRIVATE_KEY_PATH = cfg.jwt_private_key_path
+ISSUER = cfg.jwt_iss
+AUD = cfg.jwt_audience
 
 
 def generate_token(subject: str, ttl_seconds: int = 60):

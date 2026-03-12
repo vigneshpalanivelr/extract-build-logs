@@ -2,24 +2,36 @@
 
 #!/usr/bin/env python3
 
-import os
 import json
 from flask import Flask, request, jsonify
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from dotenv import load_dotenv
 
 from vector_db import init_vector_db, save_fix_to_db
 from slack_helper import redis_conn, get_fix, store_fix
+from config_loader import init_config
+from logging_config import setup_logging, get_logger
 
-load_dotenv()
+# Load and validate configuration
+cfg = init_config(mode="reviewer")
 
-FLASK_HOST = os.getenv("FLASK_HOST", "0.0.0.0")
-FLASK_PORT = int(os.getenv("FLASK_PORT", "5001"))
-FLASK_DEBUG = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+setup_logging(
+    log_dir=cfg.bfa_log_dir,
+    log_level=cfg.bfa_log_level,
+)
+logger = get_logger("slack_reviewer")
+
+FLASK_HOST = cfg.flask_host
+FLASK_PORT = cfg.flask_port
+FLASK_DEBUG = cfg.flask_debug
+
+logger.info("=" * 70)
+logger.info("Slack Reviewer (Flask) — Initializing")
+logger.info("=" * 70)
+logger.info("Flask host: %s, port: %s, debug: %s", FLASK_HOST, FLASK_PORT, FLASK_DEBUG)
 
 app = Flask(__name__)
-client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
+client = WebClient(token=cfg.slack_bot_token)
 db = init_vector_db()  # initialize once
 
 

@@ -6,7 +6,6 @@
 - save_fix_to_db(): function wrapper
 """
 
-import os
 import re
 import math
 import json
@@ -17,26 +16,23 @@ import chromadb
 import requests
 import subprocess
 from logging_config import get_logger
+from config_loader import config as cfg
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# Environment / defaults
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "/home/build-failure-analyzer/data/chroma")
-CHROMA_COLLECTION = os.getenv("CHROMA_COLLECTION", "fix_embeddings")
-OLLAMA_HTTP_URL = os.getenv("OLLAMA_HTTP_URL", "http://127.0.0.1:99999")
-OLLAMA_CLI_PATH = os.getenv("OLLAMA_CLI_PATH", "ollama")
-OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "granite-embedding")
-SIMILARITY_THRESHOLD = float(os.getenv("SIMILARITY_THRESHOLD", "0.78"))
+# Configuration from .env
+CHROMA_DB_PATH = cfg.chroma_db_path
+CHROMA_COLLECTION = cfg.chroma_collection
+OLLAMA_HTTP_URL = cfg.ollama_http_url
+OLLAMA_CLI_PATH = cfg.ollama_cli_path
+OLLAMA_EMBED_MODEL = cfg.ollama_embed_model
+SIMILARITY_THRESHOLD = cfg.similarity_threshold
 
 # Normalization limits
-MAX_ERROR_LINES = int(os.getenv("MAX_ERROR_LINES", "80"))
-MAX_ERROR_CHARS = int(os.getenv("MAX_ERROR_CHARS", "4000"))
+MAX_ERROR_LINES = cfg.max_error_lines
+MAX_ERROR_CHARS = cfg.max_error_chars
 
 # Length penalty for similarity scoring
-LENGTH_PENALTY_ALPHA = float(os.getenv("LENGTH_PENALTY_ALPHA", "0.15"))
-OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "30"))
+LENGTH_PENALTY_ALPHA = cfg.length_penalty_alpha
+OLLAMA_TIMEOUT = cfg.ollama_timeout
 
 # Regex: strip "Line 123: " prefixes added by log-extraction service
 _LINE_PREFIX_RE = re.compile(r"^Line\s+\d+:\s*", re.IGNORECASE)

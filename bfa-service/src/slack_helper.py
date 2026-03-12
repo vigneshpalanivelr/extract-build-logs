@@ -1,27 +1,24 @@
 #!/home/build-failure-analyzer/build-failure-analyzer/.venv/bin/python3
 
-import os
 import json
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
-from dotenv import load_dotenv
 import redis
 from llm_openwebui_client import call_llm
+from config_loader import config as cfg
 
-load_dotenv()
-
-client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
-channel = os.getenv("SLACK_CHANNEL")
+client = WebClient(token=cfg.slack_bot_token)
+channel = cfg.slack_channel
 
 # Connect to Redis
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-REDIS_DB = int(os.getenv("REDIS_DB", 0))
+REDIS_HOST = cfg.redis_host
+REDIS_PORT = cfg.redis_port
+REDIS_DB = cfg.redis_db
 
 # Slack message configuration
-SLACK_MAX_BLOCK_LEN = int(os.getenv("SLACK_MAX_BLOCK_LEN", "2500"))
-ERROR_SUMMARY_MAX_CHARS = int(os.getenv("ERROR_SUMMARY_MAX_CHARS", "300"))
+SLACK_MAX_BLOCK_LEN = cfg.slack_max_block_len
+ERROR_SUMMARY_MAX_CHARS = cfg.error_summary_max_chars
 
 redis_conn = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 

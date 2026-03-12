@@ -2,8 +2,14 @@
 import sys
 import os
 
-# Add src/ to path so we can import vector_db
+# Add src/ to path so we can import vector_db, config_loader, logging_config
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+from logging_config import setup_logging, get_logger
+from config_loader import config as cfg
+
+setup_logging(log_dir=cfg.bfa_log_dir, log_level=cfg.bfa_log_level)
+logger = get_logger("vector_helper")
 
 import argparse
 from textwrap import indent

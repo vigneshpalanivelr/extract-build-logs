@@ -11,7 +11,6 @@ import jwt
 from fastapi import FastAPI, Header, HTTPException, Request, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from dotenv import load_dotenv
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from slack_sdk.signature import SignatureVerifier
@@ -26,6 +25,7 @@ from slack_helper import client as slack, redis_conn
 from vector_db import init_vector_db
 from llm_openwebui_client import analyze_with_llm, LLMInfraError
 from logging_config import setup_logging, get_logger, set_request_id, clear_request_id
+from config_loader import init_config
 
 # Domain RAG imports
 from pipeline_context_rag import (
@@ -35,13 +35,16 @@ from pipeline_context_rag import (
     lookup_domain_matches,
 )
 
-load_dotenv()
+# -------------------------------------------------------------------
+# Load and validate configuration from .env
+# -------------------------------------------------------------------
+cfg = init_config(mode="analyzer")
 
 # -------------------------------------------------------------------
 # Slack / Auth setup
 # -------------------------------------------------------------------
-SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
-SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
+SLACK_SIGNING_SECRET = cfg.slack_signing_secret
+SLACK_BOT_TOKEN = cfg.slack_bot_token
 sig_verifier = SignatureVerifier(signing_secret=SLACK_SIGNING_SECRET)
 client = WebClient(token=SLACK_BOT_TOKEN)
 
@@ -51,24 +54,34 @@ client = WebClient(token=SLACK_BOT_TOKEN)
 app = FastAPI(title="Build Failure Analyzer (Unified)")
 
 setup_logging(
-    log_dir=os.getenv("BFA_LOG_DIR", "./logs"),
-    log_level=os.getenv("BFA_LOG_LEVEL", "INFO"),
+    log_dir=cfg.bfa_log_dir,
+    log_level=cfg.bfa_log_level,
 )
 logger = get_logger("analyzer")
+
+logger.info("=" * 70)
+logger.info("Build Failure Analyzer — Initializing")
+logger.info("=" * 70)
+logger.info("Configuration loaded from .env")
+logger.info("BFA_HOST: %s, BFA_PORT: %s", cfg.bfa_host, cfg.bfa_port)
+logger.info("Log level: %s, Log dir: %s", cfg.bfa_log_level, cfg.bfa_log_dir)
+logger.info("ChromaDB path: %s", cfg.chroma_db_path)
+logger.info("Ollama URL: %s, Model: %s", cfg.ollama_http_url, cfg.ollama_embed_model)
+logger.info("Similarity threshold: %s, Length penalty alpha: %s",
+            cfg.similarity_threshold, cfg.length_penalty_alpha)
 
 # -------------------------------------------------------------------
 # Redis + Resolver
 # -------------------------------------------------------------------
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+REDIS_URL = cfg.redis_url
 r = redis.from_url(REDIS_URL, decode_responses=True)
 resolver = ResolverAgent(redis_client=r)
 
 # -------------------------------------------------------------------
 # JWT setup
 # -------------------------------------------------------------------
-PUBLIC_KEY_PATH = os.getenv("JWT_PUBLIC_KEY_PATH",
-                            "/home/build-failure-analyzer/public.pem")
-JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "build-failure-analyzer")
+PUBLIC_KEY_PATH = cfg.jwt_public_key_path
+JWT_AUDIENCE = cfg.jwt_audience
 with open(PUBLIC_KEY_PATH, "r") as f:
     JWT_PUBLIC_KEY = f.read()
 
@@ -79,21 +92,16 @@ SME_FIX_KEY = "sme:fix:{}"
 # -------------------------------------------------------------------
 # Vector DB + Domain RAG configuration
 # -------------------------------------------------------------------
-# NOTE: CHROMA_DB_PATH is shared with fix_embeddings; we create a separate
-# collection "pipeline_context" in the same persistence dir.
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", "/var/lib/redis/bfa-data")
-DOMAIN_CONTEXT_PATH = os.getenv(
-    "DOMAIN_CONTEXT_PATH",
-    "/home/build-failure-analyzer/build-failure-analyzer/context/domain_context_patterns.json",
-)
+CHROMA_DB_PATH = cfg.chroma_db_path
+DOMAIN_CONTEXT_PATH = cfg.domain_context_path
 
-DOMAIN_RAG_THRESHOLD = float(os.getenv("DOMAIN_RAG_THRESHOLD", "0.55"))
-DOMAIN_RAG_TOP_K = int(os.getenv("DOMAIN_RAG_TOP_K", "5"))
-VECTOR_TOP_K = int(os.getenv("VECTOR_TOP_K", "5"))
-AI_FIX_TTL = int(os.getenv("AI_FIX_TTL", "86400"))
-ERROR_SUMMARY_MAX_CHARS = int(os.getenv("ERROR_SUMMARY_MAX_CHARS", "300"))
-BFA_HOST = os.getenv("BFA_HOST", "0.0.0.0")
-BFA_PORT = int(os.getenv("BFA_PORT", "8000"))
+DOMAIN_RAG_THRESHOLD = cfg.domain_rag_threshold
+DOMAIN_RAG_TOP_K = cfg.domain_rag_top_k
+VECTOR_TOP_K = cfg.vector_top_k
+AI_FIX_TTL = cfg.ai_fix_ttl
+ERROR_SUMMARY_MAX_CHARS = cfg.error_summary_max_chars
+BFA_HOST = cfg.bfa_host
+BFA_PORT = cfg.bfa_port
 
 _domain_ctx_db: Any = None
 _domain_ctx_loaded: bool = False

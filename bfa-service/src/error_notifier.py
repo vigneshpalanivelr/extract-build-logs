@@ -1,27 +1,20 @@
 import traceback
-import os
 import smtplib
 from email.mime.text import MIMEText
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from fastapi import Request
-from dotenv import load_dotenv
 from logging_config import get_logger
-
-load_dotenv()
+from config_loader import config as cfg
 
 logger = get_logger("error_notifier")
 
 # -------------------------------------------------
 # Slack configuration
 # -------------------------------------------------
-SLACK_TOKEN = os.getenv("SLACK_BOT_TOKEN")
-SLACK_ALERT_EMAILS = [
-    e.strip()
-    for e in os.getenv("ALERT_SLACK_EMAILS", "").split(",")
-    if e.strip()
-]
+SLACK_TOKEN = cfg.slack_bot_token
+SLACK_ALERT_EMAILS = cfg.alert_slack_emails
 
 slack_client = WebClient(token=SLACK_TOKEN)
 
@@ -31,16 +24,12 @@ _SLACK_USER_CACHE = {}
 # -------------------------------------------------
 # Email configuration (NO AUTH)
 # -------------------------------------------------
-SMTP_SERVER = os.getenv("SMTP_SERVER")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
-SMTP_FROM = os.getenv("SMTP_FROM", "bfa-alerts@localhost")
-SMTP_TIMEOUT = int(os.getenv("SMTP_TIMEOUT", "10"))
-TRACEBACK_MAX_CHARS = int(os.getenv("TRACEBACK_MAX_CHARS", "3500"))
-EMAIL_TO = [
-    e.strip()
-    for e in os.getenv("ALERT_EMAIL_TO", "").split(",")
-    if e.strip()
-]
+SMTP_SERVER = cfg.smtp_server
+SMTP_PORT = cfg.smtp_port
+SMTP_FROM = cfg.smtp_from
+SMTP_TIMEOUT = cfg.smtp_timeout
+TRACEBACK_MAX_CHARS = cfg.traceback_max_chars
+EMAIL_TO = cfg.alert_email_to
 
 logger.info("[ErrorNotifier] SMTP_SERVER: %s", SMTP_SERVER)
 logger.info("[ErrorNotifier] EMAIL_TO: %s", EMAIL_TO)

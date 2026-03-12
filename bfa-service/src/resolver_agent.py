@@ -2,25 +2,23 @@
 
 import json
 import hashlib
+import os
 from typing import List, Dict, Optional, Any
 
 import redis
-import os
-from dotenv import load_dotenv
 
 from vector_db import VectorDBClient
 from llm_openwebui_client import call_llm
+from config_loader import config as cfg
+from logging_config import get_logger
 
-load_dotenv()
+logger = get_logger("resolver_agent")
 
 # Path to enterprise infra overview
-GLOBAL_CONTEXT_PATH = os.getenv(
-    "GLOBAL_CONTEXT_PATH",
-    "/home/build-failure-analyzer/build-failure-analyzer/context/infra_overview.md",
-)
-GLOBAL_CONTEXT_MAX_CHARS = int(os.getenv("GLOBAL_CONTEXT_MAX_CHARS", "6000"))
-REDIS_TTL_AI = int(os.getenv("REDIS_TTL_AI", "86400"))
-LLM_GENERATED_CONFIDENCE = float(os.getenv("LLM_GENERATED_CONFIDENCE", "0.6"))
+GLOBAL_CONTEXT_PATH = cfg.global_context_path
+GLOBAL_CONTEXT_MAX_CHARS = cfg.global_context_max_chars
+REDIS_TTL_AI = cfg.redis_ttl_ai
+LLM_GENERATED_CONFIDENCE = cfg.llm_generated_confidence
 
 
 def _load_global_context() -> str:

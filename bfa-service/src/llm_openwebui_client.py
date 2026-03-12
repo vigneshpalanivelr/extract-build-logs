@@ -1,26 +1,23 @@
 #!/home/build-failure-analyzer/build-failure-analyzer/.venv/bin/python3
 
-import os
 import json
 import time
 from typing import Optional
 import requests
 from logging_config import get_logger
+from config_loader import config as cfg
 
 logger = get_logger("llm_openwebui_client")
 
-OPENWEBUI_BASE_URL = os.getenv(
-    "OPENWEBUI_BASE_URL", "https://chat-internal.com").rstrip("/")
-OPENWEBUI_API_KEY = os.getenv("OPENWEBUI_API_KEY")
-OPENWEBUI_MODEL = os.getenv(
-    "OPENWEBUI_MODEL", "anthropic.claude-sonnet-4-20250514-v1:0")
-OPENWEBUI_TIMEOUT = int(os.getenv("OPENWEBUI_TIMEOUT", "60"))
-OPENWEBUI_RETRIES = int(os.getenv("OPENWEBUI_RETRIES", "2"))
-OPENWEBUI_BACKOFF = float(os.getenv("OPENWEBUI_BACKOFF", "0.5"))
+OPENWEBUI_BASE_URL = cfg.openwebui_base_url.rstrip("/")
+OPENWEBUI_API_KEY = cfg.openwebui_api_key
+OPENWEBUI_MODEL = cfg.openwebui_model
+OPENWEBUI_TIMEOUT = cfg.openwebui_timeout
+OPENWEBUI_RETRIES = cfg.openwebui_retries
+OPENWEBUI_BACKOFF = cfg.openwebui_backoff
 
-if not OPENWEBUI_API_KEY:
-    logger.warning(
-        "OPENWEBUI_API_KEY not set — requests will likely be rejected by OpenWebUI if auth is required.")
+logger.debug("LLM client initialized — base_url=%s, model=%s, timeout=%s",
+             OPENWEBUI_BASE_URL, OPENWEBUI_MODEL, OPENWEBUI_TIMEOUT)
 
 
 class LLMInfraError(RuntimeError):

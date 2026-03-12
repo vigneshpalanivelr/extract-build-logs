@@ -6,17 +6,24 @@ Signs tokens locally using RSA private key (kept in DMZ).
 Later, this can be swapped for corp-signed approach without changing analyzer_service.py logic.
 """
 
+import sys
 import os
 import jwt
 import datetime
-from dotenv import load_dotenv
 
-load_dotenv()
+# Add src/ to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-PRIVATE_KEY_PATH = os.getenv("JWT_PRIVATE_KEY_PATH", "/home/build-failure-analyzer/private.pem")
-JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "build-failure-analyzer")
-JWT_ISSUER = os.getenv("JWT_ISSUER", "dmz-analyzer")
-JWT_EXPIRY_MINUTES = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
+from logging_config import setup_logging, get_logger
+from config_loader import config as cfg
+
+setup_logging(log_dir=cfg.bfa_log_dir, log_level=cfg.bfa_log_level)
+logger = get_logger("jwt_dmz_issuer")
+
+PRIVATE_KEY_PATH = cfg.jwt_private_key_path
+JWT_AUDIENCE = cfg.jwt_audience
+JWT_ISSUER = cfg.jwt_issuer
+JWT_EXPIRY_MINUTES = cfg.jwt_expiry_minutes
 
 
 def create_jwt(subject: str, expiry_minutes: int = JWT_EXPIRY_MINUTES) -> str:

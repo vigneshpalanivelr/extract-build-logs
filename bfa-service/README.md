@@ -53,7 +53,31 @@ What makes BFA different is its **self-curating memory**:
 - [Running the System](#running-the-system)
 - [Tech Stack](#tech-stack)
 - [RAG Workflow Diagram](#rag-workflow-diagram)
+  - [When Does It Use Vector DB vs LLM?](#when-does-it-use-vector-db-vs-llm)
+- [Example Output](#example-output)
+- [Configuration & Startup Validation](#configuration--startup-validation)
+  - [Required Variables by Mode](#required-variables-by-mode)
+  - [Startup Error Example](#startup-error-example)
+- [LLM Prompts & Prompt Engineering](#llm-prompts--prompt-engineering)
+  - [System Prompt (Build Error Analysis)](#system-prompt-build-error-analysis)
+  - [Fine-Tuning the Prompts](#fine-tuning-the-prompts)
+  - [Domain Context Patterns](#domain-context-patterns-contextdomain_context_patternsjson)
+- [Script Usage Reference](#script-usage-reference)
+  - [scripts/vector_helper.py — Vector DB Management CLI](#scriptsvector_helperpy--vector-db-management-cli)
+  - [scripts/jwt_dmz_issuer.py — JWT Token Generator (DMZ-side)](#scriptsjwt_dmz_issuerpy--jwt-token-generator-dmz-side)
+  - [scripts/jwt_sign_helper.py — JWT Token Generator (Corp-side)](#scriptsjwt_sign_helperpy--jwt-token-generator-corp-side)
+- [API Reference](#api-reference)
+  - [Build Analysis](#build-analysis)
+  - [Fix Management](#fix-management)
+  - [Slack Integration](#slack-integration)
+  - [Health & Diagnostics](#health--diagnostics)
+- [Fine-Tuning Guide](#fine-tuning-guide)
+  - [Similarity Threshold Tuning](#similarity-threshold-tuning)
+  - [Length Penalty Alpha Tuning](#length-penalty-alpha-tuning)
+  - [Normalization Tuning](#normalization-tuning)
+  - [LLM Tuning](#llm-tuning)
 - [Future Enhancements](#future-enhancements)
+- [Summary](#summary)
 
 ---
 
@@ -392,9 +416,10 @@ Where `ALPHA = 0.15` (configurable via `LENGTH_PENALTY_ALPHA` env var).
 
 ### How Normalization and Penalty Work Together
 
-- **Normalization** fixes embedding quality for new entries and re-indexed old entries. After normalization, most entries are between 500-4000 chars, reducing length variance dramatically.
-- **Length penalty** provides immediate protection against old oversized entries that haven't been re-indexed yet. It works without re-indexing because it operates on the stored `error_text` metadata, not the embedding itself.
-- After running the re-index endpoint, both mechanisms reinforce each other: normalized text produces better embeddings AND reduced length variance means the penalty rarely activates (which is ideal).
+The two mechanisms complement each other and solve different parts of the problem:
+
+- **Length penalty** = immediate safety net (works on day 1, no migration needed)
+- **Normalization** = long-term quality fix (better embeddings going forward + after re-index)
 
 ```
 Timeline:
@@ -403,79 +428,124 @@ Timeline:
   Day 1+: Both mechanisms active, penalty rarely triggers (entries are similar length)
 ```
 
+```mermaid
+flowchart LR
+    subgraph "Day 0 — Immediate Protection"
+        A["Deploy code"] --> B["Length penalty\nactive on ALL lookups"]
+        B --> C["Oversized entries\npenalized immediately"]
+    end
+
+    subgraph "Day 0 — Quality Improvement"
+        D["POST /api/fixes/reindex"] --> E["All entries re-embedded\nwith normalized text"]
+        E --> F["Better embeddings\nfor all stored fixes"]
+    end
+
+    subgraph "Day 1+ — Steady State"
+        G["Both mechanisms active"] --> H["Penalty rarely triggers\n(entries similar length)"]
+        G --> I["High-quality embeddings\n(normalized text)"]
+    end
+```
+
 ### Concrete Examples with Before/After Comparisons
 
-#### Example 1: Huge Log Dominating (the original bug)
+#### Example 1: The Problem — Huge Log Dominating
 
-**Stored entry** (15,000 chars — 500 lines of build output + one OOM error):
-```
-fix_text: "Increase Node memory: NODE_OPTIONS=--max-old-space-size=4096"
-```
+**Stored in ChromaDB** (approved by SME last week):
 
-**Query** (100 chars):
-```
-"ERROR: gcc compilation failed\nundefined reference to 'sqrt'"
-```
+| Field | Value |
+|-------|-------|
+| ID | `fix-abc123` |
+| error_text | `"Line 1: Starting build...\nLine 2: npm install...\n...(500 lines)...\nLine 450: FATAL ERROR: heap out of memory\nLine 451: Build failed\n...(200 more lines of stack trace + cleanup output)"` |
+| fix_text | `"Increase Node memory: NODE_OPTIONS=--max-old-space-size=4096"` |
+| error_text length | ~15,000 chars |
 
-| Metric | Before Fix | After Fix |
-|--------|-----------|-----------|
-| Raw similarity | 0.82 | 0.82 |
-| Length ratio | N/A | 150x |
-| Length penalty | N/A (1.0) | 0.57 |
-| Adjusted score | **0.82 (MATCH — wrong fix!)** | **0.47 (REJECTED — correct!)** |
-| Outcome | Returns OOM fix for gcc error | Falls through to LLM for proper gcc fix |
+**Also stored** (approved earlier):
 
-#### Example 2: Correct Same-Length Match (unaffected by changes)
+| Field | Value |
+|-------|-------|
+| ID | `fix-def456` |
+| error_text | `"ERROR: gcc compilation failed\n/src/main.c:42: undefined reference to 'pthread_create'"` |
+| fix_text | `"Add -lpthread to LDFLAGS"` |
+| error_text length | ~120 chars |
 
-**Stored entry** (120 chars):
+**New error comes in:**
 ```
-"ERROR: gcc compilation failed\nundefined reference to 'pthread_create'"
-fix_text: "Add -lpthread to LDFLAGS"
+query: "ERROR: gcc compilation failed\n/src/utils.c:15: undefined reference to 'sqrt'"
+query length: ~100 chars
 ```
 
-**Query** (100 chars):
+**Today (broken) — The huge log's embedding is so broad that it has moderate similarity (0.82) to almost anything:**
+
+| Entry | Raw Similarity | Result |
+|-------|---------------|--------|
+| fix-abc123 (huge log) | 0.82 | **WINS** (above 0.78 threshold) |
+| fix-def456 (gcc error) | 0.80 | Loses to abc123 |
+
+Result: User gets "Increase Node memory" for a gcc linker error. **WRONG FIX!**
+
+**After the fix — Step 1: Normalization strips the query to its core:**
 ```
-"ERROR: gcc compilation failed\nundefined reference to 'sqrt'"
+"ERROR: gcc compilation failed"
+"/src/utils.c:15: undefined reference to 'sqrt'"
+```
+(Line number prefixes removed, only ~80 chars)
+
+**Step 2: Length penalty on the huge entry:**
+
+| Entry | Raw Sim | Length Ratio | Penalty | Adjusted Sim | Above 0.78? |
+|-------|---------|-------------|---------|-------------|-------------|
+| fix-abc123 (15000 chars) | 0.82 | 15000/100 = 150x | 0.57 | 0.82 × 0.57 = **0.47** | **NO** |
+| fix-def456 (120 chars) | 0.80 | 120/100 = 1.2x | 0.97 | 0.80 × 0.97 = **0.78** | **YES** (borderline) |
+
+Result: User correctly gets "Add -lpthread to LDFLAGS" (or similar linker fix). **CORRECT!**
+
+#### Example 2: Same-Length Matches — No Impact
+
+**Stored:**
+```
+error_text: "docker: Error response from daemon: pull access denied for myapp"
+fix_text: "Run docker login registry.internal.com"
+length: ~70 chars
 ```
 
-| Metric | Before Fix | After Fix |
-|--------|-----------|-----------|
-| Raw similarity | 0.92 | 0.92 |
-| Length ratio | N/A | 1.2x |
-| Length penalty | N/A (1.0) | 0.99 |
-| Adjusted score | **0.92 (MATCH)** | **0.91 (MATCH — still works!)** |
-| Outcome | Correct fix returned | Correct fix still returned with negligible penalty |
-
-#### Example 3: Error at End of Long Context (normalization handles this)
-
-**Query** (2000 chars — 10 error lines + 50 context lines):
+**Query:**
 ```
-Line 1: Cloning repository...
-Line 2: Building project...
-... (context lines) ...
-Line 55: FATAL: OOM killed
-Line 56: Process exited with code 137
+"docker: Error response from daemon: pull access denied for backend-api"
+length: ~75 chars
 ```
 
-**Stored entry** (2000 chars — similar structure):
-```
-fix_text: "Increase container memory limit in CI config"
-```
+| Raw Sim | Length Ratio | Penalty | Adjusted Sim |
+|---------|-------------|---------|-------------|
+| 0.92 | 75/70 = 1.07x | 0.99 | **0.91** |
 
-**After normalization**, both become ~200 chars:
-```
-"FATAL: OOM killed\nProcess exited with code 137\nCloning repository...\nBuilding project..."
-```
-(Error lines promoted to top, context fills remaining slots)
+Result: Works exactly as before — penalty is negligible (~1%) for similar-length entries. **No false negatives introduced.**
+
+#### Example 3: Normalization Improving Match Quality
+
+**Stored (after normalization on save):**
+
+| Stage | Text |
+|-------|------|
+| Original | `"Line 1: Starting pipeline...\nLine 2: Cloning repo...\n...\nLine 80: FATAL: OOM killed\nLine 81: Process exited with code 137\nLine 80: FATAL: OOM killed"` (duplicate) |
+| Normalized | `"FATAL: OOM killed\nProcess exited with code 137\nStarting pipeline...\nCloning repo..."` (deduped, error lines first, line prefixes stripped) |
+
+**Query (after normalization on lookup):**
+
+| Stage | Text |
+|-------|------|
+| Original | `"Line 200: Building image...\nLine 250: FATAL: OOM killed\nLine 251: Process exited with code 137"` |
+| Normalized | `"FATAL: OOM killed\nProcess exited with code 137\nBuilding image..."` |
+
+Both normalized forms now focus on the actual error signal (`FATAL: OOM killed`, `exit code 137`). The irrelevant context (Starting pipeline, Cloning repo, Building image) is still present but ranked lower. The embeddings are now driven by the same diagnostic content.
 
 | Metric | Behavior |
 |--------|---------|
-| Length ratio | ~1x (both ~2000 chars original, both ~200 chars normalized) |
+| Length ratio | ~1x (both ~200 chars after normalization) |
 | Penalty | 1.0 (no impact) |
 | Embedding quality | High (both normalized to error signal) |
 | Result | **Correct match — normalization eliminated noise from both sides** |
 
-#### Example 4: Multiple Small Errors vs Single Large Error
+#### Example 4: Error Buried in Test Output
 
 **Stored entry** (300 chars — clean, targeted):
 ```
@@ -499,6 +569,21 @@ Test 195: FAILED - ImportError: No module named 'numpy'
 | Raw similarity | 0.71 (diluted by test output) | 0.95 (error signal matched precisely) |
 | Length penalty | 0.66 (26x ratio) | 0.97 (3x ratio after normalization) |
 | Adjusted score | **0.47 (MISSED)** | **0.92 (MATCHED — correct!)** |
+
+#### Example 5: The Re-index Migration
+
+- **Before re-index**: Old entries have embeddings computed from raw 15,000-char text. The length penalty alone protects against false matches (Example 1).
+- **After running `POST /api/fixes/reindex`**: The same entry's embedding is now computed from the normalized ~2000-char version (just the error-signal lines). Now it matches correctly against related OOM errors AND the length penalty is minimal because both stored and query text are similar length after normalization.
+
+#### Summary Table
+
+| Scenario | Today (broken) | After Fix |
+|----------|---------------|-----------|
+| Short query vs huge stored entry | False match (wrong fix) | Rejected by length penalty |
+| Short query vs correct short entry | Correct match | Correct match (unchanged) |
+| Similar errors, different context lines | May mismatch on context | Normalization focuses on error signal |
+| Error buried in test/build output | Missed (diluted embedding) | Matched (normalization extracts error) |
+| After re-index of old data | N/A | Old entries match properly with new normalized embeddings |
 
 ### Vector DB Environment Variables
 
@@ -904,16 +989,71 @@ See `.env.example` for the full list of configurable variables.
 
 ## RAG Workflow Diagram
 
+```mermaid
+flowchart TD
+    A["CI/CD Pipeline Fails"] --> B["Log Extractor extracts error text"]
+    B --> C["POST /api/analyze"]
+    C --> D["Normalize error text\n(strip prefixes, dedup, prioritize errors)"]
+    D --> E["Embed with Ollama\n(granite-embedding)"]
+    E --> F{"Vector DB Lookup\n(ChromaDB)"}
+
+    F -->|"similarity ≥ 0.78\n(after length penalty)"| G["Return existing fix\n(from approved memory)"]
+    F -->|"similarity < 0.78\nor no match"| H["Query Domain RAG\n(pipeline_context collection)"]
+
+    H --> I["Build LLM prompt\n(error + domain context + infra overview)"]
+    I --> J["Call LLM via OpenWebUI\n(generate new fix suggestion)"]
+    J --> K["Cache AI fix in Redis\n(TTL: 24h)"]
+
+    G --> L["Send to Slack channel\nwith Approve/Edit/Discard buttons"]
+    K --> L
+
+    L --> M{"SME Reviews in Slack"}
+    M -->|"Approve"| N["Save fix to Vector DB\n(normalized + embedded)"]
+    M -->|"Edit"| O["SME modifies fix text\n(Redis edit-mode tracking)"]
+    M -->|"Discard"| P["Drop suggestion\n(not stored)"]
+    O --> N
+
+    N --> Q["Fix available for\nfuture lookups"]
+
+    style A fill:#f9f,stroke:#333
+    style F fill:#ff9,stroke:#333
+    style M fill:#ff9,stroke:#333
+    style N fill:#9f9,stroke:#333
+    style Q fill:#9f9,stroke:#333
 ```
-Flowchart Top -> Down (vertical)
-    A[Pipeline Logs] --> B[Error Extraction]
-    B --> C{Vector DB Lookup}
-    C -->|Found Match| D[Recommend Existing Fix]
-    C -->|No Match| E[LLM Generates New Fix]
-    D --> F[Send to Slack for Review]
-    E --> F
-    F --> G[SME Approves/Edits/Discards]
-    G -->|Approve| H[Persist Fix to Vector DB]
+
+### When Does It Use Vector DB vs LLM?
+
+```mermaid
+flowchart TD
+    START["New Build Error Received"] --> NORM["1. Normalize Error Text"]
+    NORM --> EMBED["2. Generate Embedding\n(Ollama granite-embedding)"]
+    EMBED --> QUERY["3. Query ChromaDB\n(top_k=5 candidates)"]
+
+    QUERY --> CHECK{"Any candidates\nreturned?"}
+    CHECK -->|"No candidates"| LLM_PATH["→ LLM Path"]
+    CHECK -->|"Yes"| SCORE["4. Score each candidate"]
+
+    SCORE --> PENALTY["5. Apply length penalty\npenalty = 1/(1 + α·ln(ratio))"]
+    PENALTY --> ADJUST["6. adjusted_score =\nraw_similarity × penalty"]
+
+    ADJUST --> THRESH{"adjusted_score\n≥ threshold (0.78)?"}
+    THRESH -->|"Yes — DB Match"| DB_RESULT["Return Vector DB Fix\n✓ Fast (no LLM call)\n✓ SME-approved\n✓ High confidence"]
+    THRESH -->|"No — Below threshold"| LLM_PATH
+
+    LLM_PATH --> DOMAIN["7. Query Domain RAG\n(pipeline context patterns)"]
+    DOMAIN --> CONTEXT["8. Load global context\n(infra overview)"]
+    CONTEXT --> PROMPT["9. Build system + user prompt"]
+    PROMPT --> CALL_LLM["10. Call LLM\n(OpenWebUI API)"]
+    CALL_LLM --> CACHE["11. Cache in Redis\n(TTL: 24h)"]
+    CACHE --> LLM_RESULT["Return AI-Generated Fix\n⚠ Needs SME approval\n⚠ Lower confidence"]
+
+    DB_RESULT --> SLACK["Send to Slack for Review"]
+    LLM_RESULT --> SLACK
+
+    style DB_RESULT fill:#9f9,stroke:#333
+    style LLM_RESULT fill:#ff9,stroke:#333
+    style THRESH fill:#ff9,stroke:#333
 ```
 
 ## Example Output
@@ -930,6 +1070,282 @@ Caused by: missing semicolon
 ...
 Fix approved by @sme_user and saved to memory.
 ```
+
+## Configuration & Startup Validation
+
+BFA uses a centralized `config_loader.py` that loads all environment variables from `.env` at startup and validates them before the service starts. If any required variable is missing, the service exits with a clear error message.
+
+### Required Variables by Mode
+
+| Variable | Analyzer | Reviewer | Script |
+|----------|----------|----------|--------|
+| `SLACK_BOT_TOKEN` | Required | Required | Required |
+| `SLACK_CHANNEL` | Required | — | — |
+| `OPENWEBUI_API_KEY` | Required | — | — |
+| `OPENWEBUI_BASE_URL` | Required | — | — |
+| `JWT_PUBLIC_KEY_PATH` | Required | — | — |
+| `REDIS_URL` or `REDIS_HOST` | Required | Required | — |
+| `CHROMA_DB_PATH` | Required | Required | — |
+| `OLLAMA_HTTP_URL` | Required | — | — |
+| `OLLAMA_EMBED_MODEL` | Required | — | — |
+
+### Startup Error Example
+```
+======================================================================
+CONFIGURATION ERROR — Cannot start BFA service
+======================================================================
+  - SLACK_BOT_TOKEN is required
+  - OPENWEBUI_API_KEY is required
+  - JWT_PUBLIC_KEY_PATH file not found: /home/build-failure-analyzer/public.pem
+======================================================================
+
+Please check your .env file. See .env.example for reference.
+```
+
+---
+
+## LLM Prompts & Prompt Engineering
+
+### System Prompt (Build Error Analysis)
+
+The resolver agent constructs a two-part prompt:
+
+**System prompt** (sent as system message to LLM):
+```
+You are a CI/CD build failure expert. Analyze the following build error
+and provide a clear, actionable fix.
+
+Rules:
+- Be specific and actionable
+- Include exact commands or config changes
+- Reference file paths when relevant
+- Keep fixes under 500 characters
+- Do not suggest "contact support" or vague advice
+
+{global_context}         ← Enterprise CI/CD infra overview (from file)
+{domain_context}         ← Domain RAG matches (from pipeline_context collection)
+```
+
+**User prompt** (the actual error):
+```
+Build error from project "{project_name}":
+
+{normalized_error_text}
+
+Provide a fix for this error. Return JSON:
+{
+  "fix": "the actionable fix text",
+  "confidence": 0.0-1.0,
+  "category": "build|deploy|test|infra|dependency"
+}
+```
+
+### Fine-Tuning the Prompts
+
+| What to change | Where | Effect |
+|---------------|-------|--------|
+| System prompt template | `src/resolver_agent.py` → `_build_prompts()` | Changes overall LLM behavior and response format |
+| Global context file | `GLOBAL_CONTEXT_PATH` env var → points to `.md` file | Adds enterprise-specific CI/CD knowledge |
+| Domain patterns | `context/domain_context_patterns.json` | Adds pipeline-specific heuristics via RAG |
+| Response format | `src/resolver_agent.py` → JSON schema in prompt | Changes structure of LLM output |
+| Temperature | `LLM_DEFAULT_TEMPERATURE` in `.env` | Higher = more creative; Lower = more deterministic |
+| Max tokens | `LLM_ANALYZE_MAX_TOKENS` in `.env` | Limits response length |
+
+### Domain Context Patterns (`context/domain_context_patterns.json`)
+
+This file contains pipeline-specific failure → solution heuristics that are indexed into a separate ChromaDB collection (`pipeline_context`). When a build error comes in, the system queries this collection for relevant domain knowledge and includes matches in the LLM prompt.
+
+```json
+{
+  "patterns": [
+    {
+      "failure": "npm ERR! peer dependency conflict",
+      "solution": "Use --legacy-peer-deps flag or update package.json to resolve version conflicts",
+      "category": "dependency"
+    },
+    {
+      "failure": "docker: permission denied while trying to connect to Docker daemon",
+      "solution": "Add user to docker group: sudo usermod -aG docker $USER",
+      "category": "infra"
+    }
+  ]
+}
+```
+
+---
+
+## Script Usage Reference
+
+### `scripts/vector_helper.py` — Vector DB Management CLI
+
+```bash
+# List all stored fixes
+python3 scripts/vector_helper.py
+
+# List with details (shows error_text preview, fix_text, metadata)
+python3 scripts/vector_helper.py --verbose
+
+# Delete fixes by ID (with safety preview)
+python3 scripts/vector_helper.py --id fix-abc123 fix-def456 --preview
+python3 scripts/vector_helper.py --id fix-abc123 fix-def456  # actual delete
+
+# Delete fixes by error text substring
+python3 scripts/vector_helper.py --error "gcc" --preview
+python3 scripts/vector_helper.py --error "gcc"  # actual delete
+
+# Edit a fix (interactive — prompts for new text)
+python3 scripts/vector_helper.py --edit fix-abc123
+
+# Edit a fix (inline — no prompt)
+python3 scripts/vector_helper.py --edit fix-abc123 --fix "Updated fix: run cmake with -DPTHREAD=ON"
+
+# Delete ALL entries (requires preview first for safety)
+python3 scripts/vector_helper.py --delete-all --preview
+python3 scripts/vector_helper.py --delete-all
+```
+
+### `scripts/jwt_dmz_issuer.py` — JWT Token Generator (DMZ-side)
+
+```bash
+# Generate JWT for a CI agent (default subject: jenkins-runner-01)
+python3 scripts/jwt_dmz_issuer.py
+
+# Generate JWT for specific subject
+python3 scripts/jwt_dmz_issuer.py my-ci-agent
+
+# Output: eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+### `scripts/jwt_sign_helper.py` — JWT Token Generator (Corp-side)
+
+```bash
+# Generate JWT with default subject and TTL
+python3 scripts/jwt_sign_helper.py
+
+# Generate JWT with custom subject and TTL
+python3 scripts/jwt_sign_helper.py --subject jenkins-runner-1 --ttl 120
+```
+
+---
+
+## API Reference
+
+### Build Analysis
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| POST | `/api/analyze` | Analyze build errors and get fix suggestions | JWT |
+| POST | `/api/rate-my-mr` | Rate a merge request for quality | JWT |
+
+### Fix Management
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| GET | `/api/fixes` | List all fixes (paginated, filterable) | JWT |
+| GET | `/api/fixes/{id}` | Get single fix details | JWT |
+| PUT | `/api/fixes/{id}` | Update fix text (re-embeds automatically) | JWT |
+| DELETE | `/api/fixes/{id}` | Delete fix permanently | JWT |
+| GET | `/api/fixes/audit` | List oversized entries needing attention | JWT |
+| POST | `/api/fixes/reindex` | Re-embed all entries with normalized text | JWT |
+
+### Slack Integration
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| POST | `/api/slack/actions` | Handle Slack button interactions | Slack Signature |
+| POST | `/api/slack/events` | Handle Slack thread messages | Slack Signature |
+
+### Health & Diagnostics
+
+| Method | Endpoint | Description | Auth |
+|--------|----------|-------------|------|
+| GET | `/health` | Health check | None |
+| POST | `/api/test-alert` | Test error notification (DM + email) | JWT |
+
+### Example: Analyze Build Error
+
+```bash
+# Generate JWT token
+TOKEN=$(python3 scripts/jwt_dmz_issuer.py my-agent)
+
+# Analyze a build error
+curl -X POST http://localhost:8000/api/analyze \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "project_name": "my-service",
+    "pipeline_id": 12345,
+    "failed_steps": [
+      {
+        "step_name": "build",
+        "error_text": "ERROR: gcc compilation failed\nundefined reference to '\''sqrt'\''"
+      }
+    ]
+  }'
+```
+
+### Example: List and Manage Fixes
+
+```bash
+# List all fixes (paginated)
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/fixes?page=1&page_size=20"
+
+# Search fixes by error text
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/fixes?search=gcc&status=approved"
+
+# Audit oversized entries
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/fixes/audit?max_chars=4000"
+
+# Reindex all entries (run once after deploying normalization)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8000/api/fixes/reindex"
+```
+
+---
+
+## Fine-Tuning Guide
+
+### Similarity Threshold Tuning
+
+| SIMILARITY_THRESHOLD | Behavior | When to use |
+|---------------------|----------|-------------|
+| 0.70 | Very permissive — more DB matches, fewer LLM calls | Early stages with few stored fixes |
+| 0.75 | Permissive — good balance for growing DB | Medium-sized fix collection |
+| **0.78** | **Default — balanced for production** | **Recommended starting point** |
+| 0.82 | Strict — only high-confidence matches | Large DB with many similar entries |
+| 0.90 | Very strict — almost exact match only | When false positives are costly |
+
+### Length Penalty Alpha Tuning
+
+| LENGTH_PENALTY_ALPHA | 2x ratio | 10x ratio | When to use |
+|---------------------|----------|-----------|-------------|
+| 0.05 | 0.97 | 0.90 | Well-normalized data, minimal length variance |
+| 0.10 | 0.94 | 0.81 | Mostly normalized, some old entries |
+| **0.15** | **0.91** | **0.74** | **Default — mixed old and new data** |
+| 0.25 | 0.85 | 0.63 | Lots of old oversized entries not yet reindexed |
+| 0.50 | 0.74 | 0.47 | Emergency — severe false positive problem |
+
+### Normalization Tuning
+
+| Parameter | Default | Increase when | Decrease when |
+|-----------|---------|--------------|---------------|
+| `MAX_ERROR_LINES` | 80 | Errors span many files/lines | Embedding model has small context |
+| `MAX_ERROR_CHARS` | 4000 | Using large-context embedding model | Getting generic embeddings |
+
+### LLM Tuning
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `OPENWEBUI_MODEL` | `anthropic.claude-sonnet-4-20250514-v1:0` | LLM model for fix generation |
+| `OPENWEBUI_TIMEOUT` | 60 | Request timeout (seconds) |
+| `OPENWEBUI_RETRIES` | 2 | Number of retry attempts |
+| `OPENWEBUI_BACKOFF` | 0.5 | Backoff multiplier between retries |
+| `LLM_GENERATED_CONFIDENCE` | 0.6 | Default confidence for AI-generated fixes |
+
+---
 
 ## Future Enhancements
 
