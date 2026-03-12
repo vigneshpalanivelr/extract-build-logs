@@ -1,10 +1,6 @@
-import datetime
 import subprocess
 import sys
 from pathlib import Path
-
-import jwt
-import pytest
 
 import jwt_dmz_issuer
 

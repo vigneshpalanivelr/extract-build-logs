@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
+import sys
+import os
+
+# Add src/ to path so we can import vector_db
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
 import argparse
 from textwrap import indent
-import sys
 # --- Compatibility patch for refactored vector_db.py ---
 import importlib
 try:
@@ -28,7 +33,7 @@ except ImportError:
 
 
 def list_docs(db):
-    # ⚠️ Do NOT include "ids" in include list — Chroma returns IDs automatically
+    # NOTE: Do NOT include "ids" in include list -- Chroma returns IDs automatically
     all_docs = db.collection.get(include=["documents", "metadatas"])
     ids = all_docs.get("ids", [])
     docs = all_docs.get("documents", [])
@@ -36,21 +41,21 @@ def list_docs(db):
     if not ids:
         print("No documents found in vector DB.")
         return
-    print(f"\n📄 Found {len(ids)} document(s) in Vector DB:\n")
+    print(f"\nFound {len(ids)} document(s) in Vector DB:\n")
     for i, doc_id in enumerate(ids):
         meta = metadatas[i] or {}
-        # ✅ Correct field names as stored in vector_db.py
+        # Correct field names as stored in vector_db.py
         error = meta.get("error_text", "N/A")
         fix = docs[i] or "(empty fix)"
         status = meta.get("status", "unknown")
         approved_by = meta.get("approved_by", "N/A")
         print("=" * 80)
-        print(f"🆔  ID: {doc_id}")
-        print(f"⚙️  Status: {status}")
-        print(f"👤 Approved by: {approved_by}")
-        print(f"❌ Error:")
+        print(f"[ID]  ID: {doc_id}")
+        print(f"[*] Status: {status}")
+        print(f"[*] Approved by: {approved_by}")
+        print("[-] Error:")
         print(indent(error, "   "))
-        print(f"🧩 Fix:")
+        print("[+] Fix:")
         print(indent(fix, "   "))
     print("=" * 80)
 
@@ -73,14 +78,14 @@ def delete_docs_by_id(db, doc_ids, preview=False):
             idx = ids.index(doc_id)
             matched.append((doc_id, docs[idx], metadatas[idx]))
         else:
-            print(f"⚠️  Document ID '{doc_id}' not found in database.")
+            print(f"[!] Document ID '{doc_id}' not found in database.")
 
     if not matched:
         return
 
     # Preview mode
     if preview:
-        print(f"\n🔍 Preview: {len(matched)} document(s) will be deleted:\n")
+        print(f"\n[?] Preview: {len(matched)} document(s) will be deleted:\n")
         for doc_id, doc, meta in matched:
             meta = meta or {}
             error = meta.get("error_text", "N/A")
@@ -88,28 +93,28 @@ def delete_docs_by_id(db, doc_ids, preview=False):
             status = meta.get("status", "unknown")
             approved_by = meta.get("approved_by", "N/A")
             print("=" * 80)
-            print(f"🆔  ID: {doc_id}")
-            print(f"⚙️  Status: {status}")
-            print(f"👤 Approved by: {approved_by}")
-            print(f"❌ Error:")
+            print(f"[ID]  ID: {doc_id}")
+            print(f"[*] Status: {status}")
+            print(f"[*] Approved by: {approved_by}")
+            print("[-] Error:")
             print(indent(error, "   "))
-            print(f"🧩 Fix:")
+            print("[+] Fix:")
             print(indent(fix, "   "))
         print("=" * 80)
 
         response = input(
-            f"\n⚠️  Delete these {len(matched)} document(s)? Type 'yes' to confirm: ")
+            f"\n[!] Delete these {len(matched)} document(s)? Type 'yes' to confirm: ")
         if response.lower() != 'yes':
-            print("❌ Deletion cancelled.")
+            print("[-] Deletion cancelled.")
             return
 
     # Perform deletion
     for doc_id, _, _ in matched:
         try:
             db.collection.delete(ids=[doc_id])
-            print(f"✅ Deleted document with ID: {doc_id}")
+            print(f"[+] Deleted document with ID: {doc_id}")
         except Exception as e:
-            print(f"❌ Error deleting document {doc_id}: {e}")
+            print(f"[-] Error deleting document {doc_id}: {e}")
 
 
 def delete_docs_by_error(db, error_text, preview=False):
@@ -134,31 +139,31 @@ def delete_docs_by_error(db, error_text, preview=False):
 
     # Preview mode
     if preview:
-        print(f"\n🔍 Preview: {len(matched)} document(s) will be deleted:\n")
+        print(f"\n[?] Preview: {len(matched)} document(s) will be deleted:\n")
         for doc_id, err, fix, meta in matched:
             print("=" * 80)
-            print(f"🆔  ID: {doc_id}")
-            print(f"❌ Error:")
+            print(f"[ID]  ID: {doc_id}")
+            print("[-] Error:")
             print(indent(err or "N/A", "   "))
-            print(f"🧩 Fix:")
+            print("[+] Fix:")
             print(indent(fix or "(empty fix)", "   "))
-            print(f"⚙️ Status: {meta.get('status', 'unknown')}")
-            print(f"👤 Approved by: {meta.get('approved_by', 'N/A')}")
+            print(f"[*] Status: {meta.get('status', 'unknown')}")
+            print(f"[*] Approved by: {meta.get('approved_by', 'N/A')}")
         print("=" * 80)
 
         response = input(
-            f"\n⚠️  Delete these {len(matched)} document(s)? Type 'yes' to confirm: ")
+            f"\n[!] Delete these {len(matched)} document(s)? Type 'yes' to confirm: ")
         if response.lower() != 'yes':
-            print("❌ Deletion cancelled.")
+            print("[-] Deletion cancelled.")
             return
 
     # Perform deletion
     for doc_id, _, _, _ in matched:
         try:
             db.collection.delete(ids=[doc_id])
-            print(f"✅ Deleted document with ID: {doc_id}")
+            print(f"[+] Deleted document with ID: {doc_id}")
         except Exception as e:
-            print(f"❌ Error deleting document {doc_id}: {e}")
+            print(f"[-] Error deleting document {doc_id}: {e}")
 
 
 def delete_all_docs(db, force=False, preview=False):
@@ -174,11 +179,11 @@ def delete_all_docs(db, force=False, preview=False):
     metadatas = all_docs.get("metadatas", [])
 
     if not ids:
-        print("✅ No documents found in vector DB. Nothing to delete.")
+        print("[+] No documents found in vector DB. Nothing to delete.")
         return
 
     if preview:
-        print(f"\n🔍 Preview: {len(ids)} document(s) will be deleted:\n")
+        print(f"\n[?] Preview: {len(ids)} document(s) will be deleted:\n")
         for i, doc_id in enumerate(ids):
             meta = metadatas[i] or {}
             error = meta.get("error_text", "N/A")
@@ -186,38 +191,42 @@ def delete_all_docs(db, force=False, preview=False):
             status = meta.get("status", "unknown")
             approved_by = meta.get("approved_by", "N/A")
             print("=" * 80)
-            print(f"🆔  ID: {doc_id}")
-            print(f"⚙️  Status: {status}")
-            print(f"👤 Approved by: {approved_by}")
-            print(f"❌ Error: {error[:100]}..." if len(
-                error) > 100 else f"❌ Error: {error}")
-            print(f"🧩 Fix: {fix[:100]}..." if len(
-                fix) > 100 else f"🧩 Fix: {fix}")
+            print(f"[ID]  ID: {doc_id}")
+            print(f"[*] Status: {status}")
+            print(f"[*] Approved by: {approved_by}")
+            print(
+                f"[-] Error: {error[:100]}..." if len(error) > 100
+                else f"[-] Error: {error}"
+            )
+            print(
+                f"[+] Fix: {fix[:100]}..." if len(fix) > 100
+                else f"[+] Fix: {fix}"
+            )
         print("=" * 80)
 
         if not force:
             response = input(
-                f"\n⚠️  Delete ALL {len(ids)} document(s)? Type 'yes' to confirm: ")
+                f"\n[!] Delete ALL {len(ids)} document(s)? Type 'yes' to confirm: ")
             if response.lower() != 'yes':
-                print("❌ Deletion cancelled.")
+                print("[-] Deletion cancelled.")
                 return
     else:
         print(
-            f"⚠️  WARNING: This will delete ALL {len(ids)} document(s) from the vector database!")
+            f"[!] WARNING: This will delete ALL {len(ids)} document(s) from the vector database!")
 
         if not force:
             response = input(
                 "Are you sure you want to continue? Type 'yes' to confirm: ")
             if response.lower() != 'yes':
-                print("❌ Deletion cancelled.")
+                print("[-] Deletion cancelled.")
                 return
 
     try:
         db.collection.delete(ids=ids)
         print(
-            f"✅ Successfully deleted all {len(ids)} document(s) from the vector database.")
+            f"[+] Successfully deleted all {len(ids)} document(s) from the vector database.")
     except Exception as e:
-        print(f"❌ Error deleting all documents: {e}")
+        print(f"[-] Error deleting all documents: {e}")
 
 
 def edit_fix(db, doc_id, new_fix=None, interactive=False):
@@ -237,7 +246,7 @@ def edit_fix(db, doc_id, new_fix=None, interactive=False):
     metadatas = all_docs.get("metadatas", [])
 
     if doc_id not in ids:
-        print(f"❌ Document ID '{doc_id}' not found in database.")
+        print(f"[-] Document ID '{doc_id}' not found in database.")
         return
 
     idx = ids.index(doc_id)
@@ -247,10 +256,10 @@ def edit_fix(db, doc_id, new_fix=None, interactive=False):
 
     # Display current document
     print("\n" + "=" * 80)
-    print(f"🆔  ID: {doc_id}")
-    print(f"❌ Error:")
+    print(f"[ID]  ID: {doc_id}")
+    print("[-] Error:")
     print(indent(error_text, "   "))
-    print(f"\n🧩 Current Fix:")
+    print("\n[+] Current Fix:")
     print(indent(current_fix, "   "))
     print("=" * 80)
 
@@ -258,7 +267,7 @@ def edit_fix(db, doc_id, new_fix=None, interactive=False):
     if new_fix is None:
         if interactive:
             print(
-                "\n✏️  Enter new fix (press Ctrl+D or Ctrl+Z when done, Ctrl+C to cancel):")
+                "\nEnter new fix (press Ctrl+D or Ctrl+Z when done, Ctrl+C to cancel):")
             print("-" * 80)
             lines = []
             try:
@@ -268,24 +277,24 @@ def edit_fix(db, doc_id, new_fix=None, interactive=False):
             except EOFError:
                 new_fix = "\n".join(lines)
             except KeyboardInterrupt:
-                print("\n❌ Edit cancelled.")
+                print("\n[-] Edit cancelled.")
                 return
         else:
             print(
-                "\n✏️  Enter new fix (single line, or use --interactive for multi-line):")
+                "\nEnter new fix (single line, or use --interactive for multi-line):")
             try:
                 new_fix = input("> ")
             except KeyboardInterrupt:
-                print("\n❌ Edit cancelled.")
+                print("\n[-] Edit cancelled.")
                 return
 
     if not new_fix or not new_fix.strip():
-        print("❌ Fix cannot be empty. Edit cancelled.")
+        print("[-] Fix cannot be empty. Edit cancelled.")
         return
 
     # Show preview of change
     print("\n" + "=" * 80)
-    print("📝 PREVIEW OF CHANGE:")
+    print("PREVIEW OF CHANGE:")
     print("-" * 80)
     print("OLD Fix:")
     print(indent(current_fix, "   "))
@@ -295,9 +304,9 @@ def edit_fix(db, doc_id, new_fix=None, interactive=False):
     print("=" * 80)
 
     # Confirm
-    response = input("\n⚠️  Apply this change? Type 'yes' to confirm: ")
+    response = input("\n[!] Apply this change? Type 'yes' to confirm: ")
     if response.lower() != 'yes':
-        print("❌ Edit cancelled.")
+        print("[-] Edit cancelled.")
         return
 
     # Update the document
@@ -307,9 +316,9 @@ def edit_fix(db, doc_id, new_fix=None, interactive=False):
             documents=[new_fix],
             metadatas=[metadata]  # Keep existing metadata
         )
-        print(f"\n✅ Successfully updated fix for document ID: {doc_id}")
+        print(f"\n[+] Successfully updated fix for document ID: {doc_id}")
     except Exception as e:
-        print(f"\n❌ Error updating document: {e}")
+        print(f"\n[-] Error updating document: {e}")
 
 
 if __name__ == "__main__":
@@ -343,11 +352,12 @@ Examples:
     parser.add_argument("--id", nargs="+",
                         help="One or more document IDs to delete")
     parser.add_argument(
-        "--error", type=str, help="Delete documents matching this error text (case-insensitive)")
+        "--error", type=str,
+        help="Delete documents matching this error text (case-insensitive)")
     parser.add_argument("--preview", action="store_true",
-                        help="Preview deletion and confirm before deleting (works with --id, --error, and --delete-all)")
+                        help="Preview deletion and confirm before deleting")
     parser.add_argument("--delete-all", action="store_true",
-                        help="Delete ALL documents from the vector database (requires confirmation)")
+                        help="Delete ALL documents from the vector database")
     parser.add_argument("--force", action="store_true",
                         help="Skip confirmation prompt (use with --delete-all)")
     parser.add_argument("--edit", type=str, metavar="DOC_ID",
@@ -355,7 +365,7 @@ Examples:
     parser.add_argument("--fix", type=str,
                         help="New fix text (used with --edit)")
     parser.add_argument("--interactive", action="store_true",
-                        help="Use multi-line input mode for editing (used with --edit)")
+                        help="Use multi-line input mode for editing")
 
     args = parser.parse_args()
 

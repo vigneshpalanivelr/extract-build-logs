@@ -9,11 +9,13 @@ import time
 import os
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 PRIVATE_KEY_PATH = os.getenv("JWT_PRIVATE_KEY_PATH", "/mount/keys/private.pem")
 ISSUER = os.getenv("JWT_ISS", "corp-ci-system")
 AUD = os.getenv("JWT_AUD", "build-failure-analyzer")
+
 
 def generate_token(subject: str, ttl_seconds: int = 60):
     with open(PRIVATE_KEY_PATH, "r") as f:
@@ -28,6 +30,7 @@ def generate_token(subject: str, ttl_seconds: int = 60):
     }
     token = jwt.encode(payload, private, algorithm="RS256")
     return token
+
 
 if __name__ == "__main__":
     import argparse

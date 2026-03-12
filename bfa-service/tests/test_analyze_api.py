@@ -1,6 +1,7 @@
 import json
 import hashlib
 
+
 # ---------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------
@@ -13,7 +14,7 @@ def error_hash(text: str) -> str:
 # ---------------------------------------------------------
 def test_analyze_uses_sme_cache(mocker, client, auth_header):
     err = "gcc failed"
-    h = error_hash(err)
+    error_hash(err)  # compute hash for test setup
 
     # SME cache hit
     mocker.patch(

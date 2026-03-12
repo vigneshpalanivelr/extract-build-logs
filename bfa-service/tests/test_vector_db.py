@@ -1,6 +1,6 @@
 import pytest
-from unittest.mock import MagicMock, call
-from vector_db import VectorDBClient, MAX_ERROR_LINES, MAX_ERROR_CHARS
+from unittest.mock import MagicMock
+from vector_db import VectorDBClient
 
 
 @pytest.fixture
@@ -173,7 +173,7 @@ class TestNormalizeErrorText:
         lines = [f"line {i}" for i in range(100)]
         text = "\n".join(lines)
         result = vector_db._normalize_error_text(text)
-        result_lines = [l for l in result.split("\n") if l.strip()]
+        result_lines = [line for line in result.split("\n") if line.strip()]
         assert len(result_lines) <= 5
 
     def test_caps_at_max_chars(self, mocker, vector_db):

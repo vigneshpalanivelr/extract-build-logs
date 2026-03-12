@@ -1,0 +1,54 @@
+stages:
+  - test
+  - build
+
+
+bfa-flake8:
+  image: artifactory.internal.com:9999/bfa-pre-built:latest
+  stage: test
+  script:
+    - cd bfa-service && flake8 src/ scripts/ --max-line-length 120
+  allow_failure: true
+
+bfa-pylint:
+  image: artifactory.internal.com:9999/bfa-pre-built:latest
+  stage: test
+  script:
+    - cd bfa-service && pylint src/*.py scripts/*.py --max-line-length=120
+  allow_failure: true
+
+bfa-pytest:
+  image: artifactory.internal.com:9999/bfa-pre-built:latest
+  stage: test
+  script:
+    - cd bfa-service && pytest tests/ -v --tb=short --cov=src --cov=scripts --cov-report=term-missing --cov-fail-under=70
+  allow_failure: true
+
+
+bfa-build-docker-image:
+  stage: build
+  image: docker:24-dind
+  services:
+    - name: docker:24-dind
+      command: ["--registry-mirror", "https://artifactory.internal.com:9998/"]
+  tags:
+    - executor:dind-socket
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    IMAGE_TAG: ${CI_PROJECT_PATH}/bfa-service:${CI_COMMIT_REF_NAME}
+    LATEST_TAG: ${CI_PROJECT_PATH}/bfa-service:latest
+    ARTIFACTORY_PUSH: "artifactory.internal.com:9998"
+  script:
+    - echo $CI_REGISTRY_PASSWORD | docker login -u ${CI_REGISTRY_USER} --password-stdin ${CI_REGISTRY}
+    - echo "Building Docker image for branch '${IMAGE_TAG}'"
+    - docker build -t "${ARTIFACTORY_PUSH}/${IMAGE_TAG}" -t "${ARTIFACTORY_PUSH}/${LATEST_TAG}" -f bfa-service/Dockerfile bfa-service/
+    - docker login -u "$ARTIFACTORY_USER" -p "${ARTIFACTORY_PASSWORD}" "${ARTIFACTORY_PUSH}"
+    - docker push "${ARTIFACTORY_PUSH}/${IMAGE_TAG}"
+    - |
+      if [ "${CI_COMMIT_REF_NAME}" = "main" ] || [ "${CI_COMMIT_REF_NAME}" = "master" ]; then
+        echo "Pushing image with latest tag from ${CI_COMMIT_REF_NAME} branch"
+        docker push "${ARTIFACTORY_PUSH}/${LATEST_TAG}"
+      else
+        echo "Skipping latest tag push (not on main/master branch)"
+      fi
+  when: on_success

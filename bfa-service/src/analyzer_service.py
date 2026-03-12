@@ -3,13 +3,12 @@
 import os
 import json
 import time
-import logging
 import hashlib
 from typing import List, Optional, Dict, Any
 
 import redis
 import jwt
-from fastapi import FastAPI, Header, HTTPException, Request, Depends, Form, Query
+from fastapi import FastAPI, Header, HTTPException, Request, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -26,6 +25,7 @@ from slack_helper import send_error_message, get_fix, store_fix, summarize_error
 from slack_helper import client as slack, redis_conn
 from vector_db import init_vector_db
 from llm_openwebui_client import analyze_with_llm, LLMInfraError
+from logging_config import setup_logging, get_logger, set_request_id, clear_request_id
 
 # Domain RAG imports
 from pipeline_context_rag import (
@@ -50,13 +50,16 @@ client = WebClient(token=SLACK_BOT_TOKEN)
 # -------------------------------------------------------------------
 app = FastAPI(title="Build Failure Analyzer (Unified)")
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("analyzer")
+setup_logging(
+    log_dir=os.getenv("BFA_LOG_DIR", "./logs"),
+    log_level=os.getenv("BFA_LOG_LEVEL", "INFO"),
+)
+logger = get_logger("analyzer")
 
 # -------------------------------------------------------------------
 # Redis + Resolver
 # -------------------------------------------------------------------
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:1111/0")
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 r = redis.from_url(REDIS_URL, decode_responses=True)
 resolver = ResolverAgent(redis_client=r)
 
@@ -83,6 +86,14 @@ DOMAIN_CONTEXT_PATH = os.getenv(
     "DOMAIN_CONTEXT_PATH",
     "/home/build-failure-analyzer/build-failure-analyzer/context/domain_context_patterns.json",
 )
+
+DOMAIN_RAG_THRESHOLD = float(os.getenv("DOMAIN_RAG_THRESHOLD", "0.55"))
+DOMAIN_RAG_TOP_K = int(os.getenv("DOMAIN_RAG_TOP_K", "5"))
+VECTOR_TOP_K = int(os.getenv("VECTOR_TOP_K", "5"))
+AI_FIX_TTL = int(os.getenv("AI_FIX_TTL", "86400"))
+ERROR_SUMMARY_MAX_CHARS = int(os.getenv("ERROR_SUMMARY_MAX_CHARS", "300"))
+BFA_HOST = os.getenv("BFA_HOST", "0.0.0.0")
+BFA_PORT = int(os.getenv("BFA_PORT", "8000"))
 
 _domain_ctx_db: Any = None
 _domain_ctx_loaded: bool = False
@@ -373,8 +384,8 @@ async def analyze(payload: AnalyzePayload, claims=Depends(require_jwt)):
                     domain_matches = lookup_domain_matches(
                         error_text=error_text,
                         ctx_db=_domain_ctx_db,
-                        threshold=0.55,
-                        top_k=5,
+                        threshold=DOMAIN_RAG_THRESHOLD,
+                        top_k=DOMAIN_RAG_TOP_K,
                     )
                     domain_snippet = build_domain_rag_snippet(domain_matches)
                 except Exception:
@@ -429,7 +440,7 @@ async def analyze(payload: AnalyzePayload, claims=Depends(require_jwt)):
             # ResolverAgent currently uses "generated" as source;
             # we normalize it to "ai_generated" at the API level.
             source = candidate.get("source") or "unknown"
-            if source in ("generated", "ai_generated") or fix_text:
+            if source in ("generated", "ai_generated") or candidate.get("fix_text"):
 
                 # Generate fix via LLM (resolver likely wraps this)
                 # ai_fix_text = fix_text or str(candidate)
@@ -465,7 +476,7 @@ async def analyze(payload: AnalyzePayload, claims=Depends(require_jwt)):
                 try:
                     r.setex(
                         AI_FIX_KEY.format(error_hash),
-                        86400,
+                        AI_FIX_TTL,
                         json.dumps({"fix_text": ai_fix_text,
                                    "source": "ai_generated"}),
                     )
@@ -568,7 +579,7 @@ Rules:
                 exc_info=True,
             )
 
-            # 🚨 Trigger your global error notifier here
+            # Trigger your global error notifier here
             notify_global_error(
                 source="Build Failure Analyzer",
                 error=str(e),
@@ -621,42 +632,31 @@ Rules:
         # --------------------------------------------------------------------
         # Format Slack Message
         # --------------------------------------------------------------------
-        branch_emoji = "🌿"
-        commit_emoji = "🔖"
-        repo_emoji = "📁"
-        author_emoji = "👤"
-        mr_emoji = "🔗"
-        quality_emoji = "🧩"
-        security_emoji = "🛡️"
-        maintain_emoji = "🔧"
-        alert_emoji = "🚨"
-        bulb_emoji = "💡"
-
         vulnerabilities_text = format_vulnerabilities(vulns)
         improvements_text = "\n".join(
-            [f"• {i}" for i in improvements]) or "_No recommendations provided._"
+            [f"- {i}" for i in improvements]) or "_No recommendations provided._"
 
         slack_message = f"""
-*🧠 MR Review Summary for `{payload.repo}`*
-{author_emoji} *Author:* {payload.author}
-{branch_emoji} *Branch:* `{payload.branch}`
-{commit_emoji} *Commit:* `{payload.commit}`
+*MR Review Summary for `{payload.repo}`*
+*Author:* {payload.author}
+*Branch:* `{payload.branch}`
+*Commit:* `{payload.commit}`
 
-📊 *Scores*
-{quality_emoji} Quality: *{quality}/10*
-{security_emoji} Security: *{security}/10*
-{maintain_emoji} Maintainability: *{maintainability}/10*
+*Scores*
+Quality: *{quality}/10*
+Security: *{security}/10*
+Maintainability: *{maintainability}/10*
 
-{alert_emoji} *Findings:*
+*Findings:*
 {vulnerabilities_text}
 
-{bulb_emoji} *Recommendations:*
+*Recommendations:*
 {improvements_text}
 
-📝 *Summary:*
+*Summary:*
 > {summary}
 
-{mr_emoji} <{payload.mr_url or 'N/A'}|View Merge Request>
+<{payload.mr_url or 'N/A'}|View Merge Request>
         """
 
         # --------------------------------------------------------------------
@@ -1109,7 +1109,7 @@ async def slack_events(request: Request):
         if not thread_ts:
             client.chat_postMessage(
                 channel=channel_id,
-                text="⚠️ Please reply *in the thread* of the original fix message to submit your edit.",
+                text="Please reply *in the thread* of the original fix message to submit your edit.",
                 thread_ts=event.get("ts"),
             )
             return JSONResponse(content={"status": "must_reply_in_thread"}, status_code=200)
@@ -1126,7 +1126,7 @@ async def slack_events(request: Request):
         if not error_text:
             client.chat_postMessage(
                 channel=channel_id,
-                text="⚠️ Could not find the original error context.",
+                text="Could not find the original error context.",
                 thread_ts=thread_ts,
             )
             return JSONResponse(content={"status": "missing_error"}, status_code=200)
@@ -1168,7 +1168,7 @@ async def slack_events(request: Request):
                 f"[SlackReviewer] Saved edited fix for {error_text[:50]}... by {display_name}")
             client.chat_postMessage(
                 channel=channel_id,
-                text="✅ Your edited fix has been saved.",
+                text="Your edited fix has been saved.",
                 thread_ts=thread_ts,
             )
             # --------------------------------------------------------
@@ -1187,11 +1187,11 @@ async def slack_events(request: Request):
             print("Error saving edited fix:", e)
             client.chat_postMessage(
                 channel=channel_id,
-                text=f"❌ Failed to save your edited fix: {e}",
+                text=f"Failed to save your edited fix: {e}",
                 thread_ts=thread_ts,
             )
 
-        # 6️⃣ Cleanup edit intent
+        # 6) Cleanup edit intent
         redis_conn.delete(f"last_edit:{channel_id}:{error_id}")
 
     return JSONResponse(content={"status": "ok"}, status_code=200)
@@ -1234,11 +1234,9 @@ async def slack_actions(request: Request):
 
     if not error_text:
         client.chat_postMessage(
-            channel=channel_id, text="⚠️ Original error text not found. Cannot process this action."
+            channel=channel_id, text="Original error text not found. Cannot process this action."
         )
         return JSONResponse(content={"status": "missing_error"}, status_code=200)
-
-    response_text = ""
 
     if action_name == "approve":
         db.save_fix_to_db(
@@ -1252,7 +1250,6 @@ async def slack_actions(request: Request):
                 "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             },
         )
-        response_text = f"✅ Fix approved by *{approver}*"
         message_ts = stored.get("message_ts")
         existing_meta = stored.get("metadata", {})
         # Attempt retrieving original triggered_by from stored record
@@ -1301,7 +1298,7 @@ async def slack_actions(request: Request):
                 metadata=merged_metadata,
                 source="sme_approved",
             )
-            print(f"[SlackReviewer] DM sent to developer for SME-approved fix")
+            print("[SlackReviewer] DM sent to developer for SME-approved fix")
         except Exception as e:
             print(f"[SlackReviewer] Failed sending developer DM: {e}")
 
@@ -1313,16 +1310,14 @@ async def slack_actions(request: Request):
         client.chat_postMessage(
             channel=channel_id,
             thread_ts=original_ts,
-            text=f"✏️ <@{user_id}> please enter the updated fix here.",
+            text=f"<@{user_id}> please enter the updated fix here.",
         )
-        response_text = f"✏️ Edit mode opened in thread for <@{approver}>"
 
     elif action_name == "discard":
-        response_text = f"🚫 Fix discarded by *{approver}*. It will not be saved."
         redis_conn.delete(f"fix:{error_id}")
 
     else:
-        response_text = "Unknown action."
+        pass  # Unknown action -- no response needed
 
     #  Disable buttons on original message
     try:
@@ -1333,7 +1328,10 @@ async def slack_actions(request: Request):
         new_blocks.append(
             {
                 "type": "context",
-                "elements": [{"type": "mrkdwn", "text": f"🛑 Reviewed by <@{user_id}> — *{get_past_tense(action_name).upper()}*"}],
+                "elements": [{
+                    "type": "mrkdwn",
+                    "text": f"Reviewed by <@{user_id}> -- *{get_past_tense(action_name).upper()}*"
+                }],
             }
         )
 
@@ -1421,7 +1419,7 @@ async def global_error_notifier(request: Request, call_next):
         return await call_next(request)
 
     except Exception as exc:
-        # 🔥 Send Slack DM + Email to alert recipients
+        # Send Slack DM + Email to alert recipients
         await notify_global_error(exc, request)
 
         # Return safe JSON error to CI caller
@@ -1513,7 +1511,7 @@ def send_dev_dm_fix(
 
     # Summarize the error to keep DM compact
     short_error = (error_text or "").strip()
-    if len(error_text) > 300 or "\n" in error_text:
+    if len(error_text) > ERROR_SUMMARY_MAX_CHARS or "\n" in error_text:
         short_error = summarize_error_with_ai(error_text)
     else:
         short_error = f"{error_text}"
@@ -1524,29 +1522,29 @@ def send_dev_dm_fix(
         disclaimer = """
 ---
 
-⚠️ *Disclaimer:*
+*Disclaimer:*
 This fix is *AI-generated and not yet DevOps-approved*.
-If you do not want to wait for SME review, you may try these steps to unblock your pipeline —
+If you do not want to wait for SME review, you may try these steps to unblock your pipeline --
 but please validate the fix and use engineering judgment.
 
 DevOps will follow up with an official approved fix if required.
         """.strip()
 
     dm_text = f"""
-🧠 *Build Failure Analyzer – Suggested Fix*
+*Build Failure Analyzer -- Suggested Fix*
 
-📁 *Repo:* `{repo}`
-🌿 *Branch:* `{branch}`
-🔖 *Commit:* `{commit}`
-⚙️ *Job:* `{job_name}`
-🧩 *Step:* `{step_name}`
-📌 *Pipeline ID:* `{pipeline_id}`
-🔍 *Fix source:* `{source}`
+*Repo:* `{repo}`
+*Branch:* `{branch}`
+*Commit:* `{commit}`
+*Job:* `{job_name}`
+*Step:* `{step_name}`
+*Pipeline ID:* `{pipeline_id}`
+*Fix source:* `{source}`
 
-❌ *Error (Summary):*
+*Error (Summary):*
 > {short_error}
 
-✅ *Suggested fix:*
+*Suggested fix:*
 
 {fix_text}
 
@@ -1571,4 +1569,4 @@ DevOps will follow up with an official approved fix if required.
 # -------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("analyzer_service:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("analyzer_service:app", host=BFA_HOST, port=BFA_PORT, reload=True)

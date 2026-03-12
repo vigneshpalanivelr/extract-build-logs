@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import MagicMock
 
-import llm_openwebui_client
 from llm_openwebui_client import call_llm, analyze_with_llm
 
 

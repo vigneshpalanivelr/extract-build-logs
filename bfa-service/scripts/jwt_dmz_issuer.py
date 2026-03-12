@@ -15,14 +15,17 @@ load_dotenv()
 
 PRIVATE_KEY_PATH = os.getenv("JWT_PRIVATE_KEY_PATH", "/home/build-failure-analyzer/private.pem")
 JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "build-failure-analyzer")
+JWT_ISSUER = os.getenv("JWT_ISSUER", "dmz-analyzer")
+JWT_EXPIRY_MINUTES = int(os.getenv("JWT_EXPIRY_MINUTES", "60"))
 
-def create_jwt(subject: str, expiry_minutes: int = 60) -> str:
+
+def create_jwt(subject: str, expiry_minutes: int = JWT_EXPIRY_MINUTES) -> str:
     """Generate JWT token signed using private key."""
     with open(PRIVATE_KEY_PATH, "r") as f:
         private_key = f.read()
 
     payload = {
-        "iss": "dmz-analyzer",
+        "iss": JWT_ISSUER,
         "aud": JWT_AUDIENCE,
         "sub": subject,
         "iat": datetime.datetime.utcnow(),

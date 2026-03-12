@@ -1,0 +1,35 @@
+# Flake8 Configuration
+# Code style and quality checker
+
+[flake8]
+max-line-length = 120
+exclude =
+    .git,
+    __pycache__,
+    venv,
+    .venv,
+    build,
+    dist,
+    *.egg-info,
+    .pytest_cache,
+    .coverage,
+    htmlcov,
+    uv.lock
+
+# Error codes to ignore
+# E402: Module level import not at top of file (needed in test files for sys.path modification)
+# W503: Line break before binary operator (deprecated, conflicts with W504)
+ignore = E402, W503
+
+# Maximum complexity
+max-complexity = 15
+
+# Show source code for errors
+show-source = True
+
+# Show explanation for errors
+show-pep8 = True
+
+# Count errors
+count = True
+statistics = True

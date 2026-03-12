@@ -2,12 +2,17 @@
 
 import json
 import os
-import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 
+from dotenv import load_dotenv
 from vector_db import VectorDBClient  # reuse embedding + Chroma client
+from logging_config import get_logger
 
-logger = logging.getLogger("pipeline_context_rag")
+load_dotenv()
+
+DOMAIN_CONTEXT_COLLECTION = os.getenv("DOMAIN_CONTEXT_COLLECTION", "pipeline_context")
+
+logger = get_logger("pipeline_context_rag")
 
 
 # -------------------------------
@@ -52,7 +57,7 @@ def init_context_collection(persist_dir: str) -> VectorDBClient:
     try:
         # ctx_db.client is the underlying chromadb.PersistentClient
         ctx_db.collection = ctx_db.client.get_or_create_collection(
-            name="pipeline_context"
+            name=DOMAIN_CONTEXT_COLLECTION
         )
         logger.info(
             "[RAG] Initialized domain context collection 'pipeline_context' at %s",
@@ -169,4 +174,3 @@ def lookup_domain_matches(
         })
 
     return matches
-

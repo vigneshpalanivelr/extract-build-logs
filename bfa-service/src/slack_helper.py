@@ -2,8 +2,7 @@
 
 import os
 import json
-import time
-import threading
+
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
@@ -20,12 +19,19 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 REDIS_DB = int(os.getenv("REDIS_DB", 0))
 
+# Slack message configuration
+SLACK_MAX_BLOCK_LEN = int(os.getenv("SLACK_MAX_BLOCK_LEN", "2500"))
+ERROR_SUMMARY_MAX_CHARS = int(os.getenv("ERROR_SUMMARY_MAX_CHARS", "300"))
+
 redis_conn = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=REDIS_DB, decode_responses=True)
 
-def store_fix(error_id, error_title, ai_fix_text, source="ai", approver=None, message_ts=None, channel_id=None, triggered_by=None, metadata=None):
+
+def store_fix(error_id, error_title, ai_fix_text, source="ai", approver=None,
+              message_ts=None, channel_id=None, triggered_by=None, metadata=None):
     """
     Stores the fix by error_id and maintains the mapping from error_text -> error_id.
-    Also (if provided) stores the Slack message_ts and a thread map: thread_map:<channel_id>:<message_ts> -> error_id
+    Also (if provided) stores the Slack message_ts and a thread map:
+    thread_map:<channel_id>:<message_ts> -> error_id
     Keys:
       - fix:<error_id> = {"error": ..., "fix": ..., "source": ..., "approved_by": ..., "message_ts": ...}
       - error_map:<error_text> = <error_id>
@@ -54,6 +60,7 @@ def store_fix(error_id, error_title, ai_fix_text, source="ai", approver=None, me
     # 3) If we know the Slack thread, map it to error_id as well
     if message_ts and channel_id:
         redis_conn.set(f"thread_map:{channel_id}:{message_ts}", error_id)
+
 
 def get_fix(key):
     """
@@ -108,11 +115,11 @@ def build_action_block(error_id):
         "type": "actions",
         "block_id": f"actions_{error_id}",
         "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": "✅ Approve"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Approve"},
              "style": "primary", "value": f"approve_{error_id}", "action_id": f"approve_{error_id}"},
-            {"type": "button", "text": {"type": "plain_text", "text": "✏️ Edit"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Edit"},
              "value": f"edit_{error_id}", "action_id": f"edit_{error_id}"},
-            {"type": "button", "text": {"type": "plain_text", "text": "🗑️ Discard"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Discard"},
              "style": "danger", "value": f"discard_{error_id}", "action_id": f"discard_{error_id}"}
         ]
     }
@@ -127,7 +134,7 @@ def summarize_error_with_ai(full_error_text: str) -> str:
     """
     prompt = f"""
     You are a CI/CD build log analyzer. Summarize the following error log
-    into EXACTLY 4–6 bullet points. Use concise engineering language.
+    into EXACTLY 4-6 bullet points. Use concise engineering language.
 
     Error log:
     -------------------
@@ -143,34 +150,37 @@ def summarize_error_with_ai(full_error_text: str) -> str:
         )
         return summary.strip()
     except Exception as e:
-        return f"• Error log too large to display ({len(full_error_text)} chars)\n• Summary unavailable due to LLM error: {e}"
+        return (
+            f"- Error log too large to display ({len(full_error_text)} chars)\n"
+            f"- Summary unavailable due to LLM error: {e}"
+        )
 
 
 def ai_fix_to_blocks(error_title, ai_fix_text, error_id, metadata):
-    max_block_len = 2500
+    max_block_len = SLACK_MAX_BLOCK_LEN
 
     # Build header with pipeline / repo context
     header_text = ""
 
     if metadata.get("pipeline_id"):
-        header_text += f"\n🔗 <{metadata['pipeline_id']}|View Pipeline Log>"
+        header_text += f"\nPipeline: <{metadata['pipeline_id']}|View Pipeline Log>"
     if metadata.get("repo"):
-        header_text += f"\n🗂️ *Repository:* `{metadata['repo']}`"
+        header_text += f"\n*Repository:* `{metadata['repo']}`"
     if metadata.get("branch"):
-        header_text += f"\n🌿 *Branch:* `{metadata['branch']}`"
+        header_text += f"\n*Branch:* `{metadata['branch']}`"
     if metadata.get("commit"):
-        header_text += f"\n🔖 *Commit:* `{metadata['commit']}`"
+        header_text += f"\n*Commit:* `{metadata['commit']}`"
     if metadata.get("job_name"):
-        header_text += f"\n⚙️ *Job:* `{metadata['job_name']}`"
+        header_text += f"\n*Job:* `{metadata['job_name']}`"
     if metadata.get("step_name"):
-        header_text += f"\n🧩 *Step:* `{metadata['step_name']}`"
+        header_text += f"\n*Step:* `{metadata['step_name']}`"
 
     blocks = [{
         "type": "section",
         "text": {"type": "mrkdwn", "text": header_text}
     }]
 
-    # ---- FIX: preserve markdown & convert **bold** -> *bold* for Slack ----
+    # Preserve markdown & convert **bold** -> *bold* for Slack
     text = ai_fix_text or ""
     lines = text.split("\n")
     current_lines = []
@@ -211,7 +221,7 @@ def ai_fix_to_blocks(error_title, ai_fix_text, error_id, metadata):
             continue
 
         if not inside_code:
-            # Slack uses *bold*, not **bold** → convert outside code blocks
+            # Slack uses *bold*, not **bold** -- convert outside code blocks
             line = line.replace("**", "*")
 
         current_lines.append(line)
@@ -226,16 +236,17 @@ def ai_fix_to_blocks(error_title, ai_fix_text, error_id, metadata):
 # -----------------------------
 #  Send Error + AI Fix Message to Slack
 # -----------------------------
-def send_error_message(error_title, ai_fix_text, error_id, metadata={}):
+def send_error_message(error_title, ai_fix_text, error_id, metadata=None):
     """
     Sends an AI-generated fix message to Slack.
     Also ensures the fix is cached under fix:<error_id>, error_map:<error_text>,
     and maps the Slack thread to this error_id.
     """
+    metadata = metadata or {}
     try:
         # Build blocks first
-        # --- AI summarize long error logs ---
-        if len(error_title) > 300 or "\n" in error_title:
+        # AI summarize long error logs
+        if len(error_title) > ERROR_SUMMARY_MAX_CHARS or "\n" in error_title:
             error_summary = summarize_error_with_ai(error_title)
         else:
             error_summary = f"{error_title}"
@@ -244,7 +255,7 @@ def send_error_message(error_title, ai_fix_text, error_id, metadata={}):
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*❌ Error Summary (ID: `{error_id}`)*\n{error_summary}"
+                "text": f"*Error Summary (ID: `{error_id}`)*\n{error_summary}"
             }
         }
 
@@ -254,9 +265,11 @@ def send_error_message(error_title, ai_fix_text, error_id, metadata={}):
         # Insert summary above fix
         blocks = [summary_block] + fix_blocks
         payload_size = len(json.dumps(blocks))
-        print(f"📦 Payload size for '{error_summary}': {payload_size} bytes, {len(blocks)} blocks")
+        print(f"[INFO] Payload size for '{error_summary}': {payload_size} bytes, {len(blocks)} blocks")
 
-        resp = client.chat_postMessage(channel=channel, text=f"AI fix for error: {error_summary}", blocks=blocks)
+        resp = client.chat_postMessage(
+            channel=channel, text=f"AI fix for error: {error_summary}", blocks=blocks
+        )
 
         # Capture Slack message ts & channel, then persist alongside fix
         message_ts = resp.get("ts")
@@ -275,10 +288,13 @@ def send_error_message(error_title, ai_fix_text, error_id, metadata={}):
 
     except SlackApiError as e:
         error_msg = e.response.get("error", "unknown_error")
-        print(f"⚠️ Slack API error for '{error_title}': {error_msg}")
+        print(f"[WARN] Slack API error for '{error_title}': {error_msg}")
         try:
-            client.chat_postMessage(channel=channel, text=f"⚠️ Fallback summary for '{error_title}': {ai_fix_text[:1000]}")
+            client.chat_postMessage(
+                channel=channel,
+                text=f"[WARN] Fallback summary for '{error_title}': {ai_fix_text[:1000]}"
+            )
         except Exception as inner_e:
-            print(f"❌ Failed fallback message: {inner_e}")
+            print(f"[ERROR] Failed fallback message: {inner_e}")
     except Exception as e:
-        print(f"❌ Unexpected error while sending message for '{error_title}': {e}")
+        print(f"[ERROR] Unexpected error while sending message for '{error_title}': {e}")

@@ -10,14 +10,13 @@ import os
 import re
 import math
 import json
-import time
 import hashlib
-import logging
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any
 
 import chromadb
 import requests
 import subprocess
+from logging_config import get_logger
 
 from dotenv import load_dotenv
 
@@ -37,6 +36,7 @@ MAX_ERROR_CHARS = int(os.getenv("MAX_ERROR_CHARS", "4000"))
 
 # Length penalty for similarity scoring
 LENGTH_PENALTY_ALPHA = float(os.getenv("LENGTH_PENALTY_ALPHA", "0.15"))
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "30"))
 
 # Regex: strip "Line 123: " prefixes added by log-extraction service
 _LINE_PREFIX_RE = re.compile(r"^Line\s+\d+:\s*", re.IGNORECASE)
@@ -55,9 +55,7 @@ _ERROR_KEYWORDS = re.compile(
 )
 
 # Logging
-logger = logging.getLogger("vector_db")
-if not logger.handlers:
-    logging.basicConfig(level=logging.INFO)
+logger = get_logger("vector_db")
 
 
 class VectorDBClient:
@@ -86,7 +84,7 @@ class VectorDBClient:
         try:
             url = f"{OLLAMA_HTTP_URL.rstrip('/')}/api/embed"
             payload = {"model": OLLAMA_EMBED_MODEL, "input": text}
-            resp = requests.post(url, json=payload, timeout=30)
+            resp = requests.post(url, json=payload, timeout=OLLAMA_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
 
@@ -127,10 +125,10 @@ class VectorDBClient:
             ]
             for cmd in try_cmds:
                 try:
-                    proc = subprocess.run(cmd, input=text.encode("utf-8"), capture_output=True, timeout=30)
+                    proc = subprocess.run(cmd, input=text.encode("utf-8"), capture_output=True, timeout=OLLAMA_TIMEOUT)
                 except TypeError:
                     # older Python versions may need text param
-                    proc = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=30)
+                    proc = subprocess.run(cmd, input=text, capture_output=True, text=True, timeout=OLLAMA_TIMEOUT)
                 if proc.returncode == 0:
                     out = proc.stdout.decode("utf-8") if isinstance(proc.stdout, (bytes, bytearray)) else proc.stdout
                     if out:
@@ -548,7 +546,6 @@ class VectorDBClient:
         """
         all_docs = self.collection.get(include=["documents", "metadatas"])
         ids = all_docs.get("ids", [])
-        docs = all_docs.get("documents", [])
         metas = all_docs.get("metadatas", [])
 
         reindexed = 0
@@ -672,7 +669,7 @@ def save_fix_to_db(db_client, error_text, fix_text, approver=None, status="gener
 
     if not hasattr(db_client, "save_fix_to_db"):
         raise AttributeError("db_client has no method save_fix_to_db")
-    
+
     return db_client.save_fix_to_db(
         error_text=error_text,
         fix_text=fix_text,

@@ -13,29 +13,32 @@ from llm_openwebui_client import call_llm
 
 load_dotenv()
 
-# Path to enterprise infra overview 
+# Path to enterprise infra overview
 GLOBAL_CONTEXT_PATH = os.getenv(
     "GLOBAL_CONTEXT_PATH",
     "/home/build-failure-analyzer/build-failure-analyzer/context/infra_overview.md",
 )
+GLOBAL_CONTEXT_MAX_CHARS = int(os.getenv("GLOBAL_CONTEXT_MAX_CHARS", "6000"))
+REDIS_TTL_AI = int(os.getenv("REDIS_TTL_AI", "86400"))
+LLM_GENERATED_CONFIDENCE = float(os.getenv("LLM_GENERATED_CONFIDENCE", "0.6"))
+
 
 def _load_global_context() -> str:
     """
     Loads enterprise CI/CD infra background (non-RAG).
-    This is not embedded — appended directly to LLM system_prompt.
+    This is not embedded -- appended directly to LLM system_prompt.
     """
     try:
         if os.path.exists(GLOBAL_CONTEXT_PATH):
             with open(GLOBAL_CONTEXT_PATH, "r") as f:
                 content = f.read().strip()
-                # Optional: cap to avoid runaway memory
-                return content[:6000]  
+                return content[:GLOBAL_CONTEXT_MAX_CHARS]
     except Exception:
         pass
     return ""
 
+
 GLOBAL_CONTEXT_TEXT = _load_global_context()
-REDIS_TTL_AI = int(60 * 60 * 24)  # 24h, can be env var later
 
 
 class ResolverAgent:
@@ -84,7 +87,7 @@ class ResolverAgent:
         """
         metadata = metadata or {}
         # 1) Normalize error text
-        error_text = "\n".join([l.strip() for l in error_lines if l.strip()])
+        error_text = "\n".join([line.strip() for line in error_lines if line.strip()])
         error_hash = self._hash(error_text)
 
         # 2) AI cache check (in addition to analyzer-level cache)
@@ -150,7 +153,7 @@ class ResolverAgent:
             system_prompt_parts.append("")
             system_prompt_parts.append("Enterprise CI/CD infrastructure overview (internal docs):")
             system_prompt_parts.append(GLOBAL_CONTEXT_TEXT)
-            
+
         system_prompt = "\n".join(system_prompt_parts)
 
         user_prompt = (
@@ -173,7 +176,7 @@ class ResolverAgent:
 
         res: Dict[str, Any] = {
             "fix_text": generated_text,
-            "confidence": 0.6,
+            "confidence": LLM_GENERATED_CONFIDENCE,
             "source": "generated",
             "error_hash": error_hash,
         }

@@ -56,6 +56,7 @@ def test_notify_email_skips_when_smtp_not_configured(mocker, request_mock, excep
 
     smtp_spy.assert_not_called()
 
+
 def test_notify_email_sends_when_configured(mocker, request_mock, exception):
     mocker.patch("error_notifier.SMTP_SERVER", "localhost")
     mocker.patch("error_notifier.EMAIL_TO", ["ops@example.com"])

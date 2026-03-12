@@ -2,13 +2,12 @@
 
 import os
 import json
-import logging
 import time
 from typing import Optional
 import requests
+from logging_config import get_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("llm_openwebui_client")
+logger = get_logger("llm_openwebui_client")
 
 OPENWEBUI_BASE_URL = os.getenv(
     "OPENWEBUI_BASE_URL", "https://chat-internal.com").rstrip("/")
@@ -36,11 +35,15 @@ def _build_headers():
     return headers
 
 
-def _build_payload(prompt: str, system_prompt: Optional[str], temperature: float, max_tokens: int, model: Optional[str] = None):
+def _build_payload(
+    prompt: str, system_prompt: Optional[str],
+    temperature: float, max_tokens: int,
+    model: Optional[str] = None
+):
     model_to_use = model or OPENWEBUI_MODEL
     # Bedrock-friendly: merge system prompt into user content to avoid 'system' role issues
-    merged = (system_prompt.strip() +
-              "\n\n" if system_prompt else "") + prompt.strip()
+    prefix = (system_prompt.strip() + "\n\n") if system_prompt else ""
+    merged = prefix + prompt.strip()
     payload = {
         "model": model_to_use,
         "messages": [
@@ -115,7 +118,11 @@ def _extract_text_from_choice(choice):
     return None
 
 
-def call_llm(prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.2, max_tokens: int = 512, model: Optional[str] = None) -> str:
+def call_llm(
+    prompt: str, system_prompt: Optional[str] = None,
+    temperature: float = 0.2, max_tokens: int = 512,
+    model: Optional[str] = None
+) -> str:
     """
     Call OpenWebUI /api/v1/chat/completions and return assistant text.
     Raises RuntimeError on failure.
