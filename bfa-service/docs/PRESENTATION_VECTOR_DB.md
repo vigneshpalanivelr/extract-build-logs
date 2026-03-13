@@ -230,38 +230,82 @@ Week 8: "System is broken again, nobody noticed for 2 days"
 
 ### Two-Layer Defense: Normalization + Length-Penalized Scoring
 
-We implemented two complementary mechanisms:
+We implemented two complementary mechanisms that solve different aspects of the problem:
 
 ```
 Layer 1: TEXT NORMALIZATION (improves embedding quality)
-  → Better input → Better embeddings → Better matches
+  What: Build-log-specific structural cleaning before embedding
+  How:  Strip line prefixes → remove empty lines → deduplicate → prioritize errors → cap length
+  Why:  Better input → Better embeddings → Better matches
+  See:  "Why Normalization Specifically?" below for detailed explanation
 
 Layer 2: LENGTH-PENALIZED SIMILARITY (safety net for scoring)
-  → Detects length mismatches → Penalizes disproportionate entries
+  What: Logarithmic penalty applied to similarity scores based on text length mismatch
+  How:  penalty = 1 / (1 + α × ln(ratio)), where ratio = max(stored,query) / min(stored,query)
+  Why:  Even after normalization, if a stored entry is vastly longer than the query,
+        the embedding is likely more generic → the match is less trustworthy
 ```
 
 ### Why Two Layers?
 
-| Layer | Handles | Deployed when | Helps existing data? |
-|-------|---------|--------------|---------------------|
-| Length penalty | Scoring bias from size mismatch | Immediately (no migration) | Yes — protects against all oversized entries |
-| Normalization | Embedding quality from noisy text | After reindex for old data | Yes — after `POST /api/fixes/reindex` |
+Neither layer alone is sufficient — they cover each other's blind spots:
+
+| Layer | What it prevents | Limitation alone | Deployed when | Helps existing data? |
+|-------|-----------------|------------------|--------------|---------------------|
+| **Normalization** | Noisy text producing generic embeddings | Can't catch entries that were stored before normalization was deployed | After reindex for old data | Yes — after `POST /api/fixes/reindex` |
+| **Length penalty** | Oversized entries dominating similarity scores | Doesn't improve embedding quality — just adjusts scoring | Immediately (no migration) | Yes — protects against all oversized entries instantly |
 
 ```
+Together:
+  - Normalization ensures embeddings are HIGH QUALITY (precise, not generic)
+  - Length penalty ensures scoring is FAIR (long entries don't get unfair advantage)
+
 Timeline:
-  Day 0: Deploy code → length penalty protects IMMEDIATELY
-  Day 0: Run /api/fixes/reindex → normalization improves ALL embeddings
-  Day 1+: Both active, penalty rarely triggers (entries are similar length)
+  Day 0: Deploy code → length penalty protects IMMEDIATELY (zero migration)
+  Day 0: Run /api/fixes/reindex → normalization improves ALL stored embeddings
+  Day 1+: Both active — normalization makes entries similar in length,
+           so penalty rarely triggers (it's a safety net, not the primary defense)
 ```
 
 ### Why Logarithmic Penalty Specifically?
 
-The logarithmic function `1 / (1 + alpha * ln(ratio))` was chosen because:
+**What is Length-Penalized Scoring?**
 
-1. **Gentle for small differences** (2-3x = normal CI variation)
-2. **Aggressive for large differences** (10x+ = almost always problematic)
-3. **Smooth curve** (no step functions or cliff edges)
-4. **Tunable** via single ALPHA parameter
+Length-Penalized Scoring is a post-retrieval adjustment to similarity scores that accounts for the length difference between a query error text and a stored error text. The core insight: when a stored entry is significantly longer than the query, its embedding is more "generic" (averaged across many diverse tokens), so a high cosine similarity score is **misleading** — it doesn't mean the errors are actually similar, it means the stored entry is similar to *everything*.
+
+**How it works — step by step:**
+
+```
+1. ChromaDB returns raw cosine similarity (converted from distance):
+     raw_similarity = 1.0 - distance
+
+2. Calculate length ratio between stored entry and query:
+     ratio = max(stored_len, query_len) / min(stored_len, query_len)
+     (Always ≥ 1.0 — a ratio of 1.0 means identical length)
+
+3. Apply logarithmic penalty:
+     penalty = 1.0 / (1.0 + ALPHA × ln(ratio))
+     where ALPHA = 0.15 (configurable via LENGTH_PENALTY_ALPHA env var)
+
+4. Compute adjusted similarity:
+     adjusted_similarity = raw_similarity × penalty
+
+5. Compare against threshold:
+     if adjusted_similarity ≥ 0.78 → return this fix
+     else → skip this candidate, try next or fall through to LLM
+```
+
+**Why logarithmic (not linear, exponential, or step-function)?**
+
+The logarithmic function `1 / (1 + α × ln(ratio))` was chosen because its curve naturally matches the real-world relationship between length difference and match reliability:
+
+1. **Gentle for small differences** (2-3x ratio) — the same error from different CI systems (Jenkins vs GitHub Actions) naturally varies 2-3x in length due to different formatting, timestamps, and context. These are legitimate matches that should NOT be penalized heavily.
+
+2. **Aggressive for large differences** (10x+ ratio) — a 100-char query matching a 15,000-char stored entry is almost certainly a false positive caused by the hub effect. These should be penalized significantly.
+
+3. **Smooth curve** — no step functions or cliff edges. A 4.9x ratio and 5.1x ratio get almost identical penalties, unlike a step-function cutoff where one passes and the other fails completely.
+
+4. **Tunable** via single `ALPHA` parameter — increasing ALPHA makes the penalty more aggressive (penalizes smaller ratios), decreasing makes it more lenient.
 
 ```
 Penalty curve (ALPHA = 0.15):
@@ -282,32 +326,70 @@ Penalty curve (ALPHA = 0.15):
 Sweet spot: barely touches 1-3x, significantly penalizes 10x+
 ```
 
-| Length Ratio | Penalty | Effect on 0.82 raw similarity | Still matches (>0.78)? |
-|-------------|---------|-------------------------------|----------------------|
-| 1x | 1.00 | 0.820 | Yes |
-| 2x | 0.91 | 0.743 | No — but close, which is fine |
-| 5x | 0.81 | 0.661 | No |
-| 10x | 0.74 | 0.609 | No |
-| 100x | 0.59 | 0.485 | No |
+**Concrete example with numbers:**
+
+| Length Ratio | ln(ratio) | Penalty Formula | Penalty | Effect on 0.82 raw similarity | Still matches (>0.78)? |
+|-------------|-----------|-----------------|---------|-------------------------------|----------------------|
+| 1x (identical) | 0.00 | 1/(1 + 0.15×0.00) | 1.00 | 0.820 | Yes |
+| 2x | 0.69 | 1/(1 + 0.15×0.69) | 0.91 | 0.743 | No — but close, which is fine |
+| 5x | 1.61 | 1/(1 + 0.15×1.61) | 0.81 | 0.661 | No |
+| 10x | 2.30 | 1/(1 + 0.15×2.30) | 0.74 | 0.609 | No |
+| 100x (hub effect) | 4.61 | 1/(1 + 0.15×4.61) | 0.59 | 0.485 | No |
+
+**Benefits of Length-Penalized Scoring:**
+
+1. **Eliminates the hub effect** — oversized entries that sit near the center of the vector space can no longer dominate search results, because their inflated similarity scores are reduced proportionally to the length mismatch
+2. **Zero migration required** — the penalty is applied at query time on raw ChromaDB results, so it works immediately on all existing data without re-embedding
+3. **Preserves correct matches** — entries with similar lengths (ratio close to 1x) receive almost no penalty, so legitimate matches are unaffected
+4. **Bidirectional protection** — the ratio uses `max/min`, so it penalizes both cases: short query vs long stored entry, AND long query vs short stored entry
+5. **Works with normalization as a safety net** — after normalization, most entries are similar in length (80 lines / 4000 chars max), so the penalty rarely activates. But if a pre-normalization entry or an edge case slips through, the penalty catches it
 
 ### Why Normalization Specifically?
 
-Not just "truncate" — **intelligent text processing**:
+> **Important:** This is NOT traditional NLP normalization (lowercasing, removing noise like URLs/HTML/punctuation, tokenization, stop-word removal, stemming, or lemmatization). Those techniques are designed for natural language — sentences, paragraphs, documents written by humans.
+>
+> Build logs are **machine-generated structured output**, not natural language. Applying NLP normalization would destroy the very signals we need (e.g., lowercasing would lose `FATAL ERROR` vs `fatal error` distinction in some contexts, stemming `"compilation"` to `"compil"` would hurt embedding quality, and removing "stop words" could strip important log tokens like `"not"` in `"module not found"`).
+
+**Our normalization is build-log-specific structural cleaning** — it removes noise that is unique to CI/CD log output while preserving the actual error signal:
 
 | Step | What it does | Why it matters |
 |------|-------------|----------------|
-| Strip `Line NNN:` prefixes | Remove log-extraction line number markers | Not semantically useful — adds noise |
-| Remove empty lines | Drop whitespace-only lines | Reduces token waste |
-| Deduplicate | Keep first occurrence only | Build logs repeat errors 100s of times |
-| Prioritize error signals | Sort error-keyword lines to top | Embedding driven by actual errors, not context |
-| Cap length | 80 lines / 4000 chars max | Prevents generic embeddings |
+| Strip `Line NNN:` prefixes | Remove log-extraction line number markers (e.g., `Line 42: FATAL ERROR...` → `FATAL ERROR...`) | These are artifacts of our log-extraction service, not part of the actual error — they add noise to embeddings |
+| Remove empty lines | Drop whitespace-only lines | Build logs are full of blank separator lines — they waste embedding tokens without adding meaning |
+| Deduplicate | Keep first occurrence of each unique line only | Build logs often repeat the same error hundreds of times (e.g., a compiler warning repeated per file). Duplicates inflate the embedding toward that single repeated message |
+| Prioritize error signals | Move lines containing error keywords (`error`, `fail`, `fatal`, `exception`, `traceback`, etc.) to the top | Embedding models weight earlier tokens more heavily. By putting error-signal lines first, the embedding is driven by actual errors rather than pages of `"Installing package X..."` setup noise |
+| Cap length | 80 lines / 4000 chars max | Prevents the "hub effect" — without a cap, a 500-line log produces a generic embedding that sits near the center of the vector space and falsely matches everything |
+
+**Why this works better than NLP normalization:**
+
+```
+NLP normalization on a build log:
+  Input:  "FATAL ERROR: heap out of memory at 0x7fff5fbff8c0"
+  After:  "fatal error heap memori 0x7fff5fbff8c0"    ← stemmed, lowered, stop-words removed
+  Result: Worse embedding — "memori" is not a real token, loses semantic meaning
+
+Our normalization on a build log:
+  Input:  "Line 450: FATAL ERROR: heap out of memory at 0x7fff5fbff8c0"
+  After:  "FATAL ERROR: heap out of memory at 0x7fff5fbff8c0"    ← only stripped line prefix
+  Result: Clean, meaningful text — embedding model understands "heap out of memory" perfectly
+```
 
 **Critical detail:** Normalization runs on **both save and lookup** sides. This ensures the same transformation is applied consistently:
 
 ```
 Save:  raw error log → normalize → embed → store in ChromaDB
 Query: raw error log → normalize → embed → compare against stored embeddings
+
+If only one side normalized, embeddings would be in different "spaces"
+and similarity scores would be unreliable.
 ```
+
+**Benefits of this approach:**
+
+1. **Preserves semantic meaning** — the embedding model receives clean, meaningful error text instead of noisy log output
+2. **Reduces dimensionality collapse** — shorter, focused text produces precise embeddings instead of generic "center of space" vectors
+3. **Handles real-world log variation** — the same error from different CI systems (Jenkins, GitHub Actions, GitLab CI) may have different line prefixes, whitespace, and surrounding context, but after normalization they converge to the same core error text
+4. **Idempotent** — normalizing already-normalized text produces the same result, so it's safe to apply multiple times
 
 ### Combined Effect — Before vs After
 
@@ -317,6 +399,114 @@ Query: raw error log → normalize → embed → compare against stored embeddin
 | Short query vs correct short entry | 0.80 → correct match | 0.78 → **correct match (unchanged)** |
 | Error buried in test output | 0.71 → **missed** | 0.92 → **matched (normalization extracted error)** |
 | Same error, different context | May mismatch | **Correct match (normalization focuses on error signal)** |
+
+### What Happens When an Identical Error Occurs Again?
+
+One of the most common scenarios: a build fails with the **exact same error** that was previously resolved and stored in ChromaDB. Here's the complete search flow:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  INCOMING: "ERROR: gcc compilation failed                     │
+│            /src/main.c:42: undefined reference to 'pthread'"  │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 1: AI Cache Check (Redis)                               │
+│                                                               │
+│  Hash the error text → check Redis key "ai:fix:<hash>"        │
+│                                                               │
+│  If the EXACT same text was recently resolved by LLM,         │
+│  the fix is cached here. Returns immediately.                 │
+│                                                               │
+│  Cache HIT  → return fix (source: "ai_cache") → DONE         │
+│  Cache MISS → continue to Step 2                              │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 2: Normalize the error text                             │
+│                                                               │
+│  Strip "Line NNN:" prefixes → remove empty lines →            │
+│  deduplicate → prioritize error keywords → cap length         │
+│                                                               │
+│  Input:  "Line 42: ERROR: gcc compilation failed\n            │
+│           Line 43: /src/main.c:42: undefined reference..."    │
+│  Output: "ERROR: gcc compilation failed\n                     │
+│           /src/main.c:42: undefined reference to 'pthread'"   │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 3: Embed the normalized text                            │
+│                                                               │
+│  Send normalized text to Ollama (granite-embedding model)     │
+│  → Returns a 768-dimension float vector                       │
+│                                                               │
+│  For identical error text, the embedding will be              │
+│  IDENTICAL to what was stored (deterministic model)           │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 4: Query ChromaDB (top-k=5 candidates)                  │
+│                                                               │
+│  ChromaDB computes cosine distance between query embedding    │
+│  and all stored embeddings. Returns top 5 closest matches.    │
+│                                                               │
+│  For an IDENTICAL error:                                      │
+│    cosine distance ≈ 0.0 → raw_similarity ≈ 1.0              │
+│    (perfect or near-perfect match)                            │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 5: Apply Length Penalty                                  │
+│                                                               │
+│  For an identical error, stored_len ≈ query_len               │
+│    ratio = max(120, 120) / min(120, 120) = 1.0               │
+│    penalty = 1 / (1 + 0.15 × ln(1.0)) = 1 / (1 + 0) = 1.0  │
+│    adjusted_similarity = 1.0 × 1.0 = 1.0                     │
+│                                                               │
+│  The penalty has ZERO effect on identical-length entries.      │
+│  This is by design — the penalty only activates for           │
+│  length mismatches.                                           │
+└──────────────────────┬───────────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  STEP 6: Threshold Check                                      │
+│                                                               │
+│  adjusted_similarity (1.0) ≥ threshold (0.78) → MATCH!       │
+│                                                               │
+│  Return: {                                                    │
+│    fix_text: "Add -lpthread to LDFLAGS",                      │
+│    confidence: 1.0,                                           │
+│    source: "vector_db"                                        │
+│  }                                                            │
+│                                                               │
+│  → Fix returned instantly, NO LLM call needed                 │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key takeaway:** When the same error occurs again, the system returns the stored fix with near-perfect confidence (~1.0) and zero length penalty. The fix is returned directly from ChromaDB without calling the LLM, making the response **fast** (milliseconds vs seconds) and **consistent** (same error always gets the same approved fix).
+
+**What about "almost identical" errors?**
+
+Real-world builds rarely produce *byte-for-byte identical* errors. More commonly, the same root cause produces slightly different text (different file paths, line numbers, timestamps). Here's how that plays out:
+
+```
+Stored:  "ERROR: gcc compilation failed\n/src/main.c:42: undefined reference to 'pthread_create'"
+Query:   "ERROR: gcc compilation failed\n/src/utils.c:15: undefined reference to 'pthread_create'"
+
+After normalization: both are clean, similar-length text
+Embedding similarity: ~0.95 (very high — same error pattern, different file/line)
+Length ratio: ~1.0 (similar length after normalization)
+Penalty: ~1.0 (no penalty)
+Adjusted similarity: ~0.95 → well above 0.78 threshold → CORRECT MATCH
+```
+
+This is where normalization shines — by stripping noise and focusing on error signals, two instances of the same root cause produce highly similar embeddings even when the surrounding context differs.
 
 ---
 
@@ -380,74 +570,6 @@ Query: raw error log → normalize → embed → compare against stored embeddin
                    from DB                 → Post to Slack for review
                                            → SME Approve/Edit/Discard
                                            → If approved: normalize + embed + store
-```
-
-### Key Code: `_normalize_error_text()` in `vector_db.py`
-
-```python
-def _normalize_error_text(self, raw_text: str) -> str:
-    lines = raw_text.split("\n")
-
-    # Step 1: Strip "Line NNN:" prefixes
-    lines = [re.sub(r'^Line\s+\d+:\s*', '', l) for l in lines]
-
-    # Step 2: Remove empty lines
-    lines = [l.strip() for l in lines if l.strip()]
-
-    # Step 3: Deduplicate (keep first occurrence)
-    seen = set()
-    unique = []
-    for l in lines:
-        if l not in seen:
-            seen.add(l)
-            unique.append(l)
-    lines = unique
-
-    # Step 4: Prioritize error-signal lines
-    error_kw = ['error', 'fail', 'fatal', 'exception', 'traceback', ...]
-    error_lines = [l for l in lines if any(kw in l.lower() for kw in error_kw)]
-    other_lines = [l for l in lines if l not in error_lines]
-    lines = error_lines + other_lines
-
-    # Step 5: Cap to MAX_ERROR_LINES
-    lines = lines[:self.max_error_lines]
-
-    # Step 6: Cap to MAX_ERROR_CHARS
-    text = "\n".join(lines)
-    return text[:self.max_error_chars]
-```
-
-### Key Code: Length Penalty in `lookup_existing_fix()`
-
-```python
-def lookup_existing_fix(self, error_text, top_k=5, embedding_vector=None):
-    # Normalize the query
-    normalized_query = self._normalize_error_text(error_text)
-    query_len = len(normalized_query)
-
-    # Embed and query ChromaDB
-    results = self.collection.query(
-        query_embeddings=[embedding],
-        n_results=top_k,
-        include=["documents", "metadatas", "distances"]
-    )
-
-    for i, distance in enumerate(results["distances"][0]):
-        raw_similarity = 1.0 - distance  # ChromaDB returns distance
-        stored_len = len(results["metadatas"][0][i].get("error_text", ""))
-
-        # Length penalty
-        ratio = max(stored_len, query_len) / max(min(stored_len, query_len), 1)
-        penalty = 1.0 / (1.0 + ALPHA * math.log(ratio))
-        adjusted = raw_similarity * penalty
-
-        if adjusted >= SIMILARITY_THRESHOLD:
-            return {
-                "fix_text": results["documents"][0][i],
-                "confidence": adjusted,
-                "source": "vector_db",
-                ...
-            }
 ```
 
 ### Environment Variables
