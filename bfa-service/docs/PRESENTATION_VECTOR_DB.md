@@ -640,3 +640,359 @@ This is where normalization shines — by stripping noise and focusing on error 
 3. **Logarithmic penalty** is the right curve — gentle for normal variation, aggressive for extreme mismatches
 4. **Normalize on both sides** — save and lookup must apply identical transformation
 5. **Zero-downtime deployment** — backward compatible, no migration needed
+
+---
+
+## 6. Proposed Enhancements
+
+### Current Gaps
+
+| Gap | Impact | Priority |
+|-----|--------|----------|
+| No fix versioning — updates overwrite previous fixes | If a wrong edit is made, the original fix is lost forever | High |
+| No team/domain segregation — all fixes in a single flat collection | A DevOps fix for "permission denied" could match a Security team's "permission denied" (different root cause, different fix) | High |
+| No fix lifecycle management — no way to deprecate, expire, or supersede fixes | Outdated fixes (e.g., for deprecated tools) remain active and get returned forever | Medium |
+| No confidence feedback loop — no tracking of whether returned fixes actually helped | System can't learn which fixes work and which don't | Medium |
+| No conflict detection — two similar errors can have contradicting fixes | SMEs may approve conflicting fixes without knowing | Medium |
+
+---
+
+### Enhancement 1: Fix Versioning & Edit History
+
+**Problem:** When an SME updates a fix via `PUT /api/fixes/{id}` or Slack Edit, the previous fix text is overwritten. If the new fix is wrong, the original is lost. There's no way to answer "what was the fix before someone changed it?"
+
+**Proposed Solution: Append-Only Version Log**
+
+Store a version history array in metadata for every fix. Each edit appends a version entry rather than overwriting.
+
+```
+Current behavior (destructive):
+  fix_text: "Add -lpthread"  →  PUT update  →  fix_text: "Add -pthread"
+  (original "Add -lpthread" is GONE)
+
+Proposed behavior (versioned):
+  fix_text: "Add -pthread"              ← current/active version
+  metadata.versions: [                  ← append-only history
+    {
+      "version": 1,
+      "fix_text": "Add -lpthread",
+      "edited_by": "alice",
+      "timestamp": "2026-03-10 14:30:00",
+      "reason": "Initial SME approval"
+    },
+    {
+      "version": 2,
+      "fix_text": "Add -pthread",
+      "edited_by": "bob",
+      "timestamp": "2026-03-13 09:15:00",
+      "reason": "Updated: -lpthread is deprecated, use -pthread"
+    }
+  ]
+```
+
+**New API Endpoints:**
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/fixes/{id}/history` | List all versions of a fix |
+| POST | `/api/fixes/{id}/revert/{version}` | Revert to a specific version (creates new version entry) |
+
+**Benefits:**
+- Full audit trail — know who changed what and when
+- Safe rollback — revert bad edits without losing anything
+- Accountability — SMEs can see the evolution of a fix over time
+
+**Implementation Note:** ChromaDB metadata must be flat primitives, so the version array would be stored as a JSON string in a `versions` metadata field and parsed on read.
+
+---
+
+### Enhancement 2: Team/Domain Segregation
+
+**Problem:** All fixes live in a single flat ChromaDB collection. A "permission denied" error in a Docker build (DevOps) and a "permission denied" error in an API gateway (Security) are completely different problems with different fixes — but they match each other with high similarity because the error text is nearly identical.
+
+**Proposed Solution: Team-Scoped Fix Collections with Metadata Filtering**
+
+Two complementary approaches:
+
+#### Approach A: Metadata-Based Filtering (Simpler, Recommended First)
+
+Add a `team` metadata field to every fix. Filter at query time.
+
+```
+Store:
+  fix_text: "Run chmod +x on the deploy script"
+  metadata: {
+    error_text: "permission denied: ./deploy.sh",
+    team: "devops",
+    category: "ci-pipeline",
+    ...
+  }
+
+Query:
+  error_text: "permission denied: ./deploy.sh"
+  filter: { team: "devops" }  ← ChromaDB where clause
+  → Only searches within DevOps fixes
+```
+
+**Proposed Team Categories:**
+
+| Team | Scope | Example Errors |
+|------|-------|---------------|
+| `devops` | CI/CD pipelines, Docker, Kubernetes, infrastructure | Build failures, container errors, deployment issues |
+| `product` | Application code, frontend/backend, business logic | Compilation errors, test failures, runtime exceptions |
+| `it` | Internal tooling, network, access management | VPN errors, proxy failures, certificate issues |
+| `security` | Vulnerability scanning, access control, compliance | SAST/DAST failures, secret detection, policy violations |
+| `data` | Data pipelines, databases, ETL processes | Migration failures, connection timeouts, query errors |
+| `platform` | Shared libraries, SDKs, common frameworks | Dependency conflicts, version mismatches |
+
+**Query Flow with Team Filtering:**
+
+```
+┌─────────────────────────────────────────────────┐
+│  INCOMING ERROR                                  │
+│  error_text: "permission denied: ./deploy.sh"    │
+│  metadata.repo: "infra/deploy-scripts"           │
+└──────────────────┬──────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 1: INFER TEAM                              │
+│                                                  │
+│  Auto-detect from metadata:                      │
+│    - repo path contains "infra/" → devops        │
+│    - job_name contains "security-scan" → security│
+│    - step_name contains "unit-test" → product    │
+│    - OR: explicit team field from CI config      │
+│                                                  │
+│  Fallback: search ALL teams (no filter)          │
+└──────────────────┬──────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 2: QUERY ChromaDB WITH TEAM FILTER         │
+│                                                  │
+│  collection.query(                               │
+│    query_embeddings=[vector],                    │
+│    n_results=5,                                  │
+│    where={"team": "devops"}  ← scoped search     │
+│  )                                               │
+│                                                  │
+│  Only DevOps fixes are considered as candidates.  │
+│  Security team's "permission denied" fix is       │
+│  never even evaluated.                           │
+└──────────────────┬──────────────────────────────┘
+                   │
+                   ▼
+┌─────────────────────────────────────────────────┐
+│  STEP 3: FALLBACK (if no match in team scope)    │
+│                                                  │
+│  If scoped search returns no match above          │
+│  threshold → retry WITHOUT team filter            │
+│  (cross-team search as safety net)               │
+│                                                  │
+│  This handles edge cases where a fix exists       │
+│  but was tagged under a different team.           │
+└─────────────────────────────────────────────────┘
+```
+
+#### Approach B: Separate Collections per Team (For Scale)
+
+If the fix database grows large (1000+ fixes per team), separate ChromaDB collections provide better performance:
+
+```
+Collections:
+  fix_embeddings_devops      ← DevOps fixes only
+  fix_embeddings_product     ← Product fixes only
+  fix_embeddings_security    ← Security fixes only
+  fix_embeddings_it          ← IT fixes only
+  fix_embeddings_data        ← Data team fixes only
+  fix_embeddings_global      ← Cross-team / untagged fixes
+```
+
+**Recommendation:** Start with Approach A (metadata filtering). Migrate to Approach B only if performance degrades with collection size.
+
+**New API Endpoints:**
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/api/fixes?team=devops` | List fixes filtered by team |
+| PUT | `/api/fixes/{id}` | Update including team reassignment |
+| GET | `/api/teams` | List all available teams with fix counts |
+| GET | `/api/teams/{team}/stats` | Stats for a team: total fixes, avg confidence, top errors |
+
+---
+
+### Enhancement 3: Fix Lifecycle Management
+
+**Problem:** Fixes never expire. A fix approved for Node.js 14 remains active even after the team migrates to Node.js 20. Outdated fixes get returned and confuse developers.
+
+**Proposed Solution: Fix States with Lifecycle Transitions**
+
+```
+                  ┌──────────┐
+                  │  ACTIVE   │ ← Default state after approval
+                  └─────┬────┘
+                        │
+          ┌─────────────┼─────────────┐
+          │             │             │
+          ▼             ▼             ▼
+   ┌────────────┐ ┌──────────┐ ┌────────────┐
+   │ DEPRECATED │ │ SUPERSEDED│ │  ARCHIVED  │
+   │            │ │           │ │            │
+   │ Still      │ │ Replaced  │ │ Fully      │
+   │ returned   │ │ by newer  │ │ hidden     │
+   │ but with   │ │ fix — new │ │ from       │
+   │ warning    │ │ fix is    │ │ search     │
+   │ label      │ │ returned  │ │ results    │
+   └────────────┘ └───────────┘ └────────────┘
+```
+
+| State | Visible in Search? | Returned to Developers? | Use Case |
+|-------|--------------------|------------------------|----------|
+| `active` | Yes | Yes (normal) | Current, valid fix |
+| `deprecated` | Yes | Yes, with warning: "This fix may be outdated" | Tool/version changed but fix might still work |
+| `superseded` | Yes (for audit) | No — the superseding fix is returned instead | Better fix discovered, old one replaced |
+| `archived` | No | No | Completely irrelevant (e.g., deleted repo, retired service) |
+
+**New API Endpoints:**
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/fixes/{id}/deprecate` | Mark fix as deprecated (with optional reason) |
+| POST | `/api/fixes/{id}/supersede` | Mark fix as superseded, link to new fix ID |
+| POST | `/api/fixes/{id}/archive` | Archive fix (remove from search results) |
+| POST | `/api/fixes/{id}/activate` | Reactivate a deprecated/archived fix |
+
+---
+
+### Enhancement 4: Confidence Feedback Loop
+
+**Problem:** The system returns fixes but never learns whether they actually helped. A fix with 0.85 confidence might be wrong 50% of the time, but there's no mechanism to track this.
+
+**Proposed Solution: Developer Feedback + Confidence Adjustment**
+
+```
+Current flow (open loop):
+  Error → Fix returned → Developer receives fix → ???
+  (System never learns if the fix worked)
+
+Proposed flow (closed loop):
+  Error → Fix returned → Developer receives fix
+                              │
+                              ▼
+                     ┌─────────────────┐
+                     │ Did this help?   │
+                     │ [👍 Yes] [👎 No] │
+                     └────────┬────────┘
+                              │
+                    ┌─────────┴─────────┐
+                    │                   │
+                    ▼                   ▼
+              Increment            Increment
+              success_count        failure_count
+                    │                   │
+                    └─────────┬─────────┘
+                              │
+                              ▼
+                    Compute effectiveness:
+                    score = successes / (successes + failures)
+
+                    If score < 0.5 after 10+ ratings:
+                      → Flag for SME review
+                      → Reduce similarity boost (less likely to be returned)
+```
+
+**New Metadata Fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success_count` | int | Times developers confirmed this fix helped |
+| `failure_count` | int | Times developers said this fix didn't help |
+| `effectiveness_score` | float | success / (success + failure), updated on each vote |
+| `last_feedback_at` | string | Timestamp of most recent feedback |
+| `flagged_for_review` | bool | Auto-set when effectiveness drops below threshold |
+
+**New API Endpoints:**
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| POST | `/api/fixes/{id}/feedback` | Submit thumbs-up/thumbs-down feedback |
+| GET | `/api/fixes/flagged` | List fixes flagged for review (low effectiveness) |
+| GET | `/api/fixes/stats` | Overall system stats: accuracy rate, top-performing fixes, worst-performing fixes |
+
+---
+
+### Enhancement 5: Conflict Detection
+
+**Problem:** Two SMEs might approve contradicting fixes for similar errors. Error A: "ENOMEM: heap out of memory" → Fix 1: "Increase Node memory" and Fix 2: "Fix memory leak in module X". Both are stored, and which one gets returned depends on which embedding is slightly closer — essentially random.
+
+**Proposed Solution: Pre-Save Similarity Check with Conflict Alert**
+
+```
+Before saving a new fix:
+  1. Embed the new error text
+  2. Query ChromaDB for existing fixes with similarity > 0.85
+  3. If matches found:
+     a. Compare fix texts — are they semantically different?
+     b. If different → CONFLICT DETECTED
+     c. Alert SME: "A similar error already has a different fix.
+        Do you want to: [Replace existing] [Keep both] [Cancel]?"
+```
+
+**Conflict Resolution Options:**
+
+| Action | What happens |
+|--------|-------------|
+| **Replace existing** | Old fix is superseded (lifecycle state change), new fix becomes active |
+| **Keep both** | Both fixes stored — system returns the higher-confidence match. Useful when same error has multiple valid fixes depending on context |
+| **Cancel** | New fix is not saved |
+| **Merge** | SME combines both fixes into a single comprehensive fix |
+
+---
+
+### Enhancement 6: Auto-Tagging & Smart Categorization
+
+**Problem:** Requiring SMEs to manually tag every fix with a team, category, and metadata is tedious and error-prone. Fixes end up untagged or mistagged.
+
+**Proposed Solution: LLM-Powered Auto-Classification**
+
+```
+When a fix is approved:
+  1. Send error_text + fix_text to LLM with classification prompt
+  2. LLM returns:
+     - team: "devops" | "product" | "security" | "it" | "data" | "platform"
+     - category: "build-failure" | "test-failure" | "deploy-failure" | ...
+     - root_cause: "missing-dependency" | "permission-error" | "oom" | ...
+     - affected_tool: "docker" | "npm" | "gcc" | "pytest" | ...
+  3. Store as metadata (SME can override via Slack or API)
+```
+
+**Benefit:** Every fix is automatically categorized without SME effort. Auto-tagging enables team-scoped search (Enhancement 2) to work even without manual tagging.
+
+---
+
+### Enhancement Summary
+
+| # | Enhancement | Effort | Impact | Depends On |
+|---|------------|--------|--------|------------|
+| 1 | **Fix Versioning & Edit History** | Medium | High — prevents data loss, enables safe edits | None |
+| 2 | **Team/Domain Segregation** | Medium | High — eliminates cross-team false positives | Enhancement 6 helps (auto-tagging) |
+| 3 | **Fix Lifecycle Management** | Low | Medium — handles stale fixes gracefully | None |
+| 4 | **Confidence Feedback Loop** | Medium | Medium — system improves over time | None |
+| 5 | **Conflict Detection** | Medium | Medium — prevents contradicting fixes | None |
+| 6 | **Auto-Tagging & Smart Categorization** | Low | High — enables team segregation without manual effort | None (but pairs with Enhancement 2) |
+
+**Recommended Implementation Order:**
+
+```
+Phase 1 (Immediate): Enhancement 1 (Versioning) + Enhancement 3 (Lifecycle)
+  → Solves "wrong fix was updated, can't revert" and "outdated fixes never expire"
+  → Low-to-medium effort, high impact, no dependencies
+
+Phase 2 (Short-term): Enhancement 6 (Auto-Tagging) + Enhancement 2 (Team Segregation)
+  → Auto-tag first, then enable team-scoped search
+  → Eliminates cross-team false positives
+
+Phase 3 (Medium-term): Enhancement 5 (Conflict Detection) + Enhancement 4 (Feedback Loop)
+  → Quality improvements that make the system self-correcting over time
+```
