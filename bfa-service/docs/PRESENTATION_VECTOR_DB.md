@@ -706,119 +706,143 @@ Proposed behavior (versioned):
 
 ---
 
-### Enhancement 2: Team/Domain Segregation
+### Enhancement 2: Fix Domain Segregation
 
-**Problem:** All fixes live in a single flat ChromaDB collection. A "permission denied" error in a Docker build (DevOps) and a "permission denied" error in an API gateway (Security) are completely different problems with different fixes — but they match each other with high similarity because the error text is nearly identical.
+**Problem:** All fixes live in a single flat ChromaDB collection. A "permission denied" error in a Docker build (DevOps domain) and a "permission denied" error in an API gateway (IT domain) are completely different problems with different fixes — but they match each other with high similarity because the error text is nearly identical.
 
-**Proposed Solution: Team-Scoped Fix Collections with Metadata Filtering**
+**Proposed Solution: Domain-Scoped Fix Search with Metadata Filtering**
 
-Two complementary approaches:
+Every fix is tagged with a **Fix Domain** — the domain of expertise the fix belongs to. This domain is set during Slack approval (see Enhancement 6 for the Slack flow) and used as a ChromaDB `where` filter at query time.
 
-#### Approach A: Metadata-Based Filtering (Simpler, Recommended First)
+#### Fix Domain Values
 
-Add a `team` metadata field to every fix. Filter at query time.
+| Fix Domain | Scope | Example Errors |
+|------------|-------|---------------|
+| `Product` | Application code, frontend/backend, business logic | Compilation errors, test failures, runtime exceptions |
+| `DevOps` | CI/CD pipelines, Docker, Kubernetes, infrastructure | Build failures, container errors, deployment issues |
+| `IT` | Internal tooling, network, access management | VPN errors, proxy failures, certificate issues |
+
+> **Note:** Additional domains (e.g., `Security`, `Data`, `Platform`) can be added later by updating the Slack dropdown options and domain-inference rules. Starting with three keeps the SME workflow simple.
+
+#### How Domain Filtering Works
 
 ```
-Store:
+Store (on Slack Approve/Edit):
   fix_text: "Run chmod +x on the deploy script"
   metadata: {
     error_text: "permission denied: ./deploy.sh",
-    team: "devops",
-    category: "ci-pipeline",
+    fix_domain: "DevOps",            ← set by SME via Slack dropdown
     ...
   }
 
-Query:
+Query (on /api/analyze):
   error_text: "permission denied: ./deploy.sh"
-  filter: { team: "devops" }  ← ChromaDB where clause
-  → Only searches within DevOps fixes
+  where: { "fix_domain": "DevOps" }  ← ChromaDB where clause
+  → Only DevOps fixes are searched
 ```
 
-**Proposed Team Categories:**
-
-| Team | Scope | Example Errors |
-|------|-------|---------------|
-| `devops` | CI/CD pipelines, Docker, Kubernetes, infrastructure | Build failures, container errors, deployment issues |
-| `product` | Application code, frontend/backend, business logic | Compilation errors, test failures, runtime exceptions |
-| `it` | Internal tooling, network, access management | VPN errors, proxy failures, certificate issues |
-| `security` | Vulnerability scanning, access control, compliance | SAST/DAST failures, secret detection, policy violations |
-| `data` | Data pipelines, databases, ETL processes | Migration failures, connection timeouts, query errors |
-| `platform` | Shared libraries, SDKs, common frameworks | Dependency conflicts, version mismatches |
-
-**Query Flow with Team Filtering:**
+#### Query Flow with Domain Filtering
 
 ```
-┌─────────────────────────────────────────────────┐
-│  INCOMING ERROR                                  │
-│  error_text: "permission denied: ./deploy.sh"    │
-│  metadata.repo: "infra/deploy-scripts"           │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────┐
-│  STEP 1: INFER TEAM                              │
-│                                                  │
-│  Auto-detect from metadata:                      │
-│    - repo path contains "infra/" → devops        │
-│    - job_name contains "security-scan" → security│
-│    - step_name contains "unit-test" → product    │
-│    - OR: explicit team field from CI config      │
-│                                                  │
-│  Fallback: search ALL teams (no filter)          │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────┐
-│  STEP 2: QUERY ChromaDB WITH TEAM FILTER         │
-│                                                  │
-│  collection.query(                               │
-│    query_embeddings=[vector],                    │
-│    n_results=5,                                  │
-│    where={"team": "devops"}  ← scoped search     │
-│  )                                               │
-│                                                  │
-│  Only DevOps fixes are considered as candidates.  │
-│  Security team's "permission denied" fix is       │
-│  never even evaluated.                           │
-└──────────────────┬──────────────────────────────┘
-                   │
-                   ▼
-┌─────────────────────────────────────────────────┐
-│  STEP 3: FALLBACK (if no match in team scope)    │
-│                                                  │
-│  If scoped search returns no match above          │
-│  threshold → retry WITHOUT team filter            │
-│  (cross-team search as safety net)               │
-│                                                  │
-│  This handles edge cases where a fix exists       │
-│  but was tagged under a different team.           │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  INCOMING ERROR                                       │
+│  error_text: "permission denied: ./deploy.sh"         │
+│  metadata: { repo: "infra/deploy-scripts",            │
+│              job_name: "deploy-staging" }              │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  STEP 1: DETERMINE FIX DOMAIN                        │
+│                                                       │
+│  Priority order:                                      │
+│    1. Explicit domain from CI config / API payload    │
+│       (e.g., payload.fix_domain = "DevOps")           │
+│    2. Auto-infer from pipeline metadata:              │
+│       - repo contains "infra/" → DevOps               │
+│       - job_name contains "deploy" → DevOps           │
+│       - step_name contains "unit-test" → Product      │
+│       - job_name contains "vpn" or "proxy" → IT       │
+│    3. LLM auto-classification (Enhancement 6)         │
+│    4. Fallback: search ALL domains (no filter)        │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  STEP 2: SCOPED QUERY                                 │
+│                                                       │
+│  collection.query(                                    │
+│    query_embeddings=[vector],                         │
+│    n_results=5,                                       │
+│    where={"fix_domain": "DevOps"}                     │
+│  )                                                    │
+│                                                       │
+│  Only DevOps fixes are evaluated as candidates.       │
+│  IT domain's "permission denied" fix is NEVER         │
+│  even compared — eliminating cross-domain             │
+│  false positives entirely.                            │
+└──────────────────────┬───────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────┐
+│  STEP 3: CROSS-DOMAIN FALLBACK                        │
+│                                                       │
+│  If scoped query returns no match above threshold:    │
+│    → Retry WITHOUT domain filter (search all)         │
+│    → If match found, return it with a flag:           │
+│      "cross_domain_match": true                       │
+│                                                       │
+│  This handles:                                        │
+│    - Fixes tagged under wrong domain                  │
+│    - New domain that doesn't have fixes yet           │
+│    - Generic errors that span domains                 │
+└──────────────────────────────────────────────────────┘
 ```
 
-#### Approach B: Separate Collections per Team (For Scale)
+#### Approach B: Separate Collections per Domain (For Scale)
 
-If the fix database grows large (1000+ fixes per team), separate ChromaDB collections provide better performance:
+If the fix database grows large (1000+ fixes per domain), separate ChromaDB collections provide better query performance:
 
 ```
 Collections:
-  fix_embeddings_devops      ← DevOps fixes only
   fix_embeddings_product     ← Product fixes only
-  fix_embeddings_security    ← Security fixes only
+  fix_embeddings_devops      ← DevOps fixes only
   fix_embeddings_it          ← IT fixes only
-  fix_embeddings_data        ← Data team fixes only
-  fix_embeddings_global      ← Cross-team / untagged fixes
+  fix_embeddings_global      ← Cross-domain / untagged fixes
 ```
 
-**Recommendation:** Start with Approach A (metadata filtering). Migrate to Approach B only if performance degrades with collection size.
+**Recommendation:** Start with metadata filtering (Approach A). Migrate to separate collections only if performance degrades.
 
-**New API Endpoints:**
+#### New/Updated API Endpoints
 
 | Method | Endpoint | Purpose |
 |--------|----------|---------|
-| GET | `/api/fixes?team=devops` | List fixes filtered by team |
-| PUT | `/api/fixes/{id}` | Update including team reassignment |
-| GET | `/api/teams` | List all available teams with fix counts |
-| GET | `/api/teams/{team}/stats` | Stats for a team: total fixes, avg confidence, top errors |
+| GET | `/api/fixes?fix_domain=DevOps` | List fixes filtered by domain |
+| PUT | `/api/fixes/{id}` | Update fix including domain reassignment |
+| GET | `/api/domains` | List all fix domains with counts |
+| GET | `/api/domains/{domain}/stats` | Stats per domain: total fixes, avg confidence, top errors |
+
+#### Changes to `lookup_existing_fix()`
+
+```
+New parameter: fix_domain (optional str)
+
+def lookup_existing_fix(self, error_text, top_k=5, fix_domain=None, ...):
+    ...
+    query_kwargs = {
+        "query_embeddings": [vector],
+        "n_results": top_k,
+        "include": ["metadatas", "documents", "distances"],
+    }
+    if fix_domain:
+        query_kwargs["where"] = {"fix_domain": fix_domain}
+
+    res = self.collection.query(**query_kwargs)
+    ...
+    # If no match and fix_domain was set → retry without filter
+    if not candidates and fix_domain:
+        return self.lookup_existing_fix(error_text, top_k=top_k, fix_domain=None, ...)
+```
 
 ---
 
@@ -926,48 +950,408 @@ Proposed flow (closed loop):
 
 **Problem:** Two SMEs might approve contradicting fixes for similar errors. Error A: "ENOMEM: heap out of memory" → Fix 1: "Increase Node memory" and Fix 2: "Fix memory leak in module X". Both are stored, and which one gets returned depends on which embedding is slightly closer — essentially random.
 
-**Proposed Solution: Pre-Save Similarity Check with Conflict Alert**
+**Proposed Solution: Pre-Save Conflict Check with Slack Resolution Flow**
+
+#### When Conflict Detection Triggers
+
+Conflict detection runs **before** saving to ChromaDB — during Slack Approve or Edit actions. It checks whether a similar error already has a different fix stored.
 
 ```
-Before saving a new fix:
-  1. Embed the new error text
-  2. Query ChromaDB for existing fixes with similarity > 0.85
-  3. If matches found:
-     a. Compare fix texts — are they semantically different?
-     b. If different → CONFLICT DETECTED
-     c. Alert SME: "A similar error already has a different fix.
-        Do you want to: [Replace existing] [Keep both] [Cancel]?"
+CONFLICT_SIMILARITY_THRESHOLD = 0.85  (higher than search threshold of 0.78)
 ```
 
-**Conflict Resolution Options:**
+#### Complete Conflict Detection Flow
 
-| Action | What happens |
-|--------|-------------|
-| **Replace existing** | Old fix is superseded (lifecycle state change), new fix becomes active |
-| **Keep both** | Both fixes stored — system returns the higher-confidence match. Useful when same error has multiple valid fixes depending on context |
-| **Cancel** | New fix is not saved |
-| **Merge** | SME combines both fixes into a single comprehensive fix |
+```
+┌──────────────────────────────────────────────────────────┐
+│  SME clicks [Approve] or submits [Edit] in Slack          │
+│                                                           │
+│  New fix:                                                 │
+│    error_text: "ENOMEM: heap out of memory"               │
+│    fix_text: "Fix memory leak in module X"                 │
+│    fix_domain: "Product"                                   │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│  STEP 1: PRE-SAVE SIMILARITY CHECK                        │
+│                                                           │
+│  Before saving, query ChromaDB:                           │
+│    - Normalize + embed the new error_text                 │
+│    - Search with CONFLICT threshold (0.85)                │
+│    - Filter by same fix_domain if set                     │
+│                                                           │
+│  Query: collection.query(                                 │
+│    query_embeddings=[new_embedding],                      │
+│    n_results=3,                                           │
+│    where={"fix_domain": "Product"}                        │
+│  )                                                        │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+              ┌────────┴────────┐
+              │                 │
+        No matches         Matches found
+        above 0.85         (similarity > 0.85)
+              │                 │
+              ▼                 ▼
+┌──────────────────┐  ┌────────────────────────────────────┐
+│  NO CONFLICT      │  │  STEP 2: COMPARE FIX TEXTS          │
+│                   │  │                                      │
+│  Save normally    │  │  Existing fix: "Increase Node memory │
+│  to ChromaDB      │  │    NODE_OPTIONS=--max-old-space=4096"│
+│  (current flow)   │  │  New fix: "Fix memory leak in        │
+│                   │  │    module X — see PR #1234"           │
+│  → Approve msg    │  │                                      │
+│  → DM developer   │  │  Are these semantically different?   │
+└──────────────────┘  │  Use simple heuristic:                │
+                      │    - Jaccard similarity of fix words   │
+                      │    - If word overlap < 40% → CONFLICT │
+                      │    - If word overlap > 70% → SIMILAR  │
+                      │      (likely same fix, minor edit)     │
+                      └────────────────┬───────────────────────┘
+                                       │
+                              ┌────────┴────────┐
+                              │                 │
+                        Word overlap        Word overlap
+                        < 40%               > 70%
+                        (CONFLICT)          (SIMILAR)
+                              │                 │
+                              ▼                 ▼
+┌──────────────────────────────────┐  ┌─────────────────────┐
+│  STEP 3: POST CONFLICT ALERT     │  │  NO CONFLICT         │
+│  IN SLACK THREAD                  │  │                      │
+│                                   │  │  Treat as update to  │
+│  Bot replies in the same thread:  │  │  existing fix.       │
+│                                   │  │  Save normally.      │
+│  ⚠️ *Conflict Detected*           │  └─────────────────────┘
+│                                   │
+│  A similar error already has a    │
+│  different fix in the database:   │
+│                                   │
+│  *Existing fix (by @alice):*      │
+│  > Increase Node memory:          │
+│  > NODE_OPTIONS=--max-old-space   │
+│                                   │
+│  *Your new fix:*                  │
+│  > Fix memory leak in module X    │
+│                                   │
+│  Similarity: 0.92                 │
+│                                   │
+│  ┌───────────┐ ┌──────────────┐   │
+│  │ Replace   │ │ Keep Both    │   │
+│  │ Existing  │ │              │   │
+│  └───────────┘ └──────────────┘   │
+│  ┌───────────┐ ┌──────────────┐   │
+│  │ Cancel    │ │ Merge        │   │
+│  │           │ │              │   │
+│  └───────────┘ └──────────────┘   │
+└──────────────────┬────────────────┘
+                   │
+     SME clicks one of the 4 buttons
+                   │
+     ┌─────────┬───┴────┬──────────┐
+     │         │        │          │
+     ▼         ▼        ▼          ▼
+  Replace   Keep Both  Cancel    Merge
+     │         │        │          │
+     ▼         ▼        ▼          ▼
+┌─────────┐┌────────┐┌────────┐┌────────────────────┐
+│ Old fix  ││ Both   ││ New    ││ Bot prompts SME    │
+│ marked   ││ fixes  ││ fix    ││ to reply in thread │
+│ as       ││ saved  ││ NOT    ││ with merged fix    │
+│ "super-  ││ to DB  ││ saved  ││ text.              │
+│ seded"   ││        ││        ││                    │
+│ (life-   ││ System ││ Orig   ││ On reply: save     │
+│ cycle    ││ returns││ approve││ merged fix, mark   │
+│ change)  ││ higher ││ stands ││ BOTH old entries   │
+│          ││ confi- ││        ││ as "superseded"    │
+│ New fix  ││ dence  ││        ││ by merged fix      │
+│ saved as ││ match  ││        ││                    │
+│ active   ││        ││        ││                    │
+└─────────┘└────────┘└────────┘└────────────────────┘
+```
+
+#### Conflict Resolution Options
+
+| Action | What happens | When to use |
+|--------|-------------|-------------|
+| **Replace existing** | Old fix → `superseded` state (Enhancement 3). New fix saved as `active`. Old fix no longer returned in searches. | The new fix is clearly better or more accurate |
+| **Keep both** | Both fixes stored as `active`. System returns whichever has higher adjusted similarity for a given query. | Both fixes are valid for different sub-cases of the same error (e.g., OOM in Node vs OOM in Docker) |
+| **Cancel** | New fix is NOT saved. Original approval/edit is abandoned. Existing fix remains unchanged. | SME realizes the existing fix is already correct |
+| **Merge** | Bot prompts SME to reply in thread with a combined fix. On reply: merged fix is saved, both original entries marked `superseded`. | Both fixes have useful information that should be combined into one comprehensive fix |
+
+#### Conflict Detection Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONFLICT_SIMILARITY_THRESHOLD` | `0.85` | Minimum similarity to trigger conflict check (higher than search threshold) |
+| `CONFLICT_FIX_OVERLAP_LOW` | `0.40` | Below this word overlap → definitely a conflict |
+| `CONFLICT_FIX_OVERLAP_HIGH` | `0.70` | Above this word overlap → probably same fix, no conflict |
+
+#### Changes Required
+
+| File | Change |
+|------|--------|
+| `vector_db.py` | Add `check_conflicts()` method — query + compare fix texts |
+| `analyzer_service.py` | In `/bfa/slack/actions` approve handler — call `check_conflicts()` before `save_fix_to_db()` |
+| `slack_helper.py` | Add `build_conflict_block()` — constructs the conflict alert message with 4 resolution buttons |
+| `analyzer_service.py` | Add conflict resolution action handlers (`replace_`, `keepboth_`, `cancel_`, `merge_`) |
 
 ---
 
-### Enhancement 6: Auto-Tagging & Smart Categorization
+### Enhancement 6: Fix Domain Tagging via Slack Approval Flow
 
-**Problem:** Requiring SMEs to manually tag every fix with a team, category, and metadata is tedious and error-prone. Fixes end up untagged or mistagged.
+**Problem:** For domain-scoped search (Enhancement 2) to work, every fix needs a `fix_domain` tag. Requiring SMEs to manually type this is tedious and error-prone. We need it to be part of the natural approval flow — not an extra step.
 
-**Proposed Solution: LLM-Powered Auto-Classification**
+**Proposed Solution: Fix Domain Dropdown in Slack + LLM Auto-Suggestion**
+
+The Slack message that posts a fix for review will include a **Fix Domain** dropdown alongside the existing Approve/Edit/Discard buttons. The LLM pre-selects a suggested domain, but the SME can override before approving.
+
+#### Updated Slack Message Layout
 
 ```
-When a fix is approved:
-  1. Send error_text + fix_text to LLM with classification prompt
-  2. LLM returns:
-     - team: "devops" | "product" | "security" | "it" | "data" | "platform"
-     - category: "build-failure" | "test-failure" | "deploy-failure" | ...
-     - root_cause: "missing-dependency" | "permission-error" | "oom" | ...
-     - affected_tool: "docker" | "npm" | "gcc" | "pytest" | ...
-  3. Store as metadata (SME can override via Slack or API)
+Current Slack message:
+┌──────────────────────────────────────────────────┐
+│  *Error Summary (ID: abc123)*                     │
+│  • gcc compilation failed                         │
+│  • undefined reference to 'pthread_create'        │
+│                                                   │
+│  *Pipeline:* pipeline-456                         │
+│  *Repo:* infra/deploy-scripts                     │
+│  *Branch:* main                                   │
+│                                                   │
+│  *Suggested Fix:*                                 │
+│  Add -lpthread to LDFLAGS in the Makefile...      │
+│                                                   │
+│  [Approve]  [Edit]  [Discard]                     │
+└──────────────────────────────────────────────────┘
+
+Proposed Slack message (with Fix Domain):
+┌──────────────────────────────────────────────────┐
+│  *Error Summary (ID: abc123)*                     │
+│  • gcc compilation failed                         │
+│  • undefined reference to 'pthread_create'        │
+│                                                   │
+│  *Pipeline:* pipeline-456                         │
+│  *Repo:* infra/deploy-scripts                     │
+│  *Branch:* main                                   │
+│                                                   │
+│  *Suggested Fix:*                                 │
+│  Add -lpthread to LDFLAGS in the Makefile...      │
+│                                                   │
+│  Fix Domain: [DevOps ▼]  ← static_select dropdown│
+│                            (LLM pre-selected)     │
+│                                                   │
+│  [Approve]  [Edit]  [Discard]                     │
+└──────────────────────────────────────────────────┘
 ```
 
-**Benefit:** Every fix is automatically categorized without SME effort. Auto-tagging enables team-scoped search (Enhancement 2) to work even without manual tagging.
+#### Slack Block Kit Implementation
+
+The Fix Domain dropdown uses Slack's `static_select` element in a `section` block, placed between the fix content and the action buttons:
+
+```
+Fix Domain dropdown block:
+{
+  "type": "section",
+  "block_id": "fix_domain_<error_id>",
+  "text": {
+    "type": "mrkdwn",
+    "text": "*Fix Domain:*"
+  },
+  "accessory": {
+    "type": "static_select",
+    "action_id": "fix_domain_select_<error_id>",
+    "placeholder": {
+      "type": "plain_text",
+      "text": "Select domain..."
+    },
+    "initial_option": {                    ← LLM-suggested default
+      "text": { "type": "plain_text", "text": "DevOps" },
+      "value": "DevOps"
+    },
+    "options": [
+      {
+        "text": { "type": "plain_text", "text": "Product" },
+        "value": "Product"
+      },
+      {
+        "text": { "type": "plain_text", "text": "DevOps" },
+        "value": "DevOps"
+      },
+      {
+        "text": { "type": "plain_text", "text": "IT" },
+        "value": "IT"
+      }
+    ]
+  }
+}
+
+Updated blocks array:
+  [summary_block]
+  + [context_block]
+  + [fix_content_blocks...]
+  + [fix_domain_dropdown_block]    ← NEW
+  + [action_buttons_block]
+```
+
+#### Complete Flow: From Error to Domain-Tagged Fix
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 1: ERROR ARRIVES (/api/analyze)                    │
+│                                                           │
+│  1. ResolverAgent generates fix via LLM                   │
+│  2. BEFORE posting to Slack, ask LLM to classify domain:  │
+│                                                           │
+│     Prompt: "Given this error and fix, classify the       │
+│     fix domain as one of: Product, DevOps, IT             │
+│                                                           │
+│     Error: gcc compilation failed...                      │
+│     Fix: Add -lpthread to LDFLAGS...                      │
+│                                                           │
+│     Respond with ONLY the domain name."                   │
+│                                                           │
+│  3. LLM responds: "DevOps"                                │
+│  4. Store suggested domain in Redis alongside fix:        │
+│     fix:<error_id> → { ..., suggested_domain: "DevOps" }  │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 2: POST TO SLACK                                   │
+│                                                           │
+│  send_error_message() builds blocks with:                 │
+│    - Error summary (existing)                             │
+│    - Pipeline context (existing)                          │
+│    - Fix content (existing)                               │
+│    - Fix Domain dropdown (NEW) ← pre-set to "DevOps"     │
+│    - Approve/Edit/Discard buttons (existing)              │
+│                                                           │
+│  SME sees the message and can:                            │
+│    a) Accept the suggested domain (just click Approve)    │
+│    b) Change domain via dropdown THEN click Approve       │
+│    c) Click Edit (domain selection preserved)             │
+│    d) Click Discard (domain irrelevant)                   │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 3: SME CHANGES DOMAIN (optional)                   │
+│                                                           │
+│  If SME selects a different domain from dropdown:         │
+│    → Slack fires action: fix_domain_select_<error_id>     │
+│    → /bfa/slack/actions handler catches this action       │
+│    → Updates Redis: fix:<error_id>.fix_domain = "Product" │
+│    → NO message update needed (dropdown already shows     │
+│      the new selection in Slack UI)                       │
+│                                                           │
+│  This is a "soft" action — no save, no approval.          │
+│  Just records the SME's domain choice for when they       │
+│  eventually click Approve.                                │
+└──────────────────────┬───────────────────────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────┐
+│  PHASE 4: SME CLICKS APPROVE                              │
+│                                                           │
+│  /bfa/slack/actions handler:                              │
+│                                                           │
+│  1. Read fix_domain from Redis (set by Phase 1 or 3):    │
+│     fix_domain = redis.get(fix:<error_id>).fix_domain     │
+│     → "Product" (if SME changed it) or "DevOps" (default)│
+│                                                           │
+│  2. Run conflict detection (Enhancement 5):               │
+│     check_conflicts(error_text, fix_text, fix_domain)     │
+│     → If conflict: post conflict resolution buttons       │
+│     → If no conflict: continue to step 3                  │
+│                                                           │
+│  3. Save to ChromaDB WITH domain:                         │
+│     db.save_fix_to_db(                                    │
+│       error_text=error_text,                              │
+│       fix_text=fix_text,                                  │
+│       approver=approver,                                  │
+│       status="approved",                                  │
+│       metadata={                                          │
+│         "source": "slack",                                │
+│         "fix_domain": fix_domain,     ← DOMAIN SAVED     │
+│         "approved_by": approver,                          │
+│         "timestamp": "2026-03-13 10:30:00",               │
+│       }                                                   │
+│     )                                                     │
+│                                                           │
+│  4. Update Slack message:                                 │
+│     "Approved by @bob | Fix Domain: DevOps"               │
+│                                                           │
+│  5. DM developer with fix + domain tag                    │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### Edit Flow with Domain
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  SME clicks [Edit]                                        │
+│                                                           │
+│  1. Bot prompts: "Please reply in thread with updated fix"│
+│  2. SME replies with new fix text in thread                │
+│  3. /bfa/slack/events handler captures the reply          │
+│  4. Reads fix_domain from Redis (set during Phase 1 or 3) │
+│  5. Saves to ChromaDB with status="edited" + fix_domain   │
+│  6. DM developer with edited fix + domain tag             │
+└──────────────────────────────────────────────────────────┘
+```
+
+#### LLM Auto-Classification Prompt
+
+```
+System: You are a build failure classifier. Given a CI/CD error and its fix,
+classify the Fix Domain as exactly one of: Product, DevOps, IT
+
+Rules:
+- Product: Application code issues — compilation errors, test failures,
+  dependency conflicts, runtime exceptions, code-level bugs
+- DevOps: Infrastructure and pipeline issues — Docker/container errors,
+  deployment failures, CI config problems, resource limits (OOM, disk),
+  Kubernetes issues, build tool configuration
+- IT: Internal tooling and access issues — VPN/proxy errors, certificate
+  problems, network connectivity, access permissions, SSO/auth failures
+
+Respond with ONLY the domain name. No explanation.
+
+User:
+Error: {error_text}
+Fix: {fix_text}
+```
+
+#### Manual API Support
+
+For fixes added via `POST /api/vector/manual-fix` or bulk import, the `fix_domain` field is accepted as an optional parameter:
+
+```
+POST /api/vector/manual-fix
+{
+  "error_text": "permission denied: ./deploy.sh",
+  "fix_text": "Run chmod +x on the deploy script",
+  "fix_domain": "DevOps",        ← explicit domain
+  "approver": "admin"
+}
+```
+
+If `fix_domain` is omitted, the LLM auto-classification runs as a background step after save.
+
+#### Changes Required
+
+| File | Change |
+|------|--------|
+| `slack_helper.py` | Add `build_fix_domain_block(error_id, suggested_domain)` — builds the dropdown block |
+| `slack_helper.py` | Update `send_error_message()` — insert domain block before action buttons |
+| `analyzer_service.py` | In `/api/analyze` — call LLM to classify domain before posting to Slack |
+| `analyzer_service.py` | In `/bfa/slack/actions` — handle `fix_domain_select_*` action (store to Redis) |
+| `analyzer_service.py` | In `/bfa/slack/actions` approve handler — read `fix_domain` from Redis, pass to `save_fix_to_db()` |
+| `analyzer_service.py` | In `/bfa/slack/events` edit handler — read `fix_domain` from Redis, pass to `save_fix_to_db()` |
+| `vector_db.py` | `save_fix_to_db()` — store `fix_domain` in metadata (already supported via flat metadata) |
+| `resolver_agent.py` | Add `classify_fix_domain()` method — LLM prompt for domain classification |
 
 ---
 
@@ -976,23 +1360,58 @@ When a fix is approved:
 | # | Enhancement | Effort | Impact | Depends On |
 |---|------------|--------|--------|------------|
 | 1 | **Fix Versioning & Edit History** | Medium | High — prevents data loss, enables safe edits | None |
-| 2 | **Team/Domain Segregation** | Medium | High — eliminates cross-team false positives | Enhancement 6 helps (auto-tagging) |
+| 2 | **Fix Domain Segregation** | Medium | High — eliminates cross-domain false positives | Enhancement 6 (domain tagging) |
 | 3 | **Fix Lifecycle Management** | Low | Medium — handles stale fixes gracefully | None |
 | 4 | **Confidence Feedback Loop** | Medium | Medium — system improves over time | None |
-| 5 | **Conflict Detection** | Medium | Medium — prevents contradicting fixes | None |
-| 6 | **Auto-Tagging & Smart Categorization** | Low | High — enables team segregation without manual effort | None (but pairs with Enhancement 2) |
+| 5 | **Conflict Detection** | Medium | High — prevents contradicting fixes, with Slack resolution | Enhancement 3 (lifecycle for "superseded" state) |
+| 6 | **Fix Domain Tagging via Slack** | Medium | High — enables domain segregation via natural approval flow | None |
 
 **Recommended Implementation Order:**
 
 ```
-Phase 1 (Immediate): Enhancement 1 (Versioning) + Enhancement 3 (Lifecycle)
-  → Solves "wrong fix was updated, can't revert" and "outdated fixes never expire"
-  → Low-to-medium effort, high impact, no dependencies
+Phase 1 (Immediate):
+  Enhancement 6 (Fix Domain Tagging via Slack)
+  + Enhancement 2 (Fix Domain Segregation)
+  → Add Fix Domain dropdown to Slack approval flow
+  → Add domain-scoped ChromaDB queries
+  → Together: SME selects domain on approve → lookup scoped by domain
+  → Eliminates cross-domain false positives (e.g., DevOps vs IT "permission denied")
 
-Phase 2 (Short-term): Enhancement 6 (Auto-Tagging) + Enhancement 2 (Team Segregation)
-  → Auto-tag first, then enable team-scoped search
-  → Eliminates cross-team false positives
+Phase 2 (Short-term):
+  Enhancement 5 (Conflict Detection)
+  + Enhancement 3 (Fix Lifecycle Management)
+  → Conflict detection needs lifecycle states (superseded) for "Replace" action
+  → Together: detect conflicts on save → resolve via Slack buttons → manage fix states
 
-Phase 3 (Medium-term): Enhancement 5 (Conflict Detection) + Enhancement 4 (Feedback Loop)
-  → Quality improvements that make the system self-correcting over time
+Phase 3 (Medium-term):
+  Enhancement 1 (Fix Versioning)
+  + Enhancement 4 (Confidence Feedback Loop)
+  → Version history for safe rollbacks
+  → Developer feedback to identify low-quality fixes
+  → Together: track fix evolution + measure fix effectiveness over time
+```
+
+**Phase 1 Implementation Checklist:**
+
+```
+Files to modify:
+  □ slack_helper.py
+    - Add build_fix_domain_block()
+    - Update send_error_message() to include domain dropdown
+
+  □ resolver_agent.py
+    - Add classify_fix_domain() — LLM classification prompt
+
+  □ analyzer_service.py
+    - /api/analyze: call classify_fix_domain(), store in Redis
+    - /bfa/slack/actions: handle fix_domain_select_* action
+    - /bfa/slack/actions approve: read fix_domain, pass to save_fix_to_db()
+    - /bfa/slack/events edit: read fix_domain, pass to save_fix_to_db()
+
+  □ vector_db.py
+    - lookup_existing_fix(): add fix_domain parameter + where clause
+    - Add cross-domain fallback when scoped search returns no match
+
+  □ config_loader.py
+    - Add FIX_DOMAINS list config (default: ["Product", "DevOps", "IT"])
 ```
