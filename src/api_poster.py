@@ -22,7 +22,7 @@ from pathlib import Path
 import requests
 from requests.exceptions import RequestException
 
-from .log_error_extractor import extract_error_sections
+from .log_error_extractor import extract_error_sections, extract_error_context
 from .config_loader import Config
 from .error_handler import ErrorHandler, RetryExhaustedError
 from .token_manager import TokenManager
@@ -153,24 +153,24 @@ class ApiPoster:
                 step_name = job_details.get('name', 'unknown')
                 log_content = job_data.get('log', '')
 
-                # Extract error sections with context using configurable parameters
-                error_lines = extract_error_sections(
+                # Extract structured error context: separate error lines from
+                # surrounding context lines, grouped per distinct error section.
+                error_context = extract_error_context(
                     log_content=log_content,
                     lines_before=self.config.error_context_lines_before,
-                    lines_after=self.config.error_context_lines_after
+                    lines_after=self.config.error_context_lines_after,
                 )
 
-                if error_lines:
-                    # error_lines is a list with one string element containing all lines joined by \n
-                    line_count = error_lines[0].count('\n') + 1 if error_lines else 0
-                    logger.debug(
-                        "Extracted error context from job '%s': %d lines (context: %d before, %d after)",
-                        step_name, line_count, self.config.error_context_lines_before,
-                        self.config.error_context_lines_after,
-                        extra={'job_name': step_name, 'error_line_count': line_count}
-                    )
+                error_count = len(error_context.get("errors", {}))
+                logger.debug(
+                    "Extracted %d error group(s) from job '%s' (context: %d before, %d after)",
+                    error_count, step_name,
+                    self.config.error_context_lines_before,
+                    self.config.error_context_lines_after,
+                    extra={'job_name': step_name, 'error_group_count': error_count}
+                )
 
-                failed_steps.append({"step_name": step_name, "error_lines": error_lines})
+                failed_steps.append({"step_name": step_name, "error_context": error_context})
 
         # Extract pipeline URL (provided by GitLab in webhook)
         pipeline_url = pipeline_info.get('pipeline_url', '')
@@ -274,25 +274,32 @@ class ApiPoster:
             # log_content is already formatted with "Line N:" prefixes from log_error_extractor
             # Include the stage even if log_content is empty (better than dropping it completely)
             if log_content:
-                # error_lines should be a list with single element (matching GitLab format)
-                error_lines = [log_content]
-
-                line_count = log_content.count('\n') + 1
+                # Extract structured error context from raw Jenkins stage log.
+                # Previously this was passed through unprocessed — now errors and
+                # context lines are separated per group, same as GitLab.
+                error_context = extract_error_context(
+                    log_content=log_content,
+                    lines_before=self.config.error_context_lines_before,
+                    lines_after=self.config.error_context_lines_after,
+                )
+                error_count = len(error_context.get("errors", {}))
                 logger.debug(
-                    "Transformed stage '%s': %d error lines",
-                    stage_name, line_count
+                    "Extracted %d error group(s) from Jenkins stage '%s'",
+                    error_count, stage_name
                 )
             else:
-                # Stage failed but has no log content - include it with placeholder
-                error_lines = [f"Stage '{stage_name}' failed but no log content available"]
-                logger.warning(
-                    "Stage '%s' has no log content, using placeholder",
-                    stage_name
-                )
+                # Stage failed but has no log content
+                logger.warning("Stage '%s' has no log content", stage_name)
+                error_context = {
+                    "errors": {
+                        "error_1": f"Stage '{stage_name}' failed but no log content available"
+                    },
+                    "context_lines": {"error_1": ""},
+                }
 
             failed_steps.append({
                 "step_name": stage_name,
-                "error_lines": error_lines
+                "error_context": error_context,
             })
 
         # Build transformed payload matching GitLab format

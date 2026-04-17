@@ -9,7 +9,7 @@ Invokes: None
 """
 
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -81,6 +81,75 @@ class LogErrorExtractor:
 
         # Join all lines into a single string with newlines and return as list with one element
         return ['\n'.join(sections)]
+
+    def extract_error_context(self, log_content: str) -> Dict[str, Any]:
+        """
+        Extract structured error context from log content.
+
+        Unlike extract_error_sections() which merges everything into one blob,
+        this method separates each distinct error group and within each group
+        splits the actual error lines from the surrounding context lines.
+
+        Returns:
+            {
+                "errors": {
+                    "error_1": "Line 92: npm ERR! code ERESOLVE\\nLine 93: ...",
+                    "error_2": "Line 150: Error: Cannot find module './foo'",
+                },
+                "context_lines": {
+                    "error_1": "Line 42: resolving packages...\\n...",
+                    "error_2": "Line 145: require('./foo')\\n...",
+                }
+            }
+
+        Each key (error_1, error_2, ...) corresponds to one merged error section.
+        "errors" contains only lines that matched ERROR_PATTERNS.
+        "context_lines" contains the surrounding window lines (before/after).
+        """
+        if not log_content:
+            return {"errors": {}, "context_lines": {}}
+
+        all_lines = log_content.split('\n')
+        cleaned_lines = [self._clean_line(line) for line in all_lines]
+
+        error_indices = self._find_error_lines(cleaned_lines)
+        if not error_indices:
+            return {"errors": {}, "context_lines": {}}
+
+        total_lines = len(cleaned_lines)
+        error_indices_set = set(error_indices)
+
+        # Build context windows and merge overlapping ranges
+        ranges = []
+        for error_idx in error_indices:
+            start = max(0, error_idx - self.lines_before)
+            end = min(total_lines, error_idx + self.lines_after + 1)
+            ranges.append((start, end))
+        merged_ranges = self._merge_ranges(ranges)
+
+        errors: Dict[str, str] = {}
+        context_lines: Dict[str, str] = {}
+
+        for i, (start, end) in enumerate(merged_ranges):
+            key = f"error_{i + 1}"
+            section_errors = []
+            section_context = []
+
+            for idx in range(start, end):
+                line = cleaned_lines[idx]
+                if not line:
+                    continue
+                formatted = f"Line {idx + 1}: {line}"
+                if idx in error_indices_set:
+                    section_errors.append(formatted)
+                else:
+                    section_context.append(formatted)
+
+            if section_errors:
+                errors[key] = "\n".join(section_errors)
+                context_lines[key] = "\n".join(section_context)
+
+        return {"errors": errors, "context_lines": context_lines}
 
     def _clean_line(self, line: str) -> str:
         """
@@ -209,6 +278,19 @@ class LogErrorExtractor:
                 merged.append((current_start, current_end))
 
         return merged
+
+
+def extract_error_context(
+    log_content: str,
+    lines_before: int = 50,
+    lines_after: int = 10,
+) -> Dict[str, Any]:
+    """
+    Convenience function — returns structured error context with errors and
+    context_lines separated per error group. See LogErrorExtractor.extract_error_context().
+    """
+    extractor = LogErrorExtractor(lines_before=lines_before, lines_after=lines_after)
+    return extractor.extract_error_context(log_content)
 
 
 def extract_error_sections(log_content: str, lines_before: int = 50, lines_after: int = 10) -> List[str]:
