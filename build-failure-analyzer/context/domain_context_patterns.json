@@ -1,0 +1,224 @@
+{
+  "IT": [
+    {
+      "failure": "ERROR: Failed to execute on remote machine vmbuild",
+      "solution": "vmbuild server might not be reachable, please reach out to IT"
+    },
+    {
+      "failure": "Write failed: Broken pipe",
+      "solution": "Server node crashed or NFS encountered some problem, please reach out to IT with logs."
+    },
+    {
+      "failure": "Connection closed by",
+      "solution": "Server went offline for some reason, please reach out to IT with logs."
+    },
+    {
+      "failure": "ERROR: Failed to execute on remote machine ovabuild",
+      "solution": "ovabuild server might not be reachable, please reach out to IT"
+    },
+    {
+      "failure": "cp: cannot stat",
+      "solution": "NFS encountered some problem, please reach out to IT"
+    },
+    {
+      "failure": "Connection timed out",
+      "solution": "Process timed out on the server, please reach out to IT"
+    },
+    {
+      "failure": "repo/path/codegen.py: No such file or directory",
+      "solution": "NFS might have encountered some issue, please reach out to IT"
+    },
+    {
+      "failure": "repo/path/codegen.py': [Errno 2] No such file or directory",
+      "solution": "NFS might have encountered some issue, please reach out to IT"
+    },
+    {
+      "failure": "FileNotFoundError: [Errno 2] No such file or directory: '/ftp-path/repo/build/pybuild/core/target.py'",
+      "solution": "NFS might have encountered some issue, please reach out to IT"
+    },
+    {
+      "failure": "ModuleNotFoundError: No module named 'toolscache'",
+      "solution": "toolscache service might have landed into some issue, please reach out to IT/DevOps."
+    },
+    {
+      "failure": "gpg: can't open `/ftp-path/repo/build/keys/netintact.gpg': No such file or directory",
+      "solution": "NFS might have encountered some issue, please reach out to IT"
+    },
+    {
+      "failure": "repo/build/keys/netintact.gpg': No such file or directory",
+      "solution": "NFS might have encountered some issue, please reach out to IT"
+    },
+    {
+      "failure": "Stale file handle",
+      "solution": "NFS might have encountered some issue or parallel threads would've performed cleanup in same workspace, please reach out to IT/DevOps."
+    },
+    {
+      "failure": "mktemp: failed to create directory via template",
+      "solution": "NFS might have encountered some issue, please reach out to IT"
+    },
+    {
+      "failure": "repo/d_packetlogic-3410369bfcac63d97b5d2078d61ccf22386cf6b7.tar.gz' for reading: No such file or directory",
+      "solution": "packetlogic compilation failed, please reach out to IT/DevOps with logs."
+    },
+    {
+      "failure": "python2.7: No such file or directory",
+      "solution": "Python2.7 environment needs to be fixed on build server. Please reach out to IT/DevOps with logs."
+    },
+    {
+      "failure": ".mod: 404 Not Found",
+      "solution": "Artifactory might not have relevant golang package, please investigate if you've changed anything w.r.t golang package and if that exists in Artifactory."
+    },
+    {
+      "failure": "jenkins-20 port 22: No route to host",
+      "solution": "host is offline, please contact IT."
+    },
+    {
+      "failure": "remote: GitLab is not responding",
+      "solution": "GitLab is down, create a Helpdesk ticket with logs."
+    },
+    {
+      "failure": "error: Bad Request - [Error] remote: GitLab is not responding",
+      "solution": "GitLab is down, create a Helpdesk ticket with logs."
+    },
+    {
+      "failure": "mod: net/http: TLS handshake timeout",
+      "solution": "Artifactory might not have relevant golang package, please investigate if you've changed anything w.r.t golang package and if that exists in Artifactory."
+    },
+    {
+      "failure": "=x509: certificate signed by unknown authority",
+      "solution": "Certificate issue on server, please reach out to IT with logs."
+    },
+    {
+      "failure": "mkdir: cannot create directory '/ftp/data/obj': No such file or directory",
+      "solution": "Problem with jfile NFS, please reach out to IT."
+    },
+    {
+      "failure": "docker.errors.BuildError: No such image:",
+      "solution": "Either the image defined in Dockerfile is wrong, or it could be a docker cleanup issue. Raise a bug for IT/DevOps to investigate cleanup policies if you know that the Dockerfile has correct image."
+    }
+  ],
+  "Product": [
+    {
+      "failure": "No rule to make target",
+      "solution": "Compilation failed for the given target, please check 'make' errors to find dependencies."
+    },
+    {
+      "failure": "error: undefined reference to",
+      "solution": "Unknown reference in code, review again and fix compilation."
+    },
+    {
+      "failure": "has no member named",
+      "solution": "Unknown member variable in code changes, review again and fix compilation."
+    },
+    {
+      "failure": "was not declared in this scope",
+      "solution": "Unknown scope for some variable in code changes, review again and fix compilation."
+    },
+    {
+      "failure": "docker.errors.BuildError: The command",
+      "solution": "Docker build failed, check logs and fix compilation dependencies."
+    },
+    {
+      "failure": "make: *** [build_expat] Error 2",
+      "solution": "Failed to build target, check make compilation failure and fix."
+    },
+    {
+      "failure": "make: *** [build_boost] Error 2",
+      "solution": "Failed to build target, check make compilation failure and fix."
+    },
+    {
+      "failure": "make: *** [build_protobuf] Error 2",
+      "solution": "Failed to build target, check make compilation failure and fix."
+    },
+    {
+      "failure": "make: *** [build_xerces] Error 2",
+      "solution": "Failed to build target, check make compilation failure and fix."
+    },
+    {
+      "failure": "make: *** [build_pl_libs]",
+      "solution": "Failed to build target, check make compilation failure and fix."
+    },
+    {
+      "failure": "has no non-static data member named 'copy_direct'",
+      "solution": "There is some error w.r.t a data member, check logs and fix compilation."
+    }
+  ],
+  "Devops": [
+    {
+      "failure": "Sending interrupt signal to process",
+      "solution": "Job got aborted somehow, retrigger or reach out to DevOps."
+    },
+    {
+      "failure": "Killed by signal",
+      "solution": "Running process was aborted, retrigger or reach out to DevOps."
+    },
+    {
+      "failure": "Git clone failed",
+      "solution": "Failed to create workspace, reach out to DevOps."
+    },
+    {
+      "failure": "subprocess.CalledProcessError: Command '['docker', 'save', '-o'",
+      "solution": "Failed to create docker tarball, reach out to DevOps."
+    },
+    {
+      "failure": "unknown: Bad credentials",
+      "solution": "Found an authentication issue, reach out to DevOps."
+    },
+    {
+      "failure": "npm ERR! EBUSY: resource busy or locked",
+      "solution": "NPM failure due to concurrent processes, check logs or reach out to DevOps."
+    },
+    {
+      "failure": "Terminated",
+      "solution": "Running process was aborted, retrigger or reach out to DevOps."
+    },
+    {
+      "failure": "repo/packages/buildenv/11_llvm:",
+      "solution": "build-pl2 llvm package build failed, check with DevOps on cached packages."
+    },
+    {
+      "failure": "docker.errors.BuildError: failed to export image: failed to set parent",
+      "solution": "Failed to create docker build, reach out to DevOps."
+    },
+    {
+      "failure": "-baseline.tar.lzma: Unexpected end of input",
+      "solution": "Corrupted tarball created, check logs or reach out to DevOps."
+    },
+    {
+      "failure": "Error writing blob: Error uploading layer chunked: StatusCode: 408",
+      "solution": "Timed out while uploading image, check the size of image being built and find areas of improvement. For further assistance, reach out to DevOps/IT."
+    },
+    {
+      "failure": "make: *** [clean] Error 1",
+      "solution": "Make build compilation failed for clean target, remove dirs manually or reach out to DevOps."
+    },
+    {
+      "failure": "gzip: stdin: decompression OK, trailing garbage ignored",
+      "solution": "Garbage/Corrupted gzip package, try re-running or reach out to DevOps if this is consistent."
+    },
+    {
+      "failure": "gzip: stdin: unexpected end of file",
+      "solution": "Garbage/Corrupted gzip package, try re-running or reach out to DevOps if this is consistent."
+    },
+    {
+      "failure": "tar: Skipping to next header",
+      "solution": "Garbage/Corrupted tar package, try re-running or reach out to DevOps if this is consistent."
+    },
+    {
+      "failure": "fatal: not a git repository",
+      "solution": "Corrupted git workspace, re-try or reach out to DevOps."
+    },
+    {
+      "failure": "cannot find package \"github.com",
+      "solution": "Wrong package being fetched in build, investigate and fix compilation. Reach out to DevOps if unsure."
+    },
+    {
+      "failure": "docker.errors.BuildError: failed to get destination image",
+      "solution": "Bad image reference in Dockerfile, use correct image or reach out to DevOps."
+    },
+    {
+      "failure": "docker.errors.APIError: 500 Server Error: Internal Server Error (\"invalid reference format\")",
+      "solution": "Internal server (Artifactory) hosting images landed in some issue, reach out to IT/DevOps"
+    }
+  ]
+}
