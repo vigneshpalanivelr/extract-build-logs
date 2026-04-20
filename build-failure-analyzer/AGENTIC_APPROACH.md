@@ -388,4 +388,103 @@ LLM calls per subsequent request.
 
 ---
 
-(Chunks 3, 4 to follow.)
+## Chunk 3 — Comparison matrix
+
+Three paths compared:
+
+- **P1 — Today** (the bug): full-blob embedding, L2 distance misread, salted `hash()` IDs, no human-gated writes.
+- **P2 — Deterministic fix** per `SOLUTION_PROPOSAL.md`: split error/context, normalize, cosine space, disambiguation via context-cosine.
+- **P3 — Full agentic** per chunks 1–2: A1+A2+A3+A4+A5+A6 on every request.
+
+Plus the **hybrid** (recommended, detailed in chunk 4) for reference.
+
+### 3.1 Request-volume assumptions (for the numbers below)
+
+- 1,000 builds/day break.
+- 70% are repeat errors already seen in vector DB.
+- 20% are variants of seen errors (same root cause, different numbers/paths).
+- 10% are genuinely new.
+- Ollama `granite-embedding` ≈ 50 ms/call, free (self-hosted).
+- Bedrock Claude Sonnet: ~$3 / 1 M input tokens, ~$15 / 1 M output tokens (OpenWebUI pass-through; Bedrock pricing as of 2025).
+- Claude Haiku (for A1): ~$0.80 / 1 M input, ~$4 / 1 M output.
+- Average input context per LLM call: 3 K tokens (prompt + error + context).
+- Average output: 400 tokens.
+
+### 3.2 Per-request cost breakdown
+
+| Path | Cache hit (70%) | Variant (20%) | New (10%) |
+|---|---|---|---|
+| **P1 Today** | ~0 LLM calls. Returns poisoned wrong answer. | ~0. Returns poisoned wrong answer. | 1 LLM (~$0.015). Often wrong because of DB noise. |
+| **P2 Deterministic** | 0 LLM. Returns approved fix. | 0 LLM. Cosine hit + context disambiguation returns best approved fix. May miss when stored fix needs adjustment. | 1 LLM (~$0.015). Correct. |
+| **P3 Full agentic** | A1 + A2 + A3×3 + (A6) = 5 LLM calls. ~$0.05–$0.08. Same answer as P2 but expensive. | A1 + A2 + A3×3 + A5 + A6 = 6 LLM. ~$0.08–$0.10. Catches adjustments P2 misses. | A1 + A2 + A3×3 + A5 + A6 = 6 LLM. ~$0.08–$0.10. |
+| **Hybrid** (chunk 4) | 0 LLM (deterministic path). | 1 LLM call (A3 only, on ambiguous vector hits). ~$0.015. | 1 LLM (A5 Synthesizer). ~$0.015. |
+
+### 3.3 Scoring across dimensions
+
+| Dimension | P1 Today | P2 Deterministic | P3 Full Agentic | Hybrid |
+|---|---|---|---|---|
+| **Accuracy — exact repeats** | poisoned (~40% correct) | ~95% | ~95% | ~95% |
+| **Accuracy — variants** | ~20% | ~60–70% (stored fix, may not fit) | ~85–90% (A3 adjusts fix) | ~85–90% (A3 only where needed) |
+| **Accuracy — novel errors** | ~50% (LLM without good RAG) | ~75% (LLM with domain snippet) | ~80% (A5 with cited partial matches) | ~80% |
+| **Token use per 1k requests** | ~100 K | ~100 K | ~1.5–2 M | ~200 K |
+| **Cost per 1k requests** | ~$1.50 | ~$1.50 | ~$30–40 | ~$3 |
+| **LLM API calls per 1k requests** | 100 | 100 | 6,000 | 300 |
+| **p50 latency** | 200 ms | 250 ms | 12 s (parallel A3) | 400 ms–8 s (depending on branch) |
+| **p99 latency** | 10 s | 10 s | 40 s (total budget) | 15 s |
+| **Code complexity (est LoC delta)** | — | +500 | +2,500 | +900 |
+| **Operational complexity** | low | low | high (tool-use loop, schemas, audit trail) | medium |
+| **Determinism** | high | high | low (temp=0.2 but LLM variance) | medium (only variants/novel are non-det) |
+| **Debuggability** | good (single lookup score) | good | poor without audit trail dashboard | fair |
+| **Failure blast radius** | silent wrong answers | silent wrong answers (fewer) | noisy but catchable (validator, schema failures) | mostly deterministic path, agent failures degrade to P2 |
+| **Prompt-injection risk (from logs)** | none | none | medium — logs flow into A3/A5 prompts | low — A3 gets only error text, sanitized |
+| **Observability tooling needed** | none extra | none extra | full audit trail, per-agent metrics, Grafana | per-agent metrics only |
+| **Explainability to SMEs** | "vector match score = X" | same + context score | full agent chain with reasoning | agent reasoning only when invoked |
+| **Training flywheel** | Slack approve adds to DB | Slack approve adds to DB (cleanly) | Slack approve + per-agent feedback loops possible | Slack approve + A3 decision cache |
+| **Cold-start behavior** | hot immediately | hot immediately | needs prompt iteration + evaluation | needs A3 prompt iteration |
+| **Dependency surface** | Chroma, Ollama, Bedrock | same | same + bigger prompt library | same + A3/A5 prompts |
+| **Security review burden** | low | low | high (prompts, tool schemas, injection) | medium |
+
+### 3.4 Where each path shines and fails
+
+**P2 Deterministic**
+- Wins: 80% of requests have exact/near-exact stored fixes; cosine + normalized embeddings handle those cheaply.
+- Loses: "Same root cause, different specifics" — e.g., stored fix says "downgrade react to 17", new error is on react 18.2. P2 returns stored fix as-is; developer has to mentally translate.
+- Loses: if extractor sends slightly paraphrased error, cosine may drop below 0.90 threshold and fall through to LLM unnecessarily.
+
+**P3 Full agentic**
+- Wins: best accuracy ceiling on ambiguous cases (15–20% lift on variants).
+- Loses: pays the agent tax on every request, including the 70% that were trivial. Economics don't work at 1000/day — ~$30/day for something P2 does for $1.50.
+- Loses: every agent is a new failure mode. Production noise increases.
+- Loses: non-determinism complicates SME trust — the same error can yield different advice on different days.
+
+**Hybrid**
+- Keeps P2's floor (cheap, deterministic for 80% of requests).
+- Gets most of P3's ceiling on the 20% variants (where agents actually help) at 10% of the cost.
+- Cleaner failure mode: agent failure falls back to P2 synthesizer (existing LLM path), not to silence.
+
+### 3.5 Accuracy qualifiers
+
+"Accuracy" above is what % of answers are "correct and actionable for the
+developer". This is inherently subjective without a labeled test set. Before
+any of these go to production, we need:
+
+- A golden set of ≥200 (error, expected_fix) pairs from past approvals.
+- A script that replays both paths (P2 and P3/Hybrid) against the golden set.
+- A rubric for grading answers: exact / needs_tweak / wrong / hallucinated.
+- SME spot-check on 50 random responses from each path.
+
+Without this, numbers in the table are educated estimates. Building the
+eval harness is ~1 week of work and **should precede** any production
+rollout of agents.
+
+### 3.6 The "huge log" failure mode — how each path handles it
+
+| Scenario | P1 Today | P2 | P3 | Hybrid |
+|---|---|---|---|---|
+| 5 KB log blob stored, new 200-char error comes in | matches blob, returns wrong fix | doesn't match (normalized fingerprint mismatch) → LLM | A1 produces clean fingerprint, A2 cosine misses blob, A5 generates fresh fix | same as hybrid (A3 only if multiple valid candidates) |
+| Two nearly identical errors differing only in version number | returns whichever is more central | cosine picks top, context-sim disambiguates | A3 flags adjustment needed, provides version-adjusted fix | A3 fires only when P2 has multiple candidates, provides adjustment |
+| Intermittent Jenkins agent timeout vs hard auth failure with similar wording | often confuses them | context-cosine helps but not perfect | A3 reasons about category differences | A3 fires on ambiguity, disambiguates |
+
+---
+
+(Chunk 4 to follow.)
