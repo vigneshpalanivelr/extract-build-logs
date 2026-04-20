@@ -487,4 +487,153 @@ rollout of agents.
 
 ---
 
-(Chunk 4 to follow.)
+## Chunk 4 — Recommendation + hybrid path
+
+### 4.1 Recommendation
+
+**Implement P2 (deterministic fix from `SOLUTION_PROPOSAL.md`) first.
+Then layer in the Hybrid by adding only agent A3 (Deviation Analyzer).
+Do not build A1, A4, A6 in the initial cut.**
+
+Rationale:
+
+1. **P2 is a prerequisite, not an alternative.** The vector-DB poisoning bug
+   is about bad data + bad math. Agents reasoning over poisoned data are
+   still reasoning over poisoned data — they just pay more for the wrong
+   answer. P2 has to land regardless.
+
+2. **A3 is the single highest-leverage agent.** It addresses the one
+   failure mode P2 cannot handle: "stored fix needs small adjustment".
+   Estimated accuracy lift of 15–20% on the 20% of requests that are
+   variants — i.e., ~3–4% overall lift — for ~2x the cost of P2 (~$3
+   vs ~$1.50 per 1k). Every other agent has worse leverage:
+
+   - A1 Classifier: the deterministic normalizer from P2 already produces
+     a fingerprint. A1 would produce a slightly better fingerprint, but
+     at $0.001/request × 1000/day = $1/day for marginal retrieval improvement.
+   - A2 Retrieval: a pure tool wrapper. Not a real agent. Just call the
+     vector DB directly.
+   - A4 Disambiguator: P2's context-cosine already disambiguates. Only
+     add if A3 + context-cosine both fail.
+   - A5 Synthesizer: already exists as today's LLM fallback. No agent needed.
+   - A6 Validator: valuable only once we ship to enough users that safety
+     review flags a real incident. YAGNI until then.
+
+3. **Bounded risk.** Hybrid's agent-only-when-ambiguous design means
+   agent failure degrades gracefully to P2's LLM synthesizer (existing
+   `call_llm`). No net regression vs today.
+
+### 4.2 Hybrid — exact state machine
+
+```
+/api/analyze
+  │
+  ▼
+Pre-agent: Redis sme:fix:<fp>, ai:fix:<fp>    (cache hits — 70% of traffic)
+  │
+  ├─ HIT → return
+  │
+  ▼
+VectorDB.lookup_candidates(fingerprint, top_k=5)  (from P2, cosine + normalized)
+  │
+  ├─ 0 candidates ≥ 0.90        → LLM Synthesizer (existing path, possibly enriched)
+  │
+  ├─ 1 candidate ≥ 0.95         → return its fix (high-confidence exact)
+  │
+  ├─ 1 candidate in [0.90, 0.95) → A3 Deviation Analyzer
+  │     ├─ exact_match                → return stored fix
+  │     ├─ applicable_with_adjustments → return adjusted_fix
+  │     ├─ partial / no_match         → LLM Synthesizer
+  │
+  └─ 2+ candidates ≥ 0.90       → A3 on each (parallel, up to 3)
+        ├─ any exact_match             → return
+        ├─ 1 applicable → return adjusted
+        ├─ 2+ applicable → pick via context-cosine (P2 rule, deterministic)
+        └─ none applicable → LLM Synthesizer
+```
+
+Effectively: A3 runs only on the ~15% of requests where there's a
+meaningful candidate but its applicability is uncertain.
+
+### 4.3 What files change under the Hybrid recommendation
+
+| File | Change | Effort |
+|---|---|---|
+| `src/log_error_extractor.py` | Split error/context (from P2) | 60 LoC |
+| `src/api_poster.py` | New payload fields | 30 LoC |
+| `build-failure-analyzer/analyzer_service.py` | Schema update, route to orchestrator | 80 LoC |
+| `build-failure-analyzer/vector_db.py` | Normalizer, cosine, deterministic ID (from P2) | 150 LoC |
+| `build-failure-analyzer/resolver_agent.py` | Becomes Synthesizer, adds partial-match citation | 40 LoC |
+| `build-failure-analyzer/slack_reviewer.py` | update-not-insert (from P2) | 20 LoC |
+| `build-failure-analyzer/agents/base.py` | New. Bounded agent runner + JSON schema | 120 LoC |
+| `build-failure-analyzer/agents/deviation.py` | New. A3 only | 80 LoC |
+| `build-failure-analyzer/orchestrator.py` | New. State machine above | 150 LoC |
+| `build-failure-analyzer/prompts/deviation.md` | New | — |
+| `scripts/migrate_vector_db.py` | New (from P2) | 80 LoC |
+| Tests (`tests/`, `build-failure-analyzer/tests/`) | Golden set + unit tests | 300 LoC |
+| `build-failure-analyzer/eval/golden_set.jsonl` | New. ≥200 labeled (error, fix) pairs | data, not code |
+| `build-failure-analyzer/eval/run_eval.py` | New. Replay P2 and Hybrid, grade outputs | 120 LoC |
+
+Total ≈ 1,130 LoC + 300 LoC tests + eval harness. About 2–3 weeks of work
+for one engineer.
+
+### 4.4 Ordering (phased)
+
+| Phase | What | Gate to next phase |
+|---|---|---|
+| **Phase 0** | Build eval harness + collect 200 labeled pairs | Harness runs end-to-end on current prod data |
+| **Phase 1** | Land P2 deterministic fix + migration | Eval shows ≥20% accuracy lift over P1 |
+| **Phase 2** | Add A3 Deviation Agent behind `AGENTIC_MODE=deviation_only` flag | Eval shows additional ≥10% lift on variant bucket |
+| **Phase 3** | Enable `deviation_only` in prod for 10% of traffic; measure cost + latency + SME approvals | Cost within budget, SME approval rate ≥ P2 |
+| **Phase 4** | 100% rollout of Hybrid. Close out. | — |
+| **Phase 5 (optional)** | Add A6 Validator if a safety incident occurs, A1 Classifier if retrieval precision still low, A4 Disambiguator if context-cosine tie-breaker fails in >5% of multi-candidate cases | — |
+
+### 4.5 When to revisit "full agentic"
+
+P3 becomes worth considering when:
+
+- Bedrock/Claude Haiku latency drops below 500 ms p99 (cheaper classifier).
+- Volume grows 10x and per-request cost is dwarfed by engineer time saved.
+- Structured output / tool-use becomes cheap enough that the 5-agent tax is
+  <$0.01/request.
+- A labeled dataset big enough to fine-tune a small model for the
+  classifier role emerges (then A1 becomes free and worth keeping).
+
+Until then, Hybrid is the right shape.
+
+### 4.6 One-line answer
+
+> Deterministic fix from `SOLUTION_PROPOSAL.md` **first**. Then add **one
+> agent (Deviation Analyzer) only where it measurably helps**. Don't pay
+> the full agentic tax on the 80% of requests that are trivial.
+
+### 4.7 Open questions to decide before implementation
+
+1. Is the 45 s orchestrator timeout acceptable, or is there a tighter
+   SLA from Jenkins/GitLab side?
+2. Who owns the eval harness + golden-set curation? This is the single
+   biggest risk item — without it, neither P2 nor Hybrid can be measured.
+3. Per-team threshold tuning — should the 0.90 vector threshold and the
+   "multiple candidates" fan-out count (top-3) be configurable per repo?
+4. Should A3's "adjusted_fix" be gated behind a fresh SME approval cycle
+   (i.e., post to Slack with Approve buttons again), or returned
+   immediately to the developer with a note that it's a derived fix?
+   (Recommend: gate behind a **lighter** SME review — inline thumbs-up
+   in Slack — because verbatim approvals already exist.)
+5. Does the AWS Bedrock migration on branch
+   `claude/setup-log-analysis-bedrock-gmLHN` complete within this scope,
+   or separately? Hybrid's agent implementation is LLM-backend-agnostic,
+   so either order works.
+
+---
+
+## Summary
+
+- **P1 Today**: broken and expensive in wrong-answer terms.
+- **P2 Deterministic** (`SOLUTION_PROPOSAL.md`): must-have foundation.
+- **P3 Full agentic**: over-engineered at current volume; defer.
+- **Hybrid** (P2 + A3 only): best accuracy/cost trade; recommended path.
+
+**Next step, if you approve**: build the eval harness (Phase 0) before
+writing any production code. Everything else is premature optimization
+without it.
