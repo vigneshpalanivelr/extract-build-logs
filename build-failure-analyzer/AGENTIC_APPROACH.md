@@ -128,4 +128,264 @@ it doesn't replace it. The vector-DB poisoning bug must be fixed regardless.
 
 ---
 
-(Chunks 2, 3, 4 to follow.)
+## Chunk 2 — Implementation plan
+
+### 2.1 Framework choice
+
+Three options evaluated:
+
+| Option | Pros | Cons | Verdict |
+|---|---|---|---|
+| **Hand-rolled orchestrator** using direct `call_llm` + JSON schema output | No new deps. Same HTTP path (`llm_openwebui_client.py`). Easy to debug. | Must implement retries, schema validation, tool-use loop ourselves. | **Recommended** — matches existing code style |
+| **LangGraph** | State machine out of the box, graphviz visualization, replay | New dep, tight coupling to LangChain universe, more surface area | Overkill for 5 agents |
+| **Claude Agent SDK** | First-class tool-use loop, memory, subagents | Currently routes to Anthropic API directly; would bypass OpenWebUI/Bedrock gateway | Re-evaluate if OpenWebUI gets dropped |
+
+Going with option 1. OpenWebUI's `/api/v1/chat/completions` already supports
+the `tools` parameter (OpenAI-style function calling) which Bedrock Claude
+Sonnet honors. We pass tool schemas in request, parse `tool_calls` from
+response, execute tools server-side, feed result back as a `tool` role
+message — standard loop.
+
+### 2.2 New files / changes
+
+```
+build-failure-analyzer/
+├── agents/
+│   ├── __init__.py
+│   ├── base.py                  # Agent base class, retry, JSON validation, audit
+│   ├── classifier.py            # A1
+│   ├── retrieval.py             # A2 (tool-using, wraps VectorDBClient)
+│   ├── deviation.py             # A3
+│   ├── disambiguator.py         # A4
+│   ├── synthesizer.py           # A5
+│   ├── validator.py             # A6
+│   └── reporter.py              # A7 (no LLM)
+├── orchestrator.py              # State machine, routing, budget enforcement
+├── prompts/
+│   ├── classifier.md
+│   ├── deviation.md
+│   ├── disambiguator.md
+│   ├── synthesizer.md
+│   └── validator.md
+├── tool_schemas.py              # JSON schemas for agent outputs + tools
+└── analyzer_service.py          # modified: /api/analyze delegates to orchestrator
+```
+
+Shared code reused from today: `vector_db.py`, `pipeline_context_rag.py`,
+`slack_helper.py`, `slack_reviewer.py`, `llm_openwebui_client.py`.
+
+### 2.3 Agent base class sketch
+
+```python
+# agents/base.py
+class Agent:
+    name: str
+    model: str = OPENWEBUI_MODEL     # override per-agent if needed
+    temperature: float = 0.2
+    max_tokens: int = 512
+    output_schema: dict              # JSON schema
+    system_prompt_path: str          # file in prompts/
+    tools: list[dict] = []           # OpenAI-style function schemas
+
+    def run(self, state: dict) -> dict:
+        """
+        1. Build user prompt from state
+        2. Call OpenWebUI with tools + schema
+        3. Execute any tool_calls, feed back, repeat (bounded loop, max 3 iters)
+        4. Validate final output against schema
+        5. Append audit_trail entry
+        6. Return structured dict (merged into state)
+        """
+
+    def _call_with_tools(self, messages, tools):
+        # tool-use loop
+        ...
+
+    def _validate_output(self, raw_json) -> dict:
+        # jsonschema.validate; on failure, one retry with "your output was invalid, try again"
+        ...
+```
+
+### 2.4 Per-agent specs
+
+#### A1 Classifier
+```python
+class ClassifierAgent(Agent):
+    model = "claude-haiku-4-5-20251001"    # cheap & fast
+    max_tokens = 256
+    output_schema = {
+        "type": "object",
+        "required": ["category", "fingerprint", "severity"],
+        "properties": {
+            "category":    {"enum": ["network", "dependency", "compile",
+                                     "test", "infra", "auth", "config",
+                                     "resource", "unknown"]},
+            "subcategory": {"type": "string"},
+            "fingerprint": {"type": "string", "maxLength": 512},
+            "severity":    {"enum": ["low", "medium", "high", "fatal"]},
+            "key_tokens":  {"type": "array", "items": {"type": "string"},
+                            "maxItems": 10}
+        }
+    }
+```
+Prompt (sketch): "You are a CI/CD log classifier. Given `error_lines` and
+`context_lines`, emit the strict JSON above. The fingerprint must be a
+short canonical string (<256 chars) with timestamps, paths, SHAs, and
+build IDs stripped."
+
+#### A3 Deviation Analyzer (the high-value one)
+```python
+class DeviationAgent(Agent):
+    max_tokens = 512
+    output_schema = {
+        "type": "object",
+        "required": ["match_quality", "confidence", "reasoning"],
+        "properties": {
+            "match_quality": {"enum": ["exact_match", "applicable_with_adjustments",
+                                       "partial", "no_match"]},
+            "confidence":    {"type": "number", "minimum": 0, "maximum": 1},
+            "reasoning":     {"type": "string"},
+            "adjusted_fix":  {"type": "string"},
+            "adjustments":   {"type": "array", "items": {"type": "string"}}
+        }
+    }
+```
+Prompt (sketch): "Compare the CURRENT error with a STORED error and its
+approved STORED fix. Decide whether the stored fix applies. Output JSON.
+- exact_match: identical root cause; fix applies verbatim
+- applicable_with_adjustments: same root cause, needs small edits (version
+  numbers, paths); provide `adjusted_fix`
+- partial: some steps of the stored fix apply; list which
+- no_match: different root cause
+Do not invent new fixes."
+
+Called once per top-K candidate (K=3). Requests run in parallel (orchestrator
+uses `asyncio.gather`) so latency = max(3 calls) not sum.
+
+#### A5 Synthesizer
+Replaces the LLM branch in `resolver_agent.py:167`. Same prompt structure,
+but augmented with cited partial matches from A3:
+
+```
+## Partial matches (for reference, adapt not copy)
+- candidate X: similarity 0.78, stored fix: "..."
+- candidate Y: similarity 0.72, stored fix: "..."
+
+## Current error
+...
+
+Generate a fix citing which partial matches you drew from.
+```
+
+#### A6 Validator
+```python
+output_schema = {
+    "type": "object",
+    "required": ["pass", "warnings"],
+    "properties": {
+        "pass":     {"type": "boolean"},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "block_reasons": {"type": "array", "items": {"type": "string"}}
+    }
+}
+```
+Used as a hard gate for commands containing `rm -rf /`, `curl | sh`,
+credential references, etc. Could be deterministic regex before LLM.
+
+### 2.5 Orchestrator
+
+```python
+# orchestrator.py
+class Orchestrator:
+    MAX_AGENT_CALLS = 6
+    TOTAL_TIMEOUT_S = 45
+
+    def __init__(self, vector_db, redis_client, ctx_db):
+        self.agents = {
+            "classifier":    ClassifierAgent(),
+            "retrieval":     RetrievalAgent(vector_db, ctx_db),
+            "deviation":     DeviationAgent(),
+            "disambiguator": DisambiguatorAgent(),
+            "synthesizer":   SynthesizerAgent(),
+            "validator":     ValidatorAgent(),
+        }
+        self.redis = redis_client
+
+    async def handle(self, payload) -> dict:
+        state = init_state(payload)
+
+        # 0. Pre-agent cache shortcuts (unchanged from today)
+        if cached := self._cache_lookup(state): return cached
+
+        # 1. Classify
+        state.update(await self.agents["classifier"].run(state))
+
+        # 2. Retrieve
+        state.update(await self.agents["retrieval"].run(state))
+        if not state["candidates"]:
+            state.update(await self.agents["synthesizer"].run(state))
+            return self._finalize(state)
+
+        # 3. Deviation (parallel across top-K)
+        state["analyzed_candidates"] = await asyncio.gather(*[
+            self.agents["deviation"].run({**state, "candidate": c})
+            for c in state["candidates"][:3]
+        ])
+
+        # 4. Route based on deviation results
+        exact = [c for c in state["analyzed_candidates"] if c["match_quality"] == "exact_match"]
+        applicable = [c for c in state["analyzed_candidates"] if c["match_quality"] == "applicable_with_adjustments"]
+
+        if exact:
+            state["chosen"] = exact[0]
+        elif len(applicable) == 1:
+            state["chosen"] = applicable[0]
+        elif len(applicable) >= 2:
+            state.update(await self.agents["disambiguator"].run(state))
+        else:
+            state.update(await self.agents["synthesizer"].run(state))
+
+        # 5. Validate (optional per config)
+        if VALIDATE_ENABLED:
+            state["validation"] = await self.agents["validator"].run(state)
+
+        return self._finalize(state)
+```
+
+### 2.6 Caching strategy for agents
+
+Agent calls are expensive; cache aggressively in Redis:
+
+| Cache key | Value | TTL | Purpose |
+|---|---|---|---|
+| `agent:classifier:<sha(error)>` | A1 output | 24 h | Skip A1 re-run on retries |
+| `agent:deviation:<sha(query_fp+candidate_id)>` | A3 output | 7 d | A3 output is stable per (query, candidate) pair |
+| `agent:synth:<sha(fingerprint)>` | A5 output | 24 h | Existing AI cache, just renamed |
+
+A3 cache in particular is high-impact: if two developers hit the same
+error pattern within 7 days, the deviation analysis is reused, saving ~3
+LLM calls per subsequent request.
+
+### 2.7 Observability
+
+- Each `run()` appends to `state["audit_trail"]` with `agent`, `ms`, `tokens_in`, `tokens_out`, `tool_calls[]`, `result_summary`.
+- Log full audit trail JSON per request (at INFO level, aggregated ID).
+- Prometheus metrics:
+  - `bfa_agent_latency_seconds{agent=...}` histogram
+  - `bfa_agent_tokens_total{agent=...,direction=in|out}` counter
+  - `bfa_agent_errors_total{agent=...,reason=...}` counter
+  - `bfa_agent_cache_hits_total{agent=...}` counter
+- Grafana dashboard showing per-request flow + cumulative cost.
+
+### 2.8 Rollout plan
+
+1. Land `SOLUTION_PROPOSAL.md` deterministic fixes first (non-negotiable — without these, agents are reasoning over poisoned data).
+2. Implement `agents/base.py` + `agents/deviation.py` + orchestrator wiring as feature-flagged path: `AGENTIC_MODE=off|deviation_only|full`.
+3. Deploy in `deviation_only` mode — only A3 + A5 active, rest of pipeline unchanged.
+4. Measure (see chunk 3) for 2 weeks vs deterministic baseline.
+5. If A3 produces >15% accuracy lift, add A1 classifier to enrich retrieval. Otherwise stop.
+6. Only add A6 Validator if security review requests it.
+
+---
+
+(Chunks 3, 4 to follow.)
