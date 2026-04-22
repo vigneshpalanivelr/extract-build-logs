@@ -411,3 +411,133 @@ POST /api/analyze
 | Operational complexity | Low |
 
 ---
+
+## 6. Approach C — Hybrid (B + A3 Deviation Analyzer only)
+
+### 6.1 Overview
+
+Approach B as the deterministic fast path, plus **exactly one LLM agent**
+— the Deviation Analyzer (A3) — invoked only when the vector DB returns
+a match that is meaningful but not clearly exact. Every other agent from
+Approach A is dropped or replaced by deterministic code.
+
+Key idea: pay the LLM tax only on the ~15% of requests where it
+actually helps.
+
+### 6.2 Architecture — B foundation plus one agent
+
+Everything from §5 (split error/context, normalization, cosine,
+deterministic IDs, update-not-insert) is the foundation. On top of that:
+
+| Component | Source | Role |
+|---|---|---|
+| Redis caches | existing | Pre-agent shortcut, now with stable fingerprint keys |
+| VectorDB cosine lookup | §5 | Retrieval (deterministic; no "agent") |
+| Context-cosine disambiguation | §5 | First-line tie-breaker (deterministic) |
+| **A3 Deviation Analyzer** | new | Single LLM agent, fires only on ambiguous matches |
+| LLM Synthesizer | existing `resolver_agent.py:167` | Unchanged fallback for true misses, enriched with partial-match citations |
+| Slack Approve/Edit | existing + §5 fix | Unchanged except for update-not-insert semantics |
+
+Why A3 is the one we keep (and not A1, A4, A5, A6):
+
+- **A1 Classifier**: redundant — the deterministic `normalize_error_text`
+  already produces a canonical fingerprint. A1 would do slightly better
+  at the cost of an LLM call on every request.
+- **A2 Retrieval**: not a real agent — just a vector DB tool call.
+- **A4 Disambiguator**: the context-cosine rule in §5 already
+  disambiguates. Only add A4 if §5's tie-breaker fails in >5% of cases.
+- **A5 Synthesizer**: already exists as today's `call_llm`. No new agent
+  needed; enrich its prompt with partial-match citations from A3.
+- **A6 Validator**: defer until a real safety incident. Regex pre-checks
+  catch `rm -rf /` and `curl | sh` today.
+
+**A3 is the only agent where LLM reasoning measurably beats pure vector
+math**: it judges whether a 0.92-similar stored fix actually applies to
+this specific variant and, if so, proposes minimal adjustments.
+
+### 6.3 Per-request flow (state machine)
+
+```
+POST /api/analyze
+  │
+  ├─ Redis sme:fix:<fp> / ai:fix:<fp>           (cache hits — ~70% of traffic)
+  │     └─ HIT → DM dev, done
+  │
+  ├─ VectorDB.lookup_candidates(fp, top_k=10, threshold=0.90)
+  │
+  ├─ 0 candidates ≥ 0.90                        → LLM Synthesizer (existing path)
+  │
+  ├─ 1 candidate ≥ 0.95                         → return stored fix (high-confidence)
+  │
+  ├─ 1 candidate in [0.90, 0.95)                → A3 Deviation Analyzer
+  │     ├─ exact_match                          → return stored fix
+  │     ├─ applicable_with_adjustments          → return adjusted_fix
+  │     ├─ partial / no_match                   → LLM Synthesizer
+  │
+  └─ ≥2 candidates ≥ 0.90                       → A3 on each (parallel, top-3)
+        ├─ any exact_match                      → return
+        ├─ 1 applicable                         → return adjusted
+        ├─ ≥2 applicable                        → context-cosine tie-breaker (deterministic)
+        └─ none applicable                      → LLM Synthesizer
+```
+
+A3 effectively fires on roughly the 15% of requests that sit in the
+"meaningful but uncertain" band. The 70% cache-hit fast path and the
+~15% clear-hit / clear-miss paths remain LLM-free.
+
+**A3 output caching** (Redis, 7-day TTL):
+
+```
+key  = agent:deviation:sha(query_fingerprint + candidate_id)
+value = { match_quality, adjusted_fix?, reasoning, confidence, ts }
+```
+
+Two developers hitting the same error pattern within a week share the
+A3 decision — the second request pays zero LLM cost.
+
+### 6.4 Pros
+
+- **Cheap at steady state**: ~300 LLM calls per 1k requests (0 on
+  cache/clear hits, 1 on ambiguous, 1 on true miss). ~10% of Approach
+  A's cost.
+- **Gets A's accuracy ceiling on variants**: A3 handles the "same root
+  cause, different version number" case that Approach B cannot.
+- **Deterministic floor**: Approach B underneath means 80%+ of requests
+  behave identically on repeat — SME trust preserved.
+- **Graceful degradation**: if A3 fails (timeout, schema error), the
+  request falls through to the LLM Synthesizer — no worse than Approach
+  B.
+- **Small enough to land incrementally**: A3 + orchestrator behind a
+  feature flag (`AGENTIC_MODE=deviation_only`) ships after Approach B is
+  in prod; zero risk to the deterministic path.
+- **Bounded failure surface**: one agent's prompt to own, one JSON
+  schema to validate, one audit-trail row per request.
+
+### 6.5 Cons
+
+- **Still adds ~900 LoC** over baseline (vs ~500 for B alone).
+- **Non-deterministic on the 15% ambiguous band**: A3 can give
+  slightly different advice on different days even for the same input.
+  Caching mitigates but does not eliminate.
+- **Requires a golden-set eval harness** to prove A3 actually helps —
+  otherwise we're spending money for a vibe.
+- **A3's `adjusted_fix`** needs an approval story: do developers see
+  adjusted fixes directly, or do they go through a lighter SME review?
+  (Open question #4 in §10.)
+- **Prompt-injection exposure in A3**: moderate — stored error text and
+  fix text both flow into its prompt. Mitigated by keeping A3's tools
+  empty (no file access, no shell) and validating its JSON output
+  strictly.
+
+### 6.6 Per-request cost & latency
+
+| Metric | Value |
+|---|---|
+| Cost per 1k requests | ~$3 |
+| LLM calls per request | 0 (cache/clear hit) / 1 (ambiguous with A3) / 1 (true miss with Synthesizer) |
+| p50 latency | 400 ms (cache hit) to 8 s (A3 or Synthesizer) |
+| p99 latency | 15 s |
+| Code complexity (LoC delta) | ~900 (≈ 500 for B + 400 for A3 + orchestrator + eval) |
+| Operational complexity | Medium |
+
+---
