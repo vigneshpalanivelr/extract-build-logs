@@ -597,3 +597,65 @@ at ~10% of A's cost. Its only giveaway versus B is some
 non-determinism on the ~15% of requests that trigger A3.
 
 ---
+
+## 8. Recommendation: Approach C — Hybrid
+
+### 8.1 Why Hybrid
+
+- **A3 is the single highest-leverage agent.** It addresses the one
+  failure mode Approach B cannot: "stored fix needs small adjustment".
+  Estimated ~15–20% accuracy lift on the 20% variant bucket — i.e.,
+  3–4% overall lift — for 2x the cost of B.
+- **Every other agent has worse leverage.** A1 duplicates the
+  deterministic normalizer. A4 duplicates the context-cosine rule. A5 is
+  already implemented. A6 is YAGNI until a real safety incident.
+- **Graceful degradation.** If A3 misbehaves (timeout, malformed JSON,
+  low confidence), the request falls through to the existing LLM
+  Synthesizer path. Worst case = Approach B.
+- **Incremental landing.** Approach B ships first and must anyway.
+  Adding A3 is a contained, feature-flagged follow-up. No flag day.
+- **Affordable at current volume.** ~$90/month at 1k/day vs $900–1,200
+  for Full Agentic.
+
+### 8.2 Why not Full Agentic (now)
+
+- **Cost** at 1k/day is 10x Hybrid for a ~0% accuracy lift (A and C are
+  within noise on variants; A is worse on repeats because every request
+  pays the agent tax).
+- **Latency**: 12 s p50 erodes the "fast feedback" value of the tool.
+- **Determinism**: SMEs need to trust that approving a fix means the
+  next person with the same error sees the same advice. Full Agentic
+  can drift day to day. Hybrid only drifts on the 15% ambiguous band.
+
+### 8.3 Why deterministic (B) alone isn't enough
+
+- **Variant bucket (20%)**: stored fix is close but needs a tweak.
+  Approach B returns it verbatim; developer has to translate. That's
+  exactly the experience we're trying to improve.
+- **Cliff at the threshold**: errors at cosine 0.88–0.89 fall through
+  to the LLM even when a stored fix would have been fine. A3 rescues
+  these.
+
+---
+
+## 9. Phased Rollout
+
+| Phase | Scope | Duration | Gate to advance | Rollback |
+|---|---|---|---|---|
+| **0 — Eval harness** | Build golden set of ≥200 labeled (error, fix) pairs from past SME approvals. Replay tooling that runs each request through today/B/Hybrid and grades outputs (exact / needs_tweak / wrong / hallucinated). | ~1 week | Harness runs end-to-end on current prod data; baseline grades published | n/a — pure tooling |
+| **1 — Land Approach B** | Implement §5 on the extractor and analyzer. Write migration script. Run it against a copy of the prod Chroma DB into `fix_embeddings_v2`. Swap `CHROMA_COLLECTION` env var. | ~1 week | Eval shows ≥20% accuracy lift over today; poisoning row count in v2 = 0 | Revert env var to old collection |
+| **2 — Add A3 behind flag** | Implement `agents/base.py`, `agents/deviation.py`, `orchestrator.py`, prompt template. Feature flag `AGENTIC_MODE=off\|deviation_only`. Shadow-mode eval: A3 runs but doesn't affect user-visible response; log its decisions. | ~1 week | Eval shows ≥10% additional lift on variant bucket; A3 p99 < 6 s; A3 JSON-schema failure rate < 2% | Flag off |
+| **3 — 10% traffic rollout** | Flip flag to `deviation_only` for 10% of `/api/analyze` traffic. Monitor cost, latency, SME approval rate, developer feedback. | ~2 weeks | Cost within forecast; SME approval rate ≥ phase 1 baseline; no customer complaints attributable to A3 | Flag back to 0% |
+| **4 — 100% rollout** | All traffic. Close out. | ~1 week | Stable for 2 weeks | Flag back to 10% |
+| **5 (optional)** | Add further agents only if signals require: A6 Validator on a safety incident, A1 Classifier if retrieval precision is still low, A4 Disambiguator if ties in §5 exceed 5%. | n/a | per-agent eval lift ≥ 5% | Per-agent flag |
+
+### 9.1 Non-negotiables
+
+- **Phase 0 before Phase 1.** Without the eval harness we cannot prove
+  anything works. This is the single biggest risk item.
+- **Phase 1 before Phase 2.** A3 reasoning over an un-migrated DB is
+  still reasoning over poisoned data.
+- **Feature flag everywhere.** Every phase must be revertible in under
+  60 seconds via env-var flip. No code-revert rollbacks on a weekend.
+
+---
