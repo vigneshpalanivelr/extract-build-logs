@@ -541,3 +541,59 @@ A3 decision — the second request pays zero LLM cost.
 | Operational complexity | Medium |
 
 ---
+
+## 7. Side-by-side Comparison
+
+### 7.1 The matrix
+
+| Dimension | A — Full Agentic | B — Split Error | C — Hybrid |
+|---|---|---|---|
+| **Accuracy — exact repeats** (70% of traffic) | ~95% | ~95% | ~95% |
+| **Accuracy — variants** (20%) | ~85–90% | ~60–70% | ~85–90% |
+| **Accuracy — novel errors** (10%) | ~80% | ~75% | ~80% |
+| **LLM API calls per request** | 5–6 | 0–1 | 0–1 (with A3 on ambiguous) |
+| **Tokens per 1k requests** | ~1.5–2 M | ~100 K | ~200 K |
+| **Cost per 1k requests** | ~$30–$40 | ~$1.50 | ~$3 |
+| **p50 latency** | 12 s | 250 ms | 400 ms |
+| **p99 latency** | 40 s | 10 s | 15 s |
+| **Code complexity (LoC delta)** | ~2,500 | ~500 | ~900 |
+| **Operational complexity** | High | Low | Medium |
+| **Determinism** | Low (per-agent variance on every request) | High | Medium (variance only on the ~15% ambiguous band) |
+| **Debuggability** | Poor without full agent audit-trail dashboard | Good — single similarity score per lookup | Fair — deterministic hot path, A3 audit trail |
+| **Failure blast radius** | Noisy but catchable (validator, schema failures) | Silent wrong answers (bounded by §5 fixes) | Graceful: A3 failure → LLM Synthesizer fallback |
+| **Prompt-injection risk** | Medium — logs flow into A1/A3/A5 prompts | None beyond today | Low — only A3 sees sanitized error text |
+| **Observability tooling needed** | Full audit trail + per-agent metrics + Grafana | None beyond today | Per-agent metrics only |
+| **Explainability to SMEs** | Full agent chain with reasoning | Similarity + context scores | A3 reasoning on ambiguous cases |
+| **Security review burden** | High (every prompt + tool schema) | Low | Medium (one prompt to review) |
+| **Training flywheel** | Slack approve + per-agent feedback possible | Slack approve → clean DB | Slack approve + A3 decision cache |
+
+### 7.2 Headline numbers at 1,000 requests/day
+
+Assumptions: 70% repeat errors / 20% variants / 10% novel. Bedrock
+Claude Sonnet at ~$3 per 1M input and ~$15 per 1M output tokens. Haiku
+at ~$0.80 / $4. Ollama embeddings are self-hosted (free).
+
+| Metric | A — Full Agentic | B — Split Error | C — Hybrid |
+|---|---|---|---|
+| Monthly cost | ~$900–$1,200 | ~$45 | ~$90 |
+| LLM calls per day | ~6,000 | ~100 | ~300 |
+| Engineer days to implement | ~25 | ~8 | ~15 |
+| Engineer days of ongoing ops (monthly) | ~3 | <1 | ~1 |
+
+### 7.3 Where each approach shines / fails
+
+**A — Full Agentic** wins on variant accuracy but pays the agent tax on
+every request. At 1k/day the cost is ~$30/day for work that Hybrid does
+for $3/day.
+
+**B — Split Error** is the cheapest correct answer. It handles the 80%
+of traffic that is exact repeats or true misses. Its weakness is the
+variant bucket: stored fix says "downgrade react to 17", new error is
+on react@18.2 — B returns the stored fix as-is and the developer has
+to translate.
+
+**C — Hybrid** inherits B's floor and captures A's ceiling on variants
+at ~10% of A's cost. Its only giveaway versus B is some
+non-determinism on the ~15% of requests that trigger A3.
+
+---
