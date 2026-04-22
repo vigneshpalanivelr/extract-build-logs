@@ -659,3 +659,190 @@ non-determinism on the ~15% of requests that trigger A3.
   60 seconds via env-var flip. No code-revert rollbacks on a weekend.
 
 ---
+
+## 10. Open Questions for Team
+
+1. **Orchestrator timeout vs upstream SLA.** Hybrid's total budget is
+   45 s per request (chunk 2 §2.5). Does Jenkins/GitLab post-build
+   hook tolerate that? If the extractor retries on timeout we risk
+   duplicate analyses.
+
+2. **Eval-harness ownership.** Phase 0 is the single biggest risk item.
+   Who owns curating the 200 labeled pairs and maintaining the
+   replay/grading script?
+
+3. **Per-team threshold tuning.** Should the 0.90 vector threshold, the
+   top-K fan-out (currently 3 for A3), and the context-cosine tie
+   margin (0.05) be configurable per repo? Different teams have very
+   different log styles.
+
+4. **A3 "adjusted_fix" approval gating.** When A3 returns an adjusted
+   version of a stored fix, should it:
+   (a) go to the developer directly with a note that it's derived;
+   (b) go through a fresh SME Approve/Edit cycle; or
+   (c) go through a lighter thumbs-up review in Slack?
+   Recommendation: (c) — lighter review because the base fix is already
+   SME-approved.
+
+5. **Bedrock migration scope.** Branch name is
+   `claude/setup-log-analysis-bedrock-gmLHN`. Does the Bedrock LLM swap
+   (from OpenWebUI direct to native Bedrock SDK) complete within this
+   scope or as a separate PR? Hybrid is LLM-backend-agnostic, so either
+   order works.
+
+6. **Salvage existing approved fixes.** Migration can carry over the
+   current `fix_embeddings` rows (dropping the poisoning outliers), or
+   we can start with an empty `fix_embeddings_v2` and have SMEs
+   re-approve the common ones. Which does the team prefer?
+
+7. **`pipeline_context` collection.** The domain-RAG collection
+   (`pipeline_context_rag.py`) uses threshold 0.55. Should it also
+   migrate to explicit cosine space, or leave as-is (it's not affected
+   by the poisoning bug because it's read-only)?
+
+---
+
+## 11. Appendix A — File-by-file Changes (Hybrid)
+
+| # | File | Change | Est LoC |
+|---|---|---|---|
+| 1 | `src/log_error_extractor.py` | Split `extract_error_sections` to emit per-region `{error_lines, context_lines, error_fingerprint}` | 60 |
+| 2 | `src/api_poster.py` | New `errors` payload shape; legacy `error_lines` kept for one release | 30 |
+| 3 | `build-failure-analyzer/analyzer_service.py` | `FailedStep` → `errors: List[ErrorEntry]`, cache keys use fingerprint, delegate to orchestrator | 80 |
+| 4 | `build-failure-analyzer/vector_db.py` | `normalize_error_text`, deterministic sha256 ID, cosine space, `context_sample` metadata, top-K disambiguation | 150 |
+| 5 | `build-failure-analyzer/resolver_agent.py` | Pass `error_fingerprint` + `context_lines` through; enrich Synthesizer prompt with partial-match citations | 40 |
+| 6 | `build-failure-analyzer/slack_reviewer.py` | `collection.update()` on fingerprint ID (replace `add()`) | 20 |
+| 7 | `build-failure-analyzer/agents/base.py` (new) | Bounded agent runner, tool-use loop, JSON schema validation, audit-trail entry | 120 |
+| 8 | `build-failure-analyzer/agents/deviation.py` (new) | A3 Deviation Analyzer | 80 |
+| 9 | `build-failure-analyzer/orchestrator.py` (new) | State machine from §6.3; feature flag; budget enforcement | 150 |
+| 10 | `build-failure-analyzer/prompts/deviation.md` (new) | A3 system + user prompts | — |
+| 11 | `scripts/migrate_vector_db.py` (new) | One-off migration | 80 |
+| 12 | Tests | Unit tests (normalizer, A3 schema, orchestrator routing) + golden-set integration | 300 |
+| 13 | `build-failure-analyzer/eval/golden_set.jsonl` (new) | ≥200 labeled (error, fix) pairs | data |
+| 14 | `build-failure-analyzer/eval/run_eval.py` (new) | Replay harness + grading | 120 |
+
+**Total:** ~1,130 LoC of product code + 300 LoC tests + eval tooling
+and data. Estimated 2–3 weeks for one engineer including Phase 0.
+
+---
+
+## 12. Appendix B — A3 Deviation Analyzer Specification
+
+**Role.** Given the current error (normalized fingerprint + raw lines +
+context sample) and a candidate stored fix (its stored error + its
+stored fix text), decide whether the stored fix applies. If it applies
+with small adjustments (version numbers, paths, identifiers), emit an
+`adjusted_fix`. Do not invent new fixes — fall through to the
+Synthesizer for that.
+
+**Output JSON schema:**
+
+```json
+{
+  "type": "object",
+  "required": ["match_quality", "confidence", "reasoning"],
+  "properties": {
+    "match_quality": {
+      "enum": ["exact_match", "applicable_with_adjustments", "partial", "no_match"]
+    },
+    "confidence":   { "type": "number", "minimum": 0, "maximum": 1 },
+    "reasoning":    { "type": "string", "maxLength": 2000 },
+    "adjusted_fix": { "type": "string" },
+    "adjustments":  { "type": "array", "items": { "type": "string" } }
+  }
+}
+```
+
+**System-prompt sketch:**
+
+> You compare a CURRENT CI/CD build error with one STORED error and its
+> approved STORED fix, and decide whether the stored fix applies.
+>
+> Output STRICT JSON matching the provided schema. No prose outside the
+> JSON object.
+>
+> Match-quality values:
+> - `exact_match` — identical root cause; fix applies verbatim
+> - `applicable_with_adjustments` — same root cause; small edits needed
+>   (version numbers, paths). Provide `adjusted_fix` and list changes
+>   in `adjustments`.
+> - `partial` — some steps of the stored fix apply; list which
+> - `no_match` — different root cause
+>
+> Do not invent new remediation steps. If the stored fix does not
+> mostly apply, return `partial` or `no_match` and let downstream
+> synthesis handle it.
+
+**When A3 fires (trigger conditions in the orchestrator):**
+
+- Exactly 1 candidate with cosine similarity in [0.90, 0.95).
+- ≥2 candidates with cosine similarity ≥ 0.90 (runs in parallel, top-3).
+- Never fires when: 0 candidates above 0.90, or 1 candidate at ≥ 0.95
+  (treated as high-confidence exact hit).
+
+**Caching strategy:**
+
+- Redis key: `agent:deviation:sha(query_fingerprint + candidate_id)`
+- TTL: 7 days
+- Two developers hitting the same error within a week share the
+  decision — second request pays $0 for A3.
+
+---
+
+## 13. Appendix C — Vector DB Migration Plan
+
+One-off script: `scripts/migrate_vector_db.py`.
+
+1. Open the existing `fix_embeddings` collection read-only.
+2. Iterate all rows; for each row:
+   - Re-derive `error_fingerprint` from `metadata.error_text` via the
+     new `normalize_error_text`.
+   - Skip rows where:
+     - `len(metadata.error_text) > 5 KB` (poisoning outliers), or
+     - `fix_text` is empty / `"(empty fix)"`, or
+     - `metadata.status` not in `("approved", "edited")`.
+   - Re-embed normalized fingerprint with granite-embedding.
+   - L2-normalize the vector.
+   - Write to `fix_embeddings_v2` with:
+     - deterministic ID `sha256(fingerprint)`
+     - `collection.add()` on first occurrence, `update()` on duplicate
+       fingerprints (keep the most recent `approved_by`).
+     - `metadata.hnsw:space = "cosine"` on collection creation.
+3. Run in a staging environment first against a copy of the prod DB.
+4. After verification, flip `CHROMA_COLLECTION=fix_embeddings_v2` on
+   the analyzer and restart. Keep the old collection on disk for
+   rollback.
+
+### 13.1 Expected drop rate
+
+Rough estimate from current DB: up to ~30% of rows will be dropped as
+poisoning outliers or duplicates from the salted-hash ID bug. Exact
+numbers in Phase 1 once the script runs.
+
+---
+
+## 14. Appendix D — Future-reader Checklist
+
+If picking this up cold (new engineer, or fresh Claude session):
+
+Read order:
+1. `build-failure-analyzer/CURRENT_FLOW.md` — what the service does today.
+2. `build-failure-analyzer/PROPOSAL.md` (this file) — what to change and why.
+3. Source files to re-open when implementing:
+   - `src/log_error_extractor.py:90` — `extract_error_sections`
+   - `src/api_poster.py:104` — payload shape
+   - `build-failure-analyzer/analyzer_service.py:192` — `FailedStep` schema
+   - `build-failure-analyzer/analyzer_service.py:267` — `/api/analyze`
+   - `build-failure-analyzer/vector_db.py:159` — `lookup_existing_fix`
+   - `build-failure-analyzer/vector_db.py:240` — `save_fix_to_db`
+   - `build-failure-analyzer/resolver_agent.py:64` — `resolve`
+   - `build-failure-analyzer/slack_reviewer.py:139` — Approve handler
+
+Branch: `claude/setup-log-analysis-bedrock-gmLHN`.
+
+Implementation order: Phase 0 → 1 → 2 → 3 → 4 (never skip). Every
+phase must be feature-flag-revertible.
+
+Do not begin implementation without the eval harness (Phase 0) in place —
+every "accuracy" number in this doc is an educated estimate until it is
+measured.
