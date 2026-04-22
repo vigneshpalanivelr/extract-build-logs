@@ -250,3 +250,164 @@ Each agent appends an `audit_trail` entry with `agent`, `ms`, `tokens_in`,
 | Operational complexity | High |
 
 ---
+
+## 5. Approach B — Split Error (Deterministic)
+
+### 5.1 Overview
+
+Fix the four bugs from §3 without introducing any LLM agents. Separate
+the matched error lines from their surrounding context both on the wire
+and in storage, normalize error text before embedding, switch Chroma to
+cosine distance, use deterministic IDs, and disambiguate multiple
+candidates using a secondary cosine pass over the context.
+
+### 5.2 Architecture — what changes
+
+**5.2.1 Wire contract change (extractor → analyzer)**
+
+Today `FailedStep.error_lines = [<one big blob>]`. Change to a list of
+per-region objects:
+
+```json
+{
+  "step_name": "...",
+  "errors": [
+    {
+      "error_lines":       ["npm ERR! code ERESOLVE", "npm ERR! peer dep ..."],
+      "context_lines":     ["Resolving dependencies...", "..."],
+      "error_fingerprint": "npm err code eresolve peer dep <VERSION> <PATH>"
+    }
+  ]
+}
+```
+
+Keep `error_lines: List[str]` on the analyzer for one release overlap so
+old clients don't break.
+
+**5.2.2 Normalization**
+
+New helper `normalize_error_text(error_lines) -> str`:
+
+- strip `"Line N:"` prefixes
+- strip ISO timestamps, `[HH:MM:SS]`, epoch millis
+- replace absolute paths, SHAs, UUIDs, container IDs, ports with
+  placeholders (`<PATH>`, `<SHA>`, …)
+- collapse whitespace, lowercase
+- truncate to 512 tokens (granite-embedding's input ceiling)
+
+The normalized text is used for both:
+
+- the deterministic row ID: `id = "fix-" + sha256(fingerprint)[:32]`
+- the embedding input
+
+**5.2.3 Cosine distance + deterministic IDs**
+
+At first write, create the Chroma collection with explicit cosine space:
+
+```python
+client.get_or_create_collection(
+    name="fix_embeddings_v2",
+    metadata={"hnsw:space": "cosine"},
+)
+```
+
+L2-normalize every embedding vector before `add()` and `query()`.
+Replace the Python `hash()`-based ID with `sha256(fingerprint)` (stable
+across process restarts). Tighten the similarity threshold for the
+error-only embedding to **0.90** (meaningful on cosine, unlike today's
+0.78 on miscalibrated L2).
+
+**5.2.4 Store only the error in the vector DB**
+
+Rewrite `save_fix_to_db`:
+
+- embedding input = normalized fingerprint (short, specific)
+- document = `fix_text`
+- metadata includes: `error_fingerprint`, `raw_error_lines`,
+  `context_sample` (first ~2 KB of joined context, **metadata only**,
+  not embedded), `approver`, `status`, `fix_id`, `revision`,
+  repo/branch/job
+
+Context lines remain available for display and disambiguation but never
+pollute the retrieval embedding.
+
+**5.2.5 Context-based disambiguation**
+
+`lookup_existing_fix` returns top-K=10 candidates with cosine similarity
+≥ 0.90. When more than one passes:
+
+- compute `ctx_sim = cosine(embed(query.context_lines), embed(candidate.context_sample))`
+- score = `0.7 * error_sim + 0.3 * ctx_sim`
+- return the top score if `score_1 − score_2 > 0.05`; otherwise fall
+  through to the LLM
+
+No LLM call is involved — this is pure deterministic vector math.
+
+**5.2.6 Update-not-insert on Slack approval**
+
+In `slack_reviewer.py`, replace `collection.add()` with a look-up-then-
+`collection.update()` on the deterministic fingerprint ID. Same fix
+approved twice updates the same row (with `revision` bumped in
+metadata) instead of creating a duplicate.
+
+### 5.3 Per-request flow
+
+```
+POST /api/analyze
+  │
+  ├─ Redis sme:fix:<fingerprint>       (now hits because fingerprint is stable)
+  │     └─ HIT → DM dev, done
+  │
+  ├─ Redis ai:fix:<fingerprint>
+  │     └─ HIT → DM dev, done
+  │
+  ├─ VectorDB.lookup_candidates(fingerprint, top_k=10, threshold=0.90)
+  │     ├─ 0 candidates → LLM (today's Synthesizer, unchanged)
+  │     ├─ 1 candidate  → return stored fix
+  │     └─ ≥2 candidates → context-cosine disambiguation
+  │             ├─ clear winner (margin > 0.05) → return
+  │             └─ tie                          → LLM
+  │
+  └─ LLM path → cache in Redis, post to SME Slack with Approve/Edit/Discard
+```
+
+### 5.4 Pros
+
+- **Dirt cheap**: 0 LLM calls on the 70% of requests that hit cache or
+  vector DB. Only the novel 10% pay for an LLM call.
+- **Deterministic and debuggable**: same input → same output. One
+  similarity score logged per lookup; easy to regression test.
+- **Fixes the bug at the root**. All four §3 issues are addressed.
+- **No new dependencies** — still the existing Chroma + Ollama +
+  OpenWebUI stack.
+- **Small surface**: ~500 LoC change, most of it contained in
+  `vector_db.py` and `log_error_extractor.py`.
+- **No prompt-injection exposure** beyond what the LLM synthesizer
+  already has today.
+
+### 5.5 Cons
+
+- **Misses the "variant" bucket** (~20% of traffic): stored fix says
+  "downgrade to react@17", new error is on `react@18.2.0`. Approach B
+  returns the stored fix verbatim; developer has to mentally translate
+  the version number.
+- **No reasoning about applicability** — purely geometric. A stored
+  Jenkins-agent-timeout fix with cosine 0.92 to a new hard-auth failure
+  with similar wording can still be returned incorrectly.
+- **Tight-threshold cliff**: errors that sit at cosine 0.88–0.89 fall
+  through to the LLM even when a stored fix would have been fine, so
+  some LLM calls are avoidable-but-unavoided.
+- **No citation of partial matches** in the LLM fallback prompt.
+
+### 5.6 Per-request cost & latency
+
+| Metric | Value |
+|---|---|
+| Cost per 1k requests | ~$1.50 |
+| LLM calls per request | 0 (cache/vector hit) to 1 (miss) |
+| p50 latency | 250 ms |
+| p99 latency | 10 s |
+| Code complexity (LoC delta) | ~500 |
+| Operational complexity | Low |
+
+---
