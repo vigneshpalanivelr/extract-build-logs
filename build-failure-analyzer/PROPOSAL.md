@@ -82,3 +82,78 @@ Approve/Edit (`slack_reviewer.py:139`) to persist fixes into the vector
 DB. See `CURRENT_FLOW.md` for the full walkthrough.
 
 ---
+
+## 3. Root Cause (code-level)
+
+Four compounding bugs. Each alone would be a nuisance; together they
+guarantee the symptom.
+
+### 3.1 Error and context are glued into one blob before embedding
+
+`src/log_error_extractor.py:138`:
+```python
+# Join all lines into a single string with newlines and return as list with one element
+return ['\n'.join(sections)]
+```
+
+The extractor concatenates matched error lines with 50 lines of
+surrounding context each, prefixes every line with `"Line N: ..."`, and
+returns it as a single-element list. Downstream this becomes one
+`error_text` string. Its embedding is dominated by generic context noise
+(timestamps, file paths, surrounding build output), not by the specific
+failure.
+
+### 3.2 Similarity math uses the wrong metric
+
+`build-failure-analyzer/vector_db.py:47` creates the collection with
+Chroma's default distance metric (L2 / Euclidean). Later at
+`vector_db.py:212`:
+```python
+sim = 1 - dist   # ← only valid for cosine distance
+```
+
+`1 - distance` only yields a similarity score in `[0, 1]` when the
+distance is cosine. With L2 distance the value can go negative for very
+different vectors, and for a long-text "centroid" embedding the L2
+distance tends to stay small → the computed `sim` artificially rises
+above the 0.78 threshold even for unrelated queries.
+
+### 3.3 Vector row IDs are non-deterministic across restarts
+
+`vector_db.py:276`:
+```python
+unique_id = f"fix-{abs(hash(error_text)) & ((1 << 128) - 1):032x}"
+```
+
+Python's builtin `hash()` is salted per process, so the same error text
+produces a different ID every time the service restarts. Result: Slack
+approvals that should update an existing row keep inserting new rows.
+The duplicates accumulate; once the poisoning row exists, it is
+effectively permanent.
+
+### 3.4 Whole-blob SHA is used as the cache key
+
+`analyzer_service.py:284`:
+```python
+error_hash = hashlib.sha256(error_text.encode()).hexdigest()
+```
+
+Any timestamp change in the blob produces a different SHA, so the Redis
+`sme:fix:<hash>` and `ai:fix:<hash>` caches almost never hit. Every
+request re-embeds and re-queries — giving the poisoning row another
+opportunity to match.
+
+### 3.5 Why these compound
+
+| Bug | Alone it means… | Combined effect |
+|---|---|---|
+| 3.1 blob embedding | retrieval matches on context noise rather than root cause | wide similarity band to anything with similar surrounding build output |
+| 3.2 L2 vs cosine | thresholds are miscalibrated | blob row scores above 0.78 for everything |
+| 3.3 salted hash IDs | duplicate rows accumulate | any bad row is re-inserted forever, never updated |
+| 3.4 SHA-of-blob cache | cache hit rate near zero | bad retrievals get re-evaluated every request |
+
+Conclusion: **whichever approach we pick (A, B, or C), the deterministic
+fixes in §3 must land.** Agents reasoning over a poisoned DB still
+produce wrong answers — just more expensively.
+
+---
