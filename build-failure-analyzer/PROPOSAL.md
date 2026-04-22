@@ -157,3 +157,96 @@ fixes in §3 must land.** Agents reasoning over a poisoned DB still
 produce wrong answers — just more expensively.
 
 ---
+
+## 4. Approach A — Full Agentic
+
+### 4.1 Overview
+
+Redesign the analyzer as a multi-agent system. Each agent is a focused
+LLM call with a narrow role, structured JSON output, and (optionally) a
+small set of tools. An orchestrator decides which agent runs next based
+on the previous agent's output. Every request goes through the full
+agent chain.
+
+### 4.2 Architecture — the 7 agents
+
+| # | Agent | Role | LLM? | Input | Output |
+|---|---|---|---|---|---|
+| A1 | **Classifier** | Parse raw error → canonical fingerprint + category + severity | Light (Haiku) | raw error + context | `{category, fingerprint, severity, key_tokens[]}` |
+| A2 | **Retrieval** | Query vector DB + domain RAG, return ranked candidates | Tool-only | fingerprint, category, top_k | `[{candidate_id, stored_error, stored_fix, sim, meta}]` |
+| A3 | **Deviation Analyzer** | Decide `exact / applicable_with_adjustments / partial / no_match` per candidate | Yes | current error, stored error, stored fix | `{match_quality, adjusted_fix?, reasoning, confidence}` |
+| A4 | **Context Disambiguator** | Pick best among multiple applicable candidates using pipeline metadata | Maybe | applicable candidates, metadata | `{chosen_id, reasoning}` |
+| A5 | **Solution Synthesizer** | Generate a fresh fix when no stored fix applies; cite any partial matches | Yes | error, context, domain snippet, partial matches | `{fix_text, confidence, cited_candidates[]}` |
+| A6 | **Validator** | Safety sanity check (dangerous commands, unrelated repo, hallucinated file paths) | Light | final fix, current error | `{pass, warnings[], block_reasons[]}` |
+| A7 | **Reporter** | Format final structured output to Slack blocks + developer DM | No | structured fix | Slack payload |
+
+### 4.3 Per-request flow
+
+```
+POST /api/analyze
+  │
+  ├─ Redis sme:fix:<fp> / ai:fix:<fp>  (pre-agent shortcut; ~70% hit rate in theory)
+  │     └─ HIT → A7 format, done
+  │
+  ├─ A1 Classifier                       produces fingerprint + category
+  ├─ A2 Retrieval                        top-K candidates
+  │     └─ 0 candidates → A5
+  │
+  ├─ A3 Deviation Analyzer (parallel, top-3 candidates)
+  │     ├─ any exact_match → pick, skip to A6
+  │     ├─ ≥2 applicable  → A4
+  │     ├─ 1 applicable   → pick, skip to A6
+  │     └─ all no_match   → A5
+  │
+  ├─ A4 Disambiguator  (only on multi-applicable)
+  ├─ A5 Synthesizer    (only when no reusable fix)
+  ├─ A6 Validator      (final gate)
+  └─ A7 Reporter
+```
+
+Each agent appends an `audit_trail` entry with `agent`, `ms`, `tokens_in`,
+`tokens_out`, `result_summary` — essential for debugging.
+
+### 4.4 Pros
+
+- **Highest accuracy ceiling** on ambiguous cases. Estimated 85–90% on
+  the "variant" bucket (same root cause, different specifics) versus
+  ~60–70% for Approach B.
+- **Natural-language reasoning** about whether a stored fix actually
+  applies, not just cosine similarity.
+- **Explainability** — each agent's reasoning is captured; SMEs can see
+  *why* a fix was chosen.
+- **Combinable partial fixes** — A5 can cite multiple near-misses when
+  synthesizing a fresh answer.
+- **Future flywheel**: if we grow the approved-fix corpus, per-agent
+  prompts can be iterated independently without touching the pipeline.
+
+### 4.5 Cons
+
+- **Cost**: 4–6 LLM calls per request, regardless of difficulty. At
+  1,000 requests/day that is ~6,000 LLM calls/day.
+- **Latency**: 12 s p50, 40 s p99 (sequential agent chain with parallel
+  A3 fan-out). Today's p50 is ~250 ms on cache hits.
+- **Determinism loss**: same error can yield different advice on
+  different days (temperature > 0, agent variance). SMEs may lose trust.
+- **Code complexity**: ~2,500 LoC added (agents, orchestrator, prompts,
+  schemas, tool loop, audit trail).
+- **New failure modes**: malformed JSON output, agent loops, prompt
+  injection from log content flowing into A3/A5 prompts.
+- **Prompt-injection risk** is real — build logs can contain anything,
+  including text that looks like an instruction.
+- **Observability overhead**: without a full Grafana dashboard for
+  per-agent metrics, debugging becomes nearly impossible.
+
+### 4.6 Per-request cost & latency
+
+| Metric | Value |
+|---|---|
+| Cost per 1k requests | ~$30–$40 |
+| LLM calls per request | 5–6 |
+| p50 latency | 12 s |
+| p99 latency | 40 s |
+| Code complexity (LoC delta) | ~2,500 |
+| Operational complexity | High |
+
+---
