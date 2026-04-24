@@ -846,3 +846,124 @@ phase must be feature-flag-revertible.
 Do not begin implementation without the eval harness (Phase 0) in place —
 every "accuracy" number in this doc is an educated estimate until it is
 measured.
+
+See Appendix E for how Phase 0 adapts when the available labeled data
+is sparse (e.g., ~50 one-line error/fix pairs instead of 200+ rich pairs).
+
+---
+
+## 15. Appendix E — Eval Strategy Under Sparse Data
+
+This project starts with ~50 labeled pairs, each a single error line and
+a single solution line (no multi-line context, no surrounding log noise).
+The Phase 0 plan in §9 assumes ≥200 richer pairs. This appendix adapts
+Phase 0 and later-phase gates for the real data situation.
+
+### 15.1 Why 50 one-line pairs is not enough on its own
+
+**Statistical power.** At n=50 the standard error on an accuracy estimate
+near 80% is roughly ±5.7%. The 95% confidence interval for the
+*difference* between two approaches is ±16–18 percentage points. The
+3–4% overall lift predicted for Hybrid over Approach B is invisible at
+this sample size — only catastrophic regressions (~20%+) are reliably
+detectable.
+
+**Coverage gaps.** Clean one-line pairs do not exercise:
+
+| Pipeline feature | Exercised by one-line pairs? |
+|---|---|
+| Normalizer (strip timestamps, paths, SHAs, line prefixes) | No — nothing to strip |
+| Context-cosine disambiguator (§5.2.5) | No — no context lines present |
+| A3 `adjusted_fix` / `adjustments` output | Barely — no version numbers or paths to adjust |
+| Multi-region merging in the extractor | No |
+| Blob-poisoning regression | No — clean inputs do not reproduce the bug |
+| Deterministic fingerprint ID | Yes |
+| Cosine similarity threshold | Yes (only on clean short inputs) |
+| LLM Synthesizer fallback | Yes |
+
+Roughly half of what a production rollout must verify is unreachable
+with this dataset alone.
+
+### 15.2 Three-track mitigation
+
+**Track 1 — Reframe the 50 as a regression suite, not a statistical benchmark.**
+Each pair becomes a pass/fail assertion: *given this error, the final
+response must contain these keywords and must not contain these
+anti-keywords.* The suite runs in CI on every PR. It cannot answer "is
+A better than B"; it can catch the day we break something that used to
+work. Cost: ~2 days of tooling.
+
+**Track 2 — Augment the corpus to ~200–400 pairs in a week.**
+Three additive sources:
+
+- **(a) Prod Chroma dump.** Export all current `fix_embeddings` rows
+  with `status in ("approved", "edited")`. Each row is a real SME
+  decision. Drop rows with `len(error_text) > 5 KB` (poisoning
+  outliers) and duplicates from the salted-hash ID bug. Expected
+  yield: 50–200 pairs with richer text than the seed 50.
+- **(b) Synthetic variants of the 50 seeds.** For each seed, author 3–5
+  variants that change version numbers, file paths, timestamps, or
+  container IDs but should still map to the same fix. Tests the
+  normalizer directly, and exercises A3's `adjustments` output.
+  Expected yield: 150–250 new pairs.
+- **(c) LLM-generated stress tests.** Use Claude to paraphrase each
+  seed into 2–3 realistic variants with surrounding log noise. Not
+  ground truth — flags brittle normalizer regexes and A3 prompt
+  failure modes. Expected yield: 100–150 pairs, labeled
+  "synthetic, not gold".
+
+Combined, 50 → ~400 pairs. Still not "200 gold-labeled pairs with
+rich context", but enough to run Phase-1-grade offline comparisons.
+
+**Track 3 — Make live shadow mode the primary accuracy signal.**
+Offline eval at n=50–400 cannot distinguish small lift from noise.
+Production telemetry can. In Phase 2, A3 runs on every qualifying
+request in *shadow mode*: its output is logged but never returned to
+the developer. Over 2 weeks at 1,000 requests/day that yields ~15,000
+real-world samples. Compare A3's `match_quality` prediction against the
+verdict SMEs reach when those errors eventually get approved/edited.
+This replaces offline statistical eval with a much stronger in-vivo
+measurement.
+
+### 15.3 Revised Phase gates
+
+| Phase | Original gate (§9) | Sparse-data gate (this appendix) |
+|---|---|---|
+| 0 | Build golden set of ≥200 labeled pairs; replay tooling; grading rubric | Build regression suite against 50 seeds + augment to ~200–400 via tracks 2(a–c); ship pass/fail CI harness |
+| 1 | Eval shows ≥20% accuracy lift over today | No regressions on 50-pair regression suite + SME spot-check of 20 live responses rates ≥ baseline |
+| 2 | Eval shows ≥10% additional lift on variant bucket | A3 shadow-mode decisions match SME verdicts on ≥80% of shadowed requests over 2 weeks |
+| 3 | Cost within forecast; SME approval rate ≥ phase 1 baseline | Unchanged |
+| 4 | Stable for 2 weeks | Unchanged |
+
+### 15.4 Feature deferrals
+
+Some features cannot be validated with sparse single-line data. Two
+options each:
+
+- **Context-cosine disambiguator (§5.2.5).** Either (a) ship behind its
+  own sub-flag `CONTEXT_COSINE_ENABLED=false` and enable only after
+  shadow mode accumulates real multi-line context samples; or (b) omit
+  initially and fall through to the LLM Synthesizer when the top-K
+  returns ≥2 candidates within a 0.05 similarity band. Recommendation:
+  (a). Keeps the code path in the tree, avoids a second migration.
+
+- **A3 `adjusted_fix` path.** If the seed data has no version numbers
+  or paths, A3 cannot be offline-tested for this case. Mitigation: the
+  synthetic variants in track 2(b) *must* include version-number and
+  path variations, otherwise the `applicable_with_adjustments` branch
+  is untested on day one.
+
+### 15.5 What we need from the team to execute this
+
+1. Read/export access to the current prod `fix_embeddings` collection
+   (track 2(a)).
+2. One SME-hour to spot-check the first 20 synthetic variants (track
+   2(b)) so we confirm the variant-same-fix assumption holds before
+   generating the remaining 130+.
+3. Agreement that Phase 1 accuracy gate is qualitative (no regressions
+   + SME spot-check) rather than a specific accuracy percentage. This
+   is the honest position at n=400; forcing a quantitative gate would
+   require a sample size we do not have.
+4. A budget for shadow-mode logging in Phase 2. Each shadowed request
+   emits one extra JSON line (~2 KB) to the app log. At 1,000/day that
+   is ~60 MB over 2 weeks — trivial, but worth flagging.
