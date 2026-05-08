@@ -380,3 +380,216 @@ We can tune per-team if needed (§11 Q3).
 Point to: §5.3, §6.3.
 
 ---
+
+## Anticipated Q&A — group 3: rollout, cost, operations
+
+### Q14. "Two to three weeks for one engineer — is that realistic?"
+
+**Short answer:** Yes for the code, plus 1 week of Phase 0 eval
+work that someone has to own.
+
+**How to explain:** Show §9 (file change list, ~1,130 LoC product +
+300 tests). Most LoC delta is contained in two files (`vector_db.py`
+and `log_error_extractor.py`). The new files
+(`agents/`, `orchestrator.py`, prompts) are small and isolated.
+Phase 0 (eval) is the wildcard — it's tooling work plus dataset
+curation; can be parallelized with Phase 1 development if a second
+person owns it.
+
+If pressed: "Worst case, 4 weeks if Phase 0 takes longer than a week
+or if migration script reveals more contamination than expected."
+
+Point to: §9, §10.
+
+### Q15. "What if Phase 0 reveals that Hybrid isn't actually better than deterministic alone?"
+
+**Short answer:** Then we ship deterministic alone. Phase 2 is
+feature-flagged precisely so we can stop after Phase 1 if the data
+says so.
+
+**How to explain:** This is the value of the phased approach. After
+Phase 1 we have:
+- The four root-cause bugs fixed.
+- ~85% accuracy on the cache-hit and clear-match buckets.
+- A regression suite in CI.
+
+If shadow-mode A3 in Phase 2 doesn't show meaningful lift, we don't
+flip the flag to `on`. We ship Phase 1 + the rest of the rollout
+becomes "deterministic only". No money lost.
+
+Point to: §10 (Phase 2 gate is "shadow ≥80% match with SME"), §10.1
+(non-negotiables include feature flags).
+
+### Q16. "What does this cost run-rate look like at production scale?"
+
+**Short answer:** ~$90/month at 1,000 requests/day. ~$900/month at
+10,000/day. Linear with volume.
+
+**How to explain:** From §1 headline numbers:
+- Hybrid: ~$3 per 1,000 requests.
+- Today (broken): ~$15 per 1,000 (every request hits LLM because
+  cache never hits).
+
+So Hybrid at our current volume is *cheaper* than today's broken
+system, plus dramatically more accurate. The cost story actually
+sells itself.
+
+If they ask about Bedrock pricing assumptions: ~$3/M input tokens,
+~$15/M output tokens for Claude Sonnet. Numbers from §7.1 of
+PROPOSAL.md.
+
+### Q17. "What's the migration risk? Could we lose approved fixes?"
+
+**Short answer:** Low risk. The old collection stays on disk for
+rollback. The new collection is built additively from the old.
+
+**How to explain:** Walk them through §7.4:
+1. Migration is read-only on the source collection.
+2. Output goes to a new collection name (`fix_embeddings_v2`).
+3. Switching is a single env-var change.
+4. Rolling back is the same single env-var change in reverse.
+
+Worst case: we run migration, find it's wrong somehow, leave the env
+var pointed at the old collection. No data loss. No downtime.
+
+Point to: §7.4, §10 Phase 1 rollback.
+
+### Q18. "Who's on call when A3 starts misbehaving in production?"
+
+**Short answer:** Same on-call rotation that owns the analyzer
+today. A3 failure is bounded — it falls back to the LLM Synthesizer.
+
+**How to explain:** A3 failure modes (timeout, malformed JSON, low
+confidence) all degrade to "behave like the foundation alone". So
+the worst-case A3 incident looks like Phase 1's behavior — not a
+service outage. The feature flag flip (`AGENTIC_MODE=off`) is the
+escape hatch; Phase 3 is feature-flagged at 10% specifically so
+this scenario is detected on a small slice before it reaches
+everyone.
+
+Point to: §6.5, §10 Phase 3.
+
+### Q19. "How do we know it's working in production?"
+
+**Short answer:** SME approval rate, repeat-error rate, developer
+thumbs-up rate.
+
+**How to explain:** Three concrete metrics:
+1. **SME approval rate per AI-suggested fix.** Today this is the
+   primary signal. If Hybrid is sending better suggestions, this
+   rate goes up.
+2. **Repeat-error rate.** How often does the same developer hit the
+   same error twice in 14 days? Should drop because the second
+   occurrence resolves via cache/vector hit and the developer fixes
+   it the first time.
+3. **Developer thumbs-up / thumbs-down on the DM.** New telemetry
+   added in Phase 1 (one-line addition). Tracks whether the
+   delivered fix was useful.
+
+Plus the audit trail captures every A3 decision — we can replay any
+production request offline if a specific incident comes up.
+
+Point to: §6.4 (caching → measurable hit rate), §10 Phase 3 gate.
+
+### Q20. "Is this the eventual end state, or does it grow into Full Agentic later?"
+
+**Short answer:** Not the end state. Hybrid is what makes sense at
+1,000–10,000 requests/day. Full Agentic becomes attractive when
+volume is much higher or when we have a labeled dataset large
+enough to fine-tune a small classifier.
+
+**How to explain:** Walk through §10 Phase 5 (optional). We can add
+agents one at a time, each behind its own flag, each gated on a
+≥5% lift on the eval suite. The architecture supports adding A1,
+A4, A6 later without rewriting Hybrid. So this is "ship the
+high-leverage 80%, layer the rest in over time as data justifies it".
+
+Point to: §10 Phase 5.
+
+---
+
+## Closing the meeting (5 minutes)
+
+### Restate the asks
+
+> "I need three things from this meeting:
+>
+> 1. Approval to proceed with the Hybrid approach.
+> 2. A name for Phase 0 ownership — eval harness + golden set.
+> 3. Decisions on the open questions in §11 — or a follow-up to
+>    decide them in the next 48 hours so I don't block."
+
+### What you'll send after the meeting
+
+> "I'll follow up by EOD with:
+> - Meeting notes capturing decisions and any open items.
+> - Proposed Phase 0 plan with a target completion date.
+> - Updated open-questions list for offline decisions."
+
+### Tone for closing
+
+You want to end on momentum, not uncertainty. Even if some open
+questions are unresolved, you have a clear Phase 0 to start, and
+that's enough to begin without waiting.
+
+> "Whether or not every detail is decided, Phase 0 is independent
+> work. I can start on the eval harness this week — that's the
+> single biggest risk-reduction step regardless of which exact
+> decisions land. Once we have it, every later phase has something
+> to verify against."
+
+---
+
+## A few things NOT to do in the meeting
+
+1. **Don't read the doc aloud.** Walk the team through it. They can
+   read it on their own time.
+2. **Don't volunteer to do agents we said we'd skip.** A6 (Validator)
+   is a YAGNI. Don't let a stakeholder talk you into "while you're
+   in there, why not also..." Stick to the scoped plan.
+3. **Don't promise specific accuracy numbers.** Until Phase 0 runs,
+   the 85% / 90% numbers are educated estimates. Use phrases like
+   "expected to land in the X–Y range" not "we will hit X%".
+4. **Don't leave the meeting without owners.** If you can't get
+   commitments in the room, get them via DM within 24 hours.
+   Phase 0 ownership is the critical one.
+
+---
+
+## One-page cheat sheet (print or pin)
+
+If you want a single-page printout for the meeting, here's the
+TL;DR you can refer to without scrolling:
+
+```
+PROBLEM
+  Wrong fixes since vector DB poisoning by 1 large blob.
+  4 compounding bugs (blob embedding, L2 vs cosine, salted
+  hash IDs, blob SHA cache).
+
+SOLUTION (Hybrid, two layers)
+  Layer 1 (deterministic): split error/context, normalize,
+                            cosine, sha256 IDs, update-not-insert
+  Layer 2 (one agent A3):   fires on ambiguous matches only
+                            (~15% of traffic)
+
+NUMBERS
+  Today:   $15/1k, 5–8s p50, ~80% wrong on variants
+  Hybrid:  $3/1k,  400ms p50, ~13–15% wrong on variants
+  Code:    ~900 LoC + 300 tests, 2–3 weeks one engineer
+
+ROLLOUT
+  Phase 0 — eval harness  (1 week)
+  Phase 1 — foundation    (1 week)
+  Phase 2 — A3 in shadow  (1 week)
+  Phase 3 — 10% rollout   (2 weeks)
+  Phase 4 — 100%          (1 week)
+  All feature-flagged. <60s revert.
+
+DECISIONS NEEDED TODAY
+  1. Approve Hybrid approach
+  2. Phase 0 ownership
+  3. Salvage existing fixes via migration
+  4. A3 adjusted_fix review path
+  5. Bedrock migration scope
+```
