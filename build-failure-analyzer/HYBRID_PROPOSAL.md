@@ -15,6 +15,7 @@ same fix for unrelated build failures. The root cause is four major bugs i.e err
   Normalize before embedding, switch Chroma to cosine distance and update-not-insert on Slack approval.
 - A single **LLM agent** (the *Deviation Analyzer*, "A3")
   Now we have error and error context using few agents like Error Summariser, Deviation Analyzer, Solution Synthesizer, Reporter
+
 | # | Agent | Role | LLM? | Input | Output |
 |---|---|---|---|---|---|
 | A1 | **Error Summariser** | Analyze and Understand the error | Light Weight | Error lines and Context | Error summary |
