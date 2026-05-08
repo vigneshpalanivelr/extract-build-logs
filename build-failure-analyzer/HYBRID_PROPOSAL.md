@@ -166,3 +166,174 @@ single LLM agent on top (§6) for cases where pure vector math is not
 enough.
 
 ---
+
+## 4. The Hybrid Design — Overview
+
+Two layers, deliberately stacked.
+
+```
+                    ┌──────────────────────────────────────┐
+                    │   Layer 2 — Agentic                  │
+                    │   A3 Deviation Analyzer              │
+                    │   (fires on ~15% of requests)        │
+                    └──────────────────────────────────────┘
+                              ▲       ▲
+                              │       │ ambiguous match
+                              │       │ (multiple candidates,
+                              │       │  or one in [0.90, 0.95))
+                              │       │
+                    ┌─────────┴───────┴────────────────────┐
+                    │   Layer 1 — Deterministic Foundation │
+                    │   Split error/context, normalize,    │
+                    │   cosine, deterministic IDs,         │
+                    │   update-not-insert                  │
+                    │   (handles ~85% of requests alone)   │
+                    └──────────────────────────────────────┘
+```
+
+The deterministic foundation handles the ~70% cache-hit traffic and
+the ~15% clear-hit / clear-miss traffic on its own. A3 only fires on
+the remaining ~15% — requests where the vector DB returns at least
+one meaningful candidate but applicability is uncertain.
+
+**Why two layers and not one.** A single-layer deterministic system
+(split error, cosine, etc.) catches exact and near-exact repeats but
+returns stored fixes verbatim — even when a small adjustment is
+needed (e.g., stored fix says "downgrade to react@17", new error is
+on `react@18.2.0`). A3 reads the new error, the stored error, and
+the stored fix, and decides whether the fix applies as-is or needs
+adjustments. That single judgment captures most of the "variant"
+bucket without paying the agent tax on every request.
+
+### 4.1 Combined per-request flow
+
+```
+POST /api/analyze
+  │
+  ├─ Redis sme:fix:<fp> / ai:fix:<fp>           cache hits, ~70% of traffic
+  │     └─ HIT → DM developer, done
+  │
+  ├─ VectorDB.lookup_candidates(fp, top_k=10, threshold=0.90)
+  │
+  ├─ 0 candidates ≥ 0.90                        → LLM Synthesizer (existing path)
+  │
+  ├─ 1 candidate ≥ 0.95                         → return stored fix (high-confidence)
+  │
+  ├─ 1 candidate in [0.90, 0.95)                → A3 Deviation Analyzer
+  │     ├─ exact_match                          → return stored fix
+  │     ├─ applicable_with_adjustments          → return adjusted_fix
+  │     ├─ partial / no_match                   → LLM Synthesizer
+  │
+  └─ ≥2 candidates ≥ 0.90                       → A3 on each (parallel, top-3)
+        ├─ any exact_match                      → return
+        ├─ 1 applicable                         → return adjusted
+        ├─ ≥2 applicable                        → context-cosine tie-breaker (deterministic)
+        └─ none applicable                      → LLM Synthesizer
+```
+
+---
+
+## 5. Foundation Layer — Deterministic Fixes
+
+This is what we ship in Phase 1 and what every subsequent layer
+depends on. Without this, an A3 agent reasoning over a poisoned DB
+just produces wrong answers more expensively.
+
+### 5.1 Wire contract change (extractor → analyzer)
+
+Today the analyzer receives `FailedStep.error_lines = [<one big
+blob>]`. Change it to a list of per-region objects:
+
+```json
+{
+  "step_name": "...",
+  "errors": [
+    {
+      "error_lines":       ["npm ERR! code ERESOLVE", "npm ERR! peer dep ..."],
+      "context_lines":     ["Resolving dependencies...", "..."],
+      "error_fingerprint": "npm err code eresolve peer dep <VERSION> <PATH>"
+    }
+  ]
+}
+```
+
+Keep `error_lines: List[str]` on the analyzer for one release overlap
+so old extractor clients continue working.
+
+### 5.2 Normalization
+
+New helper `normalize_error_text(error_lines) -> str`:
+
+- strip `"Line N:"` prefixes
+- strip ISO timestamps, `[HH:MM:SS]`, epoch millis
+- replace absolute paths, SHAs, UUIDs, container IDs, ports with
+  placeholders (`<PATH>`, `<SHA>`, …)
+- collapse whitespace, lowercase
+- truncate to 512 tokens (granite-embedding's input ceiling)
+
+The normalized text is used for both the deterministic row ID and
+the embedding input.
+
+### 5.3 Cosine distance + deterministic IDs
+
+At first write, create the Chroma collection with explicit cosine
+space:
+
+```python
+client.get_or_create_collection(
+    name="fix_embeddings_v2",
+    metadata={"hnsw:space": "cosine"},
+)
+```
+
+L2-normalize every embedding vector before `add()` and `query()`.
+Replace the Python `hash()`-based ID with `sha256(fingerprint)`
+(stable across process restarts). Tighten the similarity threshold
+for the error-only embedding to **0.90** (meaningful on cosine,
+unlike today's 0.78 on miscalibrated L2).
+
+### 5.4 Store only the error in the vector DB
+
+Rewrite `save_fix_to_db`:
+
+- embedding input = normalized fingerprint (short, specific)
+- document = `fix_text`
+- metadata: `error_fingerprint`, `raw_error_lines`, `context_sample`
+  (first ~2 KB of joined context, **metadata only**, never embedded),
+  `approver`, `status`, `fix_id`, `revision`, repo/branch/job
+
+Context lines stay available for display and disambiguation but
+never pollute the retrieval embedding.
+
+### 5.5 Context-based disambiguation
+
+`lookup_existing_fix` returns top-K=10 candidates with cosine
+similarity ≥ 0.90. When more than one passes:
+
+- compute `ctx_sim = cosine(embed(query.context_lines),
+  embed(candidate.context_sample))`
+- score = `0.7 * error_sim + 0.3 * ctx_sim`
+- return the top score if `score_1 − score_2 > 0.05`; otherwise
+  let A3 (Layer 2) decide
+
+No LLM call is involved in this disambiguation step — pure
+deterministic vector math.
+
+### 5.6 Update-not-insert on Slack approval
+
+In `slack_reviewer.py`, replace `collection.add()` with a look-up-
+then-`collection.update()` on the deterministic fingerprint ID. The
+same fix approved twice updates the same row (with `revision`
+bumped in metadata) instead of creating a duplicate.
+
+### 5.7 What the foundation alone fixes
+
+| Today's failure | After foundation alone |
+|---|---|
+| One huge blob matches every query | Embedding is short and specific; blob doesn't exist |
+| Threshold 0.78 false-positives | 0.90 cosine on normalized text, properly calibrated |
+| Approvals create duplicates | Fingerprint sha256 ID; same error → same row |
+| Cache hit rate near zero | Fingerprint key is stable across timestamp changes |
+| Variant errors return stored fix verbatim | Still returns verbatim — Layer 2 (A3) handles this |
+
+---
