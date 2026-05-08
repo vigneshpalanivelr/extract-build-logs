@@ -250,3 +250,133 @@ keys are supposed to do.
 Point to: §3.4 (cache key), §5.2 (fingerprint).
 
 ---
+
+## Anticipated Q&A — group 2: design choices
+
+### Q7. "Why not full agentic? It's the trend. Won't we look behind the curve if we don't go all-in?"
+
+**Short answer:** The cost-benefit doesn't work at our volume. Hybrid
+gets the same accuracy on the part that matters at one-tenth the
+cost. We can revisit if volume or accuracy requirements change.
+
+**How to explain:** Walk them through §8.2 of HYBRID_PROPOSAL.md.
+Numbers:
+- Full agentic: ~$30–40 per 1k requests, 12 s p50, 2,500 LoC,
+  non-deterministic on every request.
+- Hybrid: ~$3 per 1k requests, 400 ms p50, 900 LoC, deterministic on
+  85% of requests.
+- Variant accuracy is roughly the same because A3 (which Hybrid
+  keeps) is the agent doing the heavy lifting. The other six agents
+  add cost and complexity without measurable accuracy lift.
+
+Point to: §8.2.
+
+### Q8. "Why exactly one agent and not two? The Validator (A6) sounds important."
+
+**Short answer:** A6 is YAGNI until we have evidence we need it. We
+can add it as Phase 5 if a real safety incident occurs.
+
+**How to explain:** A6's job is to block dangerous outputs (rm -rf,
+curl pipe sh, references to unrelated repos). For the immediate
+threat surface — accidental dangerous commands — a 30-line regex
+catches the obvious cases. A6 would catch subtler issues like
+hallucinated repo names, but we have no evidence yet that those
+happen at a rate worth a per-request LLM call. We bake the regex in
+now; we add A6 the day we hit a real incident.
+
+Point to: §6.1 (table of dropped agents), §10 Phase 5.
+
+### Q9. "What if A3 hallucinates an adjusted_fix that breaks something?"
+
+**Short answer:** A3's role is bounded — it can only adjust
+parameters in an already-approved fix, not invent new steps. And
+adjusted fixes go through a lighter SME review (recommendation in
+§11 Q4) before being marked approved.
+
+**How to explain:** A3 sees the stored fix and the new error. It is
+prompted to refuse to invent new steps — if the stored fix doesn't
+mostly apply, it must return `partial` or `no_match` and let the
+LLM Synthesizer handle generation. So the worst-case A3 output is
+"this stored fix with version number X swapped for Y", not a
+freshly-invented procedure.
+
+The team can also opt for the more conservative path (§11 Q4 (b)):
+adjusted fixes go through a fresh SME Approve cycle. Slower
+flywheel but zero risk of unreviewed advice reaching developers.
+
+Point to: §6.2 ("A3 must not invent new fixes"), §11 Q4.
+
+### Q10. "Why cosine and not Euclidean? We were using L2 before."
+
+**Short answer:** Cosine is the standard for sentence-embedding
+similarity. L2 was never appropriate for this — it was a default we
+inherited.
+
+**How to explain:** Embedding models are trained so that
+*direction* in vector space encodes semantic similarity, not
+distance. Two semantically equivalent sentences have nearly parallel
+vectors but possibly different magnitudes. Cosine ignores magnitude;
+L2 doesn't. With L2, longer texts produce smaller-magnitude vectors,
+which appear "closer" to everything — exactly the symptom we have.
+
+For granite-embedding specifically, the model card recommends cosine.
+
+Point to: §5.3.
+
+### Q11. "Why do we need to split error_lines from context_lines on the wire? Why not just split server-side?"
+
+**Short answer:** We could, but the extractor already has the
+information cleanly. Re-deriving it server-side from a glued blob is
+fragile.
+
+**How to explain:** In `src/log_error_extractor.py`, the extractor
+internally distinguishes "matched error line" from "surrounding
+context" — it tracks both as separate variables, and only joins
+them at the very end (`return ['\n'.join(sections)]`). Sending the
+already-separated structure over the wire is essentially free
+(maybe 30 LoC delta) and lets the analyzer trust the boundary
+without re-parsing.
+
+The legacy `error_lines` field stays in place for one release for
+back-compat with old extractor clients.
+
+Point to: §5.1, `src/log_error_extractor.py:138`.
+
+### Q12. "Why deterministic IDs from sha256? What if two different errors normalize to the same fingerprint?"
+
+**Short answer:** That's a feature, not a bug — that's exactly the
+case where they should share a fix.
+
+**How to explain:** If `npm err code eresolve peer dep <VERSION>
+<PATH>` is the normalized form of two different builds' errors,
+those two builds have the *same root cause* by construction. They
+should resolve to the same stored fix. The deterministic ID
+guarantees we look up the same row from the DB for both — which is
+the correct retrieval behavior.
+
+Pathological collisions (genuinely different errors normalizing the
+same way) are possible but rare; the SME would notice when reviewing
+the fix and Edit it appropriately, which the update-not-insert path
+preserves.
+
+Point to: §5.2 (normalization), §5.3 (deterministic ID), §5.6
+(update-not-insert).
+
+### Q13. "Won't 0.90 cosine reject too many true matches?"
+
+**Short answer:** It's stricter than what we have today (0.78 on
+miscalibrated L2), but it's calibrated for the *normalized* fingerprint
+which is short and specific, so 0.90 is the right ballpark.
+
+**How to explain:** 0.78 today is interpreted on a metric that goes
+negative for unrelated vectors — the "0.78" doesn't mean what we
+think. On normalized cosine of a short fingerprint, 0.90 means "the
+two errors are essentially the same root cause with at most cosmetic
+differences". Pairs that fall in `[0.90, 0.95)` are exactly where A3
+fires to decide whether the differences matter.
+
+We can tune per-team if needed (§11 Q3).
+
+Point to: §5.3, §6.3.
+
+---
