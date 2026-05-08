@@ -162,4 +162,91 @@ The next sections are the answers I would prepare for. Each one maps
 to a specific section of HYBRID_PROPOSAL.md so the team can follow
 along while you explain.
 
-(Continued in next chunks — Q&A grouped by topic.)
+---
+
+## Anticipated Q&A — group 1: the problem and the bug
+
+### Q1. "Have you tried just adjusting the similarity threshold?"
+
+**Short answer:** Yes, and it doesn't help.
+
+**How to explain:** The threshold (0.78) is interpreting an L2
+distance as if it were cosine. When the similarity math is wrong
+*and* the embedding is dominated by context noise, no threshold value
+works — too low you accept everything, too high you reject everything
+including good matches. We have to fix the metric and the embedding,
+not the threshold.
+
+Point to: §3.2 (the `1 - dist` line in `vector_db.py:212`).
+
+### Q2. "Why don't we just delete the bad row from the DB?"
+
+**Short answer:** Deleting one row buys us a day, maybe a week. The
+underlying bugs cause more bad rows to appear.
+
+**How to explain:** The salted-hash ID (§3.3) means even the same
+fix re-approved later inserts a new row. The blob embedding (§3.1)
+means any sufficiently large log creates a new poisoning row. We can
+delete today's offender, but the bug guarantees another will appear.
+The migration script (§7.4) does delete the bad rows — but it also
+fixes the bugs that caused them, so they don't come back.
+
+Point to: §3.3 (salted hash), §7.4 (migration script).
+
+### Q3. "How long has this been broken? Why didn't we catch it?"
+
+**Short answer:** ~5–7 days. We didn't catch it because for the first
+few days the DB was nearly empty — every request fell through to the
+LLM, which gave reasonable fresh answers. The bug only manifests
+after a large blob gets stored once. We had no automated regression
+suite to detect it; SMEs noticed it manually.
+
+**How to explain:** This is exactly why Phase 0 (eval harness) is
+non-negotiable. Without it we have no way to detect this class of
+regression early. The 50 seed pairs become pass/fail assertions in
+CI.
+
+Point to: §10 Phase 0, §13 Track 1.
+
+### Q4. "Is the LLM the problem? Should we switch models?"
+
+**Short answer:** No. The LLM is fine. The bug is in the retrieval
+layer (vector DB), which runs *before* the LLM ever sees a request.
+
+**How to explain:** When retrieval returns the wrong stored fix from
+the vector DB, the analyzer believes it's a high-confidence match and
+returns it directly — the LLM is never consulted. So no LLM swap can
+fix this. The Hybrid design fixes retrieval first; LLM behavior is
+unchanged.
+
+### Q5. "How big is the affected DB? How bad is the contamination?"
+
+**Short answer:** We can run a one-line script in staging to count
+rows >5 KB and rows with duplicate fingerprints under the new
+normalizer.
+
+**How to explain:** Until we run the migration in dry-run mode we
+don't have exact numbers. The migration script (§7.4) prints a
+dry-run report: total rows, rows kept, rows dropped (and why), and
+duplicate count by fingerprint. Phase 1 starts with that dry run.
+
+If pressed for an estimate: ~70% carry-over expected, based on the
+proportion of normal-sized SME-approved fixes versus poisoning
+outliers in similar systems. Real number ships with Phase 1.
+
+### Q6. "Why are we calling SHA-of-blob a 'bug'? It's just a cache key choice."
+
+**Short answer:** It's a bug because the cache it represents almost
+never hits, defeating the purpose of having a cache.
+
+**How to explain:** Build logs contain timestamps and incremental
+counters. Two failures of the same Jenkins job two minutes apart
+produce different blobs (different timestamps), so different SHAs,
+so different cache keys. The cache is doing zero useful work today.
+With the deterministic fingerprint key, the *same root cause* lands
+on the *same key* regardless of timestamps — which is what cache
+keys are supposed to do.
+
+Point to: §3.4 (cache key), §5.2 (fingerprint).
+
+---
