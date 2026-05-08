@@ -18,32 +18,38 @@ same fix for unrelated build failures. The root cause is four
 compounding bugs in how errors are embedded, hashed, stored, and
 matched in the Chroma vector database — not a tuning issue.
 
-**What we are proposing.** A *Hybrid* design with two layers:
+**What we are proposing.** A *four-agent* agentic design layered on a
+**deterministic foundation** that fixes the four bugs at the source:
 
-- A **deterministic foundation** that fixes the four bugs at the source:
-  separate error from context on the wire, normalize before embedding,
-  switch Chroma to cosine distance, use deterministic SHA IDs, and
+- **Foundation Layer** (§5): Split error from context on the wire, normalize before
+  embedding, switch Chroma to cosine distance, use deterministic SHA IDs, and
   update-not-insert on Slack approval.
-- A single **LLM agent** (the *Deviation Analyzer*, "A3") that fires
-  only on ambiguous matches — i.e., the ~15% of requests where the
-  vector DB returns a candidate that is meaningful but not clearly
-  exact. A3 decides whether the stored fix applies as-is, applies with
-  small adjustments (version numbers, paths), or does not apply.
+
+- **Agentic Layer** (§6): Four specialized agents that cooperate on
+  every request:
+  - **A1 Error Summariser**: Parse and understand the error (lightweight,
+    no LLM).
+  - **A2 Deviation Analyzer**: Decide if a stored fix applies
+    (`exact_match`, `applicable_with_adjustments`, `partial`,
+    `no_match`).
+  - **A3 Solution Synthesizer**: Generate fresh fixes when no stored
+    fix applies.
+  - **A4 Reporter**: Format and route the final answer to Slack.
 
 **Headline numbers at 1,000 requests/day:**
 
-| Metric | Today (broken) | Hybrid (proposed) |
+| Metric | Today (broken) | 4-Agent (proposed) |
 |---|---|---|
-| Cost per 1k requests | ~$15 | ~$3 |
-| LLM API calls per 1k requests | 1,000 (every request) | ~300 |
-| p50 latency | 5–8 s | 400 ms–8 s (depending on hit/miss) |
-| Wrong-answer rate (variant errors) | ~80% | ~13–15% |
-| Code change | — | ~900 LoC + 300 LoC tests |
+| Cost per 1k requests | ~$15 | ~$6–8 |
+| LLM API calls per 1k requests | 1,000 (every request) | ~500–700 (A2 + A3 on candidate paths) |
+| p50 latency | 5–8 s | 600 ms–12 s (depending on agent fan-out) |
+| Wrong-answer rate (variant errors) | ~80% | ~8–10% |
+| Code change | — | ~1,200 LoC + 350 LoC tests |
 
 **Implementation order is non-negotiable.** Ship the deterministic
-foundation first. Add A3 behind a feature flag in a follow-up. Roll
-out at 10% traffic, then 100%. Every phase is revertible in <60s via
-env-var flip.
+foundation first (Phase 1). Add agents A1–A4 behind feature flags in
+Phase 2. Roll out at 10% traffic, then 100%. Every phase is revertible
+in <60s via env-var flip.
 
 ---
 
@@ -167,43 +173,45 @@ enough.
 
 ---
 
-## 4. The Hybrid Design — Overview
+## 4. The Four-Agent Design — Overview
 
-Two layers, deliberately stacked.
+A layered architecture where a deterministic foundation routes to
+specialized agents only when needed.
 
 ```
-                    ┌──────────────────────────────────────┐
-                    │   Layer 2 — Agentic                  │
-                    │   A3 Deviation Analyzer              │
-                    │   (fires on ~15% of requests)        │
-                    └──────────────────────────────────────┘
-                              ▲       ▲
-                              │       │ ambiguous match
-                              │       │ (multiple candidates,
-                              │       │  or one in [0.90, 0.95))
-                              │       │
-                    ┌─────────┴───────┴────────────────────┐
-                    │   Layer 1 — Deterministic Foundation │
-                    │   Split error/context, normalize,    │
-                    │   cosine, deterministic IDs,         │
-                    │   update-not-insert                  │
-                    │   (handles ~85% of requests alone)   │
-                    └──────────────────────────────────────┘
+                    ┌─────────────────────────────────────────┐
+                    │   Agentic Layer                         │
+                    │   A1: Error Summariser                  │
+                    │   A2: Deviation Analyzer (on candidates) │
+                    │   A3: Solution Synthesizer (on misses)  │
+                    │   A4: Reporter (output routing)         │
+                    └─────────────────────────────────────────┘
+                              ▲       ▲       ▲
+                              │       │       │
+                    ┌─────────┴───────┴───────┴───────────────┐
+                    │   Foundation Layer — Deterministic      │
+                    │   Split error/context, normalize,       │
+                    │   cosine, deterministic IDs,            │
+                    │   context-cosine disambiguation,        │
+                    │   update-not-insert                     │
+                    │   (handles cache hits + clear cases)    │
+                    └──────────────────────────────────────────┘
 ```
 
-The deterministic foundation handles the ~70% cache-hit traffic and
-the ~15% clear-hit / clear-miss traffic on its own. A3 only fires on
-the remaining ~15% — requests where the vector DB returns at least
-one meaningful candidate but applicability is uncertain.
+The foundation handles the ~70% cache-hit traffic and ~15% clear-hit
+/ clear-miss traffic. Agents fire only when their judgment is needed:
 
-**Why two layers and not one.** A single-layer deterministic system
-(split error, cosine, etc.) catches exact and near-exact repeats but
-returns stored fixes verbatim — even when a small adjustment is
-needed (e.g., stored fix says "downgrade to react@17", new error is
-on `react@18.2.0`). A3 reads the new error, the stored error, and
-the stored fix, and decides whether the fix applies as-is or needs
-adjustments. That single judgment captures most of the "variant"
-bucket without paying the agent tax on every request.
+- **A1** parses every request (lightweight, no LLM).
+- **A2** fires on ambiguous candidates (15% of non-cache traffic).
+- **A3** fires on vector-DB misses (5% of non-cache traffic).
+- **A4** formats and routes the final answer (every request).
+
+**Why four agents and not fewer.** Breaking the pipeline into four
+distinct agents separates concerns: error understanding (A1),
+deviation detection (A2), fix synthesis (A3), and output formatting
+(A4). This makes each agent simpler to test, reason about, and
+iterate on independently. A2 and A3 run in parallel where
+applicable, reducing total latency on the critical path.
 
 ### 4.1 Combined per-request flow
 
@@ -211,24 +219,27 @@ bucket without paying the agent tax on every request.
 POST /api/analyze
   │
   ├─ Redis sme:fix:<fp> / ai:fix:<fp>           cache hits, ~70% of traffic
-  │     └─ HIT → DM developer, done
+  │     └─ HIT → A4 Reporter → DM developer, done
+  │
+  ├─ A1 Error Summariser: parse + normalize error fingerprint
   │
   ├─ VectorDB.lookup_candidates(fp, top_k=10, threshold=0.90)
   │
-  ├─ 0 candidates ≥ 0.90                        → LLM Synthesizer (existing path)
+  ├─ 0 candidates ≥ 0.90                        → A3 Solution Synthesizer (generate fresh)
   │
   ├─ 1 candidate ≥ 0.95                         → return stored fix (high-confidence)
+  │     └─ A4 Reporter → DM developer, done
   │
-  ├─ 1 candidate in [0.90, 0.95)                → A3 Deviation Analyzer
-  │     ├─ exact_match                          → return stored fix
-  │     ├─ applicable_with_adjustments          → return adjusted_fix
-  │     ├─ partial / no_match                   → LLM Synthesizer
+  ├─ 1 candidate in [0.90, 0.95)                → A2 Deviation Analyzer
+  │     ├─ exact_match                          → store + A4 Reporter
+  │     ├─ applicable_with_adjustments          → adjust + store + A4 Reporter
+  │     ├─ partial / no_match                   → A3 Solution Synthesizer (generate fresh)
   │
-  └─ ≥2 candidates ≥ 0.90                       → A3 on each (parallel, top-3)
-        ├─ any exact_match                      → return
-        ├─ 1 applicable                         → return adjusted
-        ├─ ≥2 applicable                        → context-cosine tie-breaker (deterministic)
-        └─ none applicable                      → LLM Synthesizer
+  └─ ≥2 candidates ≥ 0.90                       → A2 on each (parallel, top-3)
+        ├─ any exact_match                      → store + A4 Reporter
+        ├─ 1 applicable (adjusted)              → store + A4 Reporter
+        ├─ ≥2 applicable                        → context-cosine tie-breaker → store + A4 Reporter
+        └─ none applicable                      → A3 Solution Synthesizer (generate fresh)
 ```
 
 ---
@@ -338,38 +349,46 @@ bumped in metadata) instead of creating a duplicate.
 
 ---
 
-## 6. Agentic Layer — A3 Deviation Analyzer
+## 6. Agentic Layer — Four Coordinated Agents
 
-### 6.1 Why exactly one agent
+| # | Agent | Role | LLM? | Input | Output |
+|---|---|---|---|---|---|
+| **A1** | Error Summariser | Parse, normalize, and understand the error | No | Error lines + context sample | Canonical error fingerprint + summary |
+| **A2** | Deviation Analyzer | Decide if stored fix applies (exact/adjusted/partial/no) | Yes | Current error + stored candidate (error + fix) | `match_quality`, `adjusted_fix`, confidence, reasoning |
+| **A3** | Solution Synthesizer | Generate fresh fix when no stored fix applies | Yes | Error fingerprint + context | `fix_text`, confidence, reasoning |
+| **A4** | Reporter | Format final answer and route to Slack | No | Structured result (stored or synthesized fix) | Slack DM payload + metadata |
 
-A full agentic redesign was considered (seven coordinated agents:
-Classifier, Retrieval, Deviation Analyzer, Disambiguator,
-Synthesizer, Validator, Reporter — see `PROPOSAL.md` §4 for the full
-analysis). The key finding: only the Deviation Analyzer has
-leverage that justifies its cost.
+### 6.1 A1 Error Summariser
 
-| Candidate agent | Why we drop it |
-|---|---|
-| Classifier (A1) | Redundant — `normalize_error_text` already produces a canonical fingerprint |
-| Retrieval (A2) | Not really an agent — just a vector DB tool call |
-| Disambiguator (A4) | Context-cosine in §5.5 already disambiguates |
-| Synthesizer (A5) | Already exists as today's LLM fallback (`call_llm`); no agent needed |
-| Validator (A6) | YAGNI until a real safety incident; regex pre-checks catch obvious dangers |
-| Reporter (A7) | Pure formatting — deterministic code |
+**Role:** Parse and normalize the incoming error into a canonical
+fingerprint, removing noise (timestamps, paths, SHAs) and identifying
+the core failure pattern.
 
-A3 is the only one where natural-language reasoning measurably beats
-geometry: it judges whether a 0.92-similar stored fix actually
-applies to this specific variant and, if so, proposes minimal
-adjustments.
+**Inputs:**
+- `error_lines`: List of raw error message strings
+- `context_lines`: Surrounding log context (for display, not embedding)
 
-### 6.2 What A3 does
+**Outputs:**
+- `error_fingerprint`: Normalized, stable identifier for vector DB
+  queries
+- `summary`: Plain-text description of the error (for LLM context)
 
-Given:
-- the *new* error (its fingerprint, raw lines, and context sample)
-- one *stored* candidate (its stored error, its stored fix)
+**Implementation:** This is deterministic code (no LLM). A1 calls
+`normalize_error_text` from §5.2 and returns the result. It runs on
+every request. Failure is not an option — on normalization failure,
+use raw error lines as-is.
 
-A3 returns a strict JSON verdict:
+### 6.2 A2 Deviation Analyzer
 
+**Role:** Given a stored fix candidate from the vector DB and the
+current error, decide whether the stored fix applies as-is, requires
+small adjustments, partially applies, or doesn't apply.
+
+**Inputs:**
+- Current error: normalized fingerprint, raw lines, context sample
+- Stored candidate: stored error + stored fix text
+
+**Outputs:** Strict JSON verdict:
 ```json
 {
   "match_quality":  "exact_match | applicable_with_adjustments | partial | no_match",
@@ -380,61 +399,103 @@ A3 returns a strict JSON verdict:
 }
 ```
 
-A3 must not invent new fixes. If the stored fix doesn't mostly
-apply, A3 returns `partial` or `no_match` and the orchestrator
-falls through to the LLM Synthesizer.
+**Trigger:** A2 runs in two scenarios:
+1. Exactly 1 candidate with cosine similarity in `[0.90, 0.95)`.
+2. ≥2 candidates ≥ 0.90 (A2 runs in parallel, top-3 candidates).
 
-### 6.3 When A3 fires
+**Caching:** Results cached in Redis `agent:deviation:sha(fingerprint
++ candidate_id)` for 7 days. Two developers hitting the same error
+within a week share the decision.
 
-A3 runs **only** in two situations:
+**Failure handling:** If A2 times out (>6 s), returns malformed JSON
+after one retry, or returns confidence <0.5, the orchestrator routes
+to A3 (Solution Synthesizer). No regression.
 
-1. The vector DB returns exactly one candidate with cosine similarity
-   in the band `[0.90, 0.95)` — meaningful but not clearly exact.
-2. The vector DB returns ≥2 candidates with cosine similarity ≥ 0.90.
-   In this case A3 runs in parallel on the top-3 candidates.
+### 6.3 A3 Solution Synthesizer
 
-A3 **never** runs when:
-- The cache shortcuts hit (Redis sme:fix or ai:fix). ~70% of traffic.
-- The single top candidate scores ≥0.95 (treated as high-confidence
-  exact). ~10% of traffic.
-- No candidate scores ≥0.90 (true miss; route to LLM Synthesizer).
-  ~5% of traffic.
+**Role:** Generate a fresh fix from scratch when no stored fix
+candidate exists or applies. This is the existing `/api/analyze` LLM
+fallback, now formalized as an agent.
 
-Net: A3 fires on roughly 15% of requests.
+**Inputs:**
+- Error fingerprint (from A1)
+- Raw error lines + context
+- Optional: partial-match citations from A2 (if A2 found a
+  `partial` match)
 
-### 6.4 A3 result caching
+**Outputs:** JSON result:
+```json
+{
+  "fix_text":    "<generated fix steps>",
+  "confidence":  0.85,
+  "reasoning":   "<explanation>",
+  "source":      "synthesized | partial_citation"
+}
+```
 
-Each A3 decision is cached in Redis for 7 days:
+**Trigger:** A3 runs in two scenarios:
+1. Vector DB returns 0 candidates ≥ 0.90 (true miss).
+2. A2 returns `partial` or `no_match` on all candidates.
 
-- key  = `agent:deviation:sha(query_fingerprint + candidate_id)`
-- value = the full A3 verdict JSON
+**Caching:** Results cached in Redis `agent:synthesizer:sha(fingerprint)`
+for 7 days. Same error asked twice within a week returns the same fix.
 
-Two developers hitting the same error pattern within a week share
-the A3 decision. The second request pays $0 for A3.
+**Failure handling:** If A3 times out or fails, respond with "unable
+to analyze" rather than a wrong fix. Let the user escalate to Slack.
 
-### 6.5 Failure handling
+### 6.4 A4 Reporter
 
-A3 is best-effort. If it:
-- times out (>6 s)
-- returns malformed JSON after one retry
-- returns confidence <0.5
+**Role:** Take the final decision (stored fix from vector DB, adjusted
+fix from A2, or synthesized fix from A3) and format it into a Slack
+DM payload with appropriate metadata and confidence level.
 
-…the orchestrator skips A3 and routes to the LLM Synthesizer. Worst
-case: same behavior as the foundation layer alone. No regression.
+**Inputs:**
+- The final fix (fix_text + source + confidence)
+- Metadata: error_fingerprint, candidate similarity (if applicable),
+  A2 reasoning (if applicable)
 
-### 6.6 What A3 measurably adds
+**Outputs:** Slack message payload with:
+- Fix text (properly formatted)
+- Confidence indicator
+- Citation of stored vs synthesized
+- SME "Approve/Edit" buttons (if applicable)
+- Link to full error details
 
-The "variant" bucket — same root cause, different specifics. Examples:
+**Implementation:** Deterministic code (no LLM). A4 runs on every
+request that reaches the output stage.
 
-| Stored error | New error | Foundation alone | With A3 |
+### 6.5 Caching and Coordination
+
+Each agent decision is independently cached in Redis:
+
+| Agent | Cache key | TTL | Saves |
 |---|---|---|---|
-| `npm peer dep react@16 required, found react@17.0.1` | `npm peer dep react@16 required, found react@18.2.0` | returns "downgrade to 17" verbatim — wrong version | `applicable_with_adjustments`, fix updated to "downgrade to 17.0.x" |
-| `Maven build failed: missing artifact com.acme:lib:1.2.3` | `…:lib:1.4.0` | returns 1.2.3 fix as-is | adjusts version in mvn command |
-| `Jenkins agent timeout (node-12)` | `…(node-19)` | returns node-12 reset steps | adjusts node identifier in fix |
+| A2 | `agent:deviation:sha(fingerprint + candidate_id)` | 7 days | LLM cost |
+| A3 | `agent:synthesizer:sha(fingerprint)` | 7 days | LLM cost |
 
-Foundation accuracy on this bucket: ~60–70%. With A3: ~85–90%.
-Hybrid captures most of that lift without paying for A3 on the 70%
-of requests that are clear cache hits.
+On a cache hit (second request for the same error pattern within a
+week), downstream agents are skipped. A4 uses the cached decision to
+format the output.
+
+**Coordination:** A2 and A3 can run in parallel when multiple
+candidates are present:
+- A2 evaluates the top-3 candidates in parallel.
+- A3 starts immediately on `0 candidates ≥ 0.90`.
+- A4 waits for the first decisive result (any `exact_match` or
+  `applicable_with_adjustments`, or timeout).
+
+### 6.6 What the four-agent design measurably adds
+
+| Error pattern | Stored fix case | Foundation alone | With 4 agents | Gain |
+|---|---|---|---|---|
+| Version pinning mismatch | react@16→17 fix, error has react@18.2 | Returns 17 verbatim (wrong) | A2 adjusts to 17.0.x range | ~20% accuracy lift |
+| Node/path renaming | Jenkins node-12 fix, error has node-19 | Returns node-12 fix (wrong) | A2 adjusts node ID | ~15% accuracy lift |
+| Missing artifact (lib version) | Maven fix for lib:1.2.3, error shows lib:1.4.0 | Returns 1.2.3 fix (wrong) | A2 or A3 adapts version | ~20% accuracy lift |
+| Novel error (no stored match) | No candidate ≥ 0.90 | Routes to A3 (old LLM) | A3 synthesizes with context + citations | Same cost, better reasoning |
+
+Variant bucket accuracy with foundation alone: ~60–70%. With four agents:
+~88–92%. Cost per synthesized answer: ~$0.015 (vs ~$1/request for
+always-on LLM).
 
 ---
 
@@ -513,45 +574,55 @@ in Phase 1.
 
 ---
 
-## 8. Why Hybrid (and not the alternatives)
+## 8. Why Four Agents (and not the alternatives)
 
 ### 8.1 Why not deterministic alone
 
-The deterministic foundation (Layer 1) handles ~85% of requests
-correctly: cache hits, exact vector matches, true LLM-fallback misses.
-What it cannot do is reason about the **variant bucket** — same root
-cause, different specifics. Without A3, those queries either return a
-stored fix verbatim (developer has to mentally translate the version
-number) or fall through to the LLM unnecessarily.
+The deterministic foundation handles ~85% of requests correctly: cache
+hits, exact vector matches, clear misses. What it cannot do is reason
+about the **variant bucket** — same root cause, different specifics.
+Without A2 and A3, those queries either return a stored fix verbatim
+(developer has to mentally translate the version number) or fall
+through to the LLM unnecessarily.
 
 Foundation alone:
 - ✅ Fixes the four root-cause bugs.
 - ✅ Cheapest possible — ~$1.50 per 1 k requests.
 - ❌ Variant accuracy: ~60–70%.
+- ❌ No fresh synthesis on novel errors.
 
-### 8.2 Why not full agentic (every request through 5–7 agents)
+### 8.2 Why not one agent per request (always-on agentic)
 
-A full agentic redesign has the highest accuracy ceiling but pays the
-agent tax on every request, including the 70% that are trivial cache
-hits. At 1 k requests/day:
+Always running agents on every request (cache hits included) pays the
+LLM tax on the 70% of traffic that are trivial cache lookups. At 1 k
+requests/day:
 
-- **Cost**: ~$30–40/day vs ~$3/day for Hybrid.
-- **Latency**: 12 s p50 vs 400 ms p50 for Hybrid.
-- **Determinism**: full agentic is non-deterministic on every request;
-  same error can yield different advice on different days. SMEs lose
-  trust.
-- **Code complexity**: ~2,500 LoC vs ~900 LoC for Hybrid.
+- **Cost**: ~$20–30/day vs ~$6–8/day for four-agent selective model.
+- **Latency**: 8–12 s p50 vs 600 ms–8 s for selective agents.
+- **Determinism**: always-on agents are non-deterministic; same error
+  yields different advice on different days. SMEs lose trust.
 
-The accuracy gain on the variant bucket is roughly the same as
-Hybrid's; we'd be paying ~10× the cost for ~0% accuracy lift.
+The accuracy gain is marginal; we'd be paying ~4–5× the cost for
+~2–3% accuracy lift on top of the four-agent design.
 
-### 8.3 Hybrid splits the difference correctly
+### 8.3 Four agents balanced correctly
 
-- Inherits the deterministic foundation (cheap and fast on the 85%).
-- Pays for A3 only on the ~15% where it measurably helps.
-- Falls back gracefully to the LLM Synthesizer if A3 misbehaves —
-  worst case = foundation alone.
-- ~$3/day, 400 ms p50, ~85–90% on variants.
+- **A1 (every request):** Lightweight parsing, no LLM cost.
+- **A2 (ambiguous candidates only):** ~15% of non-cache traffic.
+  Judges whether stored fix applies.
+- **A3 (misses only):** ~5% of non-cache traffic. Synthesizes fresh
+  fixes with context.
+- **A4 (every request):** Lightweight formatting, no LLM cost.
+
+Collectively:
+- ~$6–8/day at 1k requests/day (vs $15 today, $1.50 deterministic
+  alone).
+- 600 ms–8 s p50 latency depending on path.
+- ~88–92% accuracy on variants (vs 60–70% deterministic alone).
+- Caching compounds the win: repeated errors amortize A2/A3 cost
+  across multiple developers.
+- Each agent is simple enough to test, reason about, and iterate on
+  independently.
 
 ---
 
@@ -563,19 +634,23 @@ Hybrid's; we'd be paying ~10× the cost for ~0% accuracy lift.
 | 2 | `src/api_poster.py` | New `errors` payload shape; legacy `error_lines` kept for one release | 30 |
 | 3 | `build-failure-analyzer/analyzer_service.py` | `FailedStep` schema → `errors: List[ErrorEntry]`; cache keys use fingerprint; delegate to orchestrator | 80 |
 | 4 | `build-failure-analyzer/vector_db.py` | `normalize_error_text`; deterministic sha256 ID; cosine space; `context_sample` metadata; top-K disambiguation | 150 |
-| 5 | `build-failure-analyzer/resolver_agent.py` | Pass `error_fingerprint` + `context_lines` through; enrich Synthesizer prompt with partial-match citations | 40 |
+| 5 | `build-failure-analyzer/resolver_agent.py` | Pass `error_fingerprint` + `context_lines` through; enrich A3 prompt with partial-match citations | 40 |
 | 6 | `build-failure-analyzer/slack_reviewer.py` | `collection.update()` on fingerprint ID (replaces `add()`) | 20 |
-| 7 | `build-failure-analyzer/agents/base.py` *(new)* | Bounded agent runner, tool-use loop, JSON schema validation, audit-trail entry | 120 |
-| 8 | `build-failure-analyzer/agents/deviation.py` *(new)* | A3 Deviation Analyzer | 80 |
-| 9 | `build-failure-analyzer/orchestrator.py` *(new)* | State machine from §4.1; feature flag; budget enforcement | 150 |
-| 10 | `build-failure-analyzer/prompts/deviation.md` *(new)* | A3 system + user prompts | — |
-| 11 | `scripts/migrate_vector_db.py` *(new)* | One-off migration | 80 |
-| 12 | Tests (`tests/`, `build-failure-analyzer/tests/`) | Unit tests + golden-set integration | 300 |
-| 13 | `build-failure-analyzer/eval/regression_set.jsonl` *(new)* | 50 seed pairs + augmented variants | data |
-| 14 | `build-failure-analyzer/eval/run_eval.py` *(new)* | Replay harness + grading | 120 |
+| 7 | `build-failure-analyzer/agents/base.py` *(new)* | Bounded agent runner, tool-use loop, JSON schema validation, audit-trail | 120 |
+| 8 | `build-failure-analyzer/agents/summarizer.py` *(new)* | A1 Error Summariser (deterministic fingerprinting) | 40 |
+| 9 | `build-failure-analyzer/agents/deviation.py` *(new)* | A2 Deviation Analyzer (LLM agent) | 100 |
+| 10 | `build-failure-analyzer/agents/synthesizer.py` *(new)* | A3 Solution Synthesizer (LLM agent, refactored from `resolver_agent.py`) | 80 |
+| 11 | `build-failure-analyzer/agents/reporter.py` *(new)* | A4 Reporter (deterministic formatting) | 60 |
+| 12 | `build-failure-analyzer/orchestrator.py` *(new)* | State machine from §4.1; agent routing; caching; feature flags | 180 |
+| 13 | `build-failure-analyzer/prompts/deviation.md` *(new)* | A2 system + user prompts | — |
+| 14 | `build-failure-analyzer/prompts/synthesizer.md` *(new)* | A3 system + user prompts (refactored from existing) | — |
+| 15 | `scripts/migrate_vector_db.py` *(new)* | One-off migration script | 80 |
+| 16 | Tests (`tests/`, `build-failure-analyzer/tests/`) | Unit tests + golden-set integration | 350 |
+| 17 | `build-failure-analyzer/eval/regression_set.jsonl` *(new)* | 50 seed pairs + augmented variants | data |
+| 18 | `build-failure-analyzer/eval/run_eval.py` *(new)* | Replay harness + grading | 120 |
 
-**Total:** ~1,130 LoC product code + 300 LoC tests + eval tooling
-and seed data. Estimated 2–3 weeks for one engineer including
+**Total:** ~1,380 LoC product code + 350 LoC tests + eval tooling
+and seed data. Estimated 3–4 weeks for one engineer including
 Phase 0.
 
 ---
@@ -584,23 +659,24 @@ Phase 0.
 
 | Phase | Scope | Duration | Gate to advance | Rollback |
 |---|---|---|---|---|
-| **0 — Eval harness** | Build regression suite from the 50 seed pairs (pass/fail assertions). Augment to ~200–400 via prod Chroma dump + synthetic variants + LLM-generated stress tests (see §13). | ~1 week | Regression suite runs in CI; baseline grades published | n/a — pure tooling |
-| **1 — Land foundation** | Implement §5 in extractor + analyzer. Run migration script (§7.4) against staging copy of prod Chroma. Swap `CHROMA_COLLECTION` env var. | ~1 week | No regressions on regression suite; SME spot-check of 20 live responses rates ≥ baseline; poisoning row count in v2 = 0 | Revert env var to old collection |
-| **2 — Add A3 in shadow mode** | Implement `agents/base.py`, `agents/deviation.py`, `orchestrator.py`, prompt template. Feature flag `AGENTIC_MODE=off\|shadow\|on`. In shadow, A3 runs and logs decisions but the user-visible response comes from foundation alone. | ~1 week | A3 shadow decisions match SME verdicts on ≥80% of shadowed requests over 2 weeks; A3 p99 < 6 s; A3 JSON-schema failure rate < 2% | Flag back to `off` |
-| **3 — 10% traffic with A3 active** | Flip flag to `on` for 10% of `/api/analyze` traffic. Monitor cost, latency, SME approval rate, developer feedback. | ~2 weeks | Cost within forecast; SME approval rate ≥ Phase 1 baseline; no customer complaints attributable to A3 | Flag back to 0% |
-| **4 — 100% rollout** | All traffic. Close out. | ~1 week | Stable for 2 weeks | Flag back to 10% |
-| **5 (optional)** | Add further agents only if signals require: A6 Validator on a safety incident, A1 Classifier if retrieval precision is still low, A4 Disambiguator if §5.5 ties exceed 5%. | n/a | per-agent eval lift ≥ 5% | Per-agent flag |
+| **0 — Eval harness** | Build regression suite from 50 seed pairs. Augment to ~200–400 via prod Chroma dump + synthetic variants + LLM stress tests (see §13). | ~1 week | Regression suite runs in CI; baseline grades published | n/a — pure tooling |
+| **1 — Land foundation** | Implement §5 in extractor + analyzer. Run migration script (§7.4). Swap `CHROMA_COLLECTION=fix_embeddings_v2`. Implement A1 and A4 (no LLM). | ~1 week | No regressions on regression suite; SME spot-check of 20 live responses ≥ baseline; poisoning count = 0; A1 + A4 p99 < 100 ms | Revert env var to old collection |
+| **2 — Add A2 in shadow** | Implement `agents/base.py`, `agents/deviation.py`, `orchestrator.py`, A2 prompt. Feature flag `AGENTS_MODE=off\|shadow\|on`. In shadow, A2 runs on ambiguous candidates but user response comes from foundation. A3 still routes to old LLM fallback. | ~1 week | A2 shadow decisions match SME verdicts ≥80% over 2 weeks; A2 p99 < 6 s; schema failure rate < 2%; cost tracking within ±10% forecast | Flag back to `off` |
+| **3 — Add A3 in shadow** | Implement `agents/synthesizer.py`, A3 prompt. Run A3 in parallel with A2 shadow. Both log decisions but user response from foundation + old LLM fallback. | ~1 week | A3 shadow decisions on novel errors match prior LLM baseline ≥90%; A3 p99 < 8 s; combined (A2 + A3) cost within forecast ±15% | Flag back to off, keep A2 shadow |
+| **4 — 10% traffic, A2+A3 active** | Flip `AGENTS_MODE=on` for 10% of `/api/analyze` traffic. A2 evaluates candidates; A3 synthesizes on misses. Monitor cost, latency, approval rate, developer feedback, SME satisfaction. | ~2 weeks | Cost within forecast; approval rate ≥ Phase 1 baseline; no safety incidents; A2 match_quality distribution stable | Flag back to off |
+| **5 — 50% → 100% rollout** | Gradual ramp-up to 100% over 1 week (10% → 50% → 100%). Final stability gate: 1 week at 100%. | ~2 weeks | Stable metrics for 1 week at 100%; SME feedback positive; cost stable | Revert to Phase 1 foundation only |
+| **6 (optional)** | Further agents or enhancements only if signal requires: extend A2 for new error categories, optimize A3 prompt for low-confidence cases. | n/a | per-change eval lift ≥ 3% | Per-change flag |
 
 ### 10.1 Non-negotiables
 
-- **Phase 0 before Phase 1.** Without the regression suite we have
-  nothing to fall back on if Phase 1 introduces a regression. This
-  is the single biggest risk item.
-- **Phase 1 before Phase 2.** A3 reasoning over an un-migrated DB is
-  still reasoning over poisoned data.
+- **Phase 0 before Phase 1.** Regression suite is the single biggest
+  risk item; without it we have no fallback on regression.
+- **Phase 1 before Phase 2.** A2/A3 reasoning over un-migrated DB
+  still poisons results.
+- **Foundation (Phase 1) must be stable.** Phase 2–5 assume Phase 1
+  is baseline. Any Phase 1 regression blocks Phase 2.
 - **Feature flag everywhere.** Every phase must be revertible in
-  under 60 seconds via env-var flip. No code-revert rollbacks on a
-  weekend.
+  <60s via env-var flip. No code rollbacks on weekends.
 
 ---
 
@@ -608,49 +684,72 @@ Phase 0.
 
 The team needs to make calls on these before implementation begins.
 
-1. **Orchestrator timeout vs upstream SLA.** Hybrid's total budget is
-   45 s per request. Does Jenkins/GitLab post-build hook tolerate
-   that? If the extractor retries on timeout we risk duplicate
-   analyses.
+1. **Orchestrator timeout vs upstream SLA.** Four-agent total budget
+   is ~60 s per request (A1 <100 ms, A2 up to 6 s per candidate
+   parallel, A3 up to 8 s, A4 <100 ms). Does Jenkins/GitLab
+   post-build hook tolerate that? If timeout, risk duplicate analyses.
 
-2. **Eval-harness ownership.** Phase 0 is the biggest risk item.
-   Who owns curating the seed pairs, running augmentation, and
-   maintaining the replay/grading script over time?
+2. **Agent parallelization strategy.** Should A2 and A3 run in true
+   parallel (both fire immediately when triggered), or sequentially
+   (A2 first, A3 on A2 failure/miss)? Parallel is faster but doubles
+   cost on some paths.
 
-3. **Per-team threshold tuning.** Should the 0.90 vector threshold,
-   the top-K fan-out (currently 3 for A3), and the context-cosine
-   tie margin (0.05) be configurable per repo? Different teams have
-   very different log styles.
+   Recommendation: Parallel, with early exit on first decisive
+   result (A2 exact_match). Budget enforcer caps total cost per
+   request.
 
-4. **A3 `adjusted_fix` approval gating.** When A3 returns an
+3. **Eval-harness ownership.** Phase 0 is the biggest risk item.
+   Who owns curating seed pairs, augmentation, and maintaining
+   replay/grading over time?
+
+4. **Per-team threshold tuning.** Should the 0.90 vector threshold,
+   top-K fan-out (currently 3), context-cosine tie margin (0.05),
+   and A2/A3 confidence floors be configurable per repo?
+   Different teams have very different log styles.
+
+   Recommendation: Centralize initially; expose as env-vars only if
+   production tuning is needed.
+
+5. **A2 `adjusted_fix` approval gating.** When A2 returns an
    adjusted version of a stored fix, should it:
-   - (a) go to the developer directly with a note that it's derived;
-   - (b) go through a fresh SME Approve/Edit cycle; or
-   - (c) go through a lighter thumbs-up review in Slack?
+   - (a) go to developer directly with "adjusted by AI" label;
+   - (b) require lightweight SME thumbs-up in Slack; or
+   - (c) require full Approve/Edit cycle?
 
-   Recommendation: (c) — base fix is already SME-approved, so a
-   lighter touch is appropriate.
+   Recommendation: (a) — base fix is SME-approved, adjustments are
+   mechanical (version numbers, paths). Lighter touch saves SME time.
 
-5. **Bedrock migration scope.** Branch is
+6. **A3 confidence floor.** Should A3 synthesized answers below a
+   confidence threshold (e.g., <0.70) be routed to human review
+   instead of auto-posting? Balances automation vs accuracy.
+
+   Recommendation: <0.60 → human escalation to Slack; 0.60–0.80 →
+   post with warning label; ≥0.80 → post normally.
+
+7. **Bedrock migration scope.** Branch is
    `claude/setup-log-analysis-bedrock-gmLHN`. Does the Bedrock LLM
-   swap (from OpenWebUI to native Bedrock SDK) complete within this
-   scope or as a separate PR? Hybrid is LLM-backend-agnostic.
+   swap complete within this scope or as a separate PR? Four-agent
+   design is LLM-backend-agnostic.
 
-6. **Salvage existing approved fixes.** Migration carries over
-   ~70% of `fix_embeddings` (dropping poisoning outliers and
-   duplicates) — the default per §7. Does the team prefer this, or
-   start with empty `fix_embeddings_v2` and have SMEs re-approve?
-   Recommendation: salvage.
+   Recommendation: Within scope — agents abstract the LLM backend.
 
-7. **`pipeline_context` collection.** The domain-RAG collection
-   (`pipeline_context_rag.py`) uses threshold 0.55. Should it also
-   migrate to explicit cosine space, or leave as-is? It is read-only
-   and not affected by the poisoning bug. Recommendation: leave for
-   now, revisit only if precision drops.
+8. **Salvage existing approved fixes.** Migration carries over ~70%
+   of `fix_embeddings` (dropping poisoning and duplicates). Start
+   with salvaged corpus or reset to empty?
+
+   Recommendation: Salvage. ~70% hit rate on past errors justifies
+   the migration effort; resetting loses accumulated tribal knowledge.
+
+9. **`pipeline_context` collection.** Domain-RAG uses threshold 0.55
+   on L2 space. Should it migrate to cosine with adjusted threshold,
+   or leave as-is?
+
+   Recommendation: Leave for now, non-critical path. Revisit only if
+   precision drops in production.
 
 ---
 
-## 12. Appendix A — A3 Deviation Analyzer Specification
+## 12. Appendix A — A2 Deviation Analyzer Specification
 
 ### 12.1 Role
 
@@ -658,8 +757,8 @@ Given the current error (normalized fingerprint + raw lines + context
 sample) and a candidate stored fix (its stored error + its stored fix
 text), decide whether the stored fix applies. If it applies with
 small adjustments (version numbers, paths, identifiers), emit an
-`adjusted_fix`. Do not invent new fixes — fall through to the
-Synthesizer for that.
+`adjusted_fix`. Do not invent new fixes — return `partial` or
+`no_match` to fall through to A3 Solution Synthesizer.
 
 ### 12.2 Output JSON schema
 
@@ -682,59 +781,160 @@ Synthesizer for that.
 ### 12.3 System prompt sketch
 
 > You compare a CURRENT CI/CD build error with one STORED error and
-> its approved STORED fix, and decide whether the stored fix applies.
+> its SME-approved STORED fix, and decide whether the stored fix
+> applies.
 >
 > Output STRICT JSON matching the provided schema. No prose outside
 > the JSON object.
 >
 > Match-quality values:
-> - `exact_match` — identical root cause; fix applies verbatim
+> - `exact_match` — identical root cause; fix applies verbatim.
 > - `applicable_with_adjustments` — same root cause; small edits
->   needed (version numbers, paths). Provide `adjusted_fix` and list
->   changes in `adjustments`.
-> - `partial` — some steps of the stored fix apply; list which.
-> - `no_match` — different root cause.
+>   needed (version numbers, paths, identifiers). Provide `adjusted_fix`
+>   and list changes in `adjustments`.
+> - `partial` — some steps of stored fix apply; others don't.
+> - `no_match` — different root cause entirely.
 >
-> Do not invent new remediation steps. If the stored fix does not
-> mostly apply, return `partial` or `no_match` and let downstream
-> synthesis handle it.
+> Do NOT invent new remediation steps. If the stored fix mostly
+> applies, mark as `applicable_with_adjustments`. Otherwise mark
+> `partial` or `no_match` and let A3 synthesize fresh.
 
 ### 12.4 Trigger conditions
 
-A3 fires only when the orchestrator state machine reaches one of:
+A2 fires only when the orchestrator state machine reaches one of:
 
 - Exactly 1 candidate with cosine similarity in `[0.90, 0.95)`.
-- ≥2 candidates with cosine similarity ≥ 0.90 (A3 runs in parallel,
+- ≥2 candidates with cosine similarity ≥ 0.90 (A2 runs in parallel,
   top-3 candidates).
 
 Never fires when:
-- 0 candidates above 0.90 → Synthesizer.
-- 1 candidate at ≥ 0.95 → high-confidence exact, no A3.
-- Cache shortcut hits → no A3.
+- 0 candidates ≥ 0.90 → A3 (synthesize fresh).
+- 1 candidate ≥ 0.95 → high-confidence exact, skip to output.
+- Cache shortcut hits → skip to A4 (report cached result).
 
 ### 12.5 Caching
 
 - Redis key: `agent:deviation:sha(query_fingerprint + candidate_id)`
 - TTL: 7 days
-- Two developers hitting the same error pattern within a week share
-  the decision; second request pays $0 for A3.
+- Two developers hitting the same error within a week share the
+  decision; second request pays $0 for A2.
 
 ### 12.6 Cost & latency
 
 - Average input: ~3 K tokens (prompt + error + candidate fix).
 - Average output: ~300 tokens.
-- Bedrock Claude Sonnet pricing: ~$0.015 per A3 call.
-- p99 latency: ~6 s (with one retry on schema validation failure).
+- Bedrock Claude Sonnet pricing: ~$0.015 per A2 call.
+- p99 latency: ~6 s (with one retry on JSON schema failure).
+- Typical: 2–3 s (most decisions are clear).
 
 ---
 
-## 13. Appendix B — Eval Strategy Under Sparse Data
+## 12.7 Failure recovery
 
-Phase 0 starts with only ~50 labeled pairs, each a single error line
-and a single solution line (no multi-line context, no surrounding log
-noise). This appendix adapts the plan for that reality.
+If A2:
+- times out (>6 s) → skip to A3 (synthesize fresh).
+- returns malformed JSON after one retry → skip to A3.
+- returns confidence <0.5 → log as uncertain; skip to A3.
 
-### 13.1 Why 50 one-line pairs is not enough on its own
+In all cases, worst-case is A3 synthesizes a fresh answer. No
+regression.
+
+---
+
+## 13. Appendix B — A3 Solution Synthesizer Specification
+
+### 13.1 Role
+
+Generate a fresh fix from scratch when no stored fix candidate exists
+or applies. This is the existing `/api/analyze` LLM fallback,
+formalized as an agent with structured output and caching.
+
+### 13.2 Output JSON schema
+
+```json
+{
+  "type": "object",
+  "required": ["fix_text", "confidence", "reasoning"],
+  "properties": {
+    "fix_text":    { "type": "string" },
+    "confidence":  { "type": "number", "minimum": 0, "maximum": 1 },
+    "reasoning":   { "type": "string", "maxLength": 2500 },
+    "source":      { "enum": ["synthesized", "partial_citation"] },
+    "citations":   {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "error_fingerprint": { "type": "string" },
+          "step": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+```
+
+### 13.3 System prompt sketch
+
+> You are a CI/CD troubleshooting expert. Given a build error, generate
+> step-by-step remediation.
+>
+> Output STRICT JSON matching the schema. No prose outside the JSON.
+>
+> Guidelines:
+> - Be specific: reference exact version numbers, paths, or
+>   identifiers from the error.
+> - Be concise: 3–7 actionable steps.
+> - If given partial-match citations, prioritize steps from those
+>   fixes that are likely to help.
+> - If you are low-confidence (<0.60), say so in `confidence`.
+> - Avoid generic advice ("update dependencies", "check permissions")
+>   without specifics.
+
+### 13.4 Trigger conditions
+
+A3 fires in two scenarios:
+
+1. Vector DB returns 0 candidates ≥ 0.90 (true miss).
+2. A2 returns `partial` or `no_match` on all evaluated candidates.
+
+A3 never fires when:
+- Cache shortcut hits.
+- Single candidate ≥ 0.95 (skip to output).
+- A2 returns `exact_match` or `applicable_with_adjustments` (skip
+  to output).
+
+### 13.5 Caching
+
+- Redis key: `agent:synthesizer:sha(query_fingerprint)`
+- TTL: 7 days
+- Same error asked twice within a week returns the same synthesized
+  fix.
+
+### 13.6 Cost & latency
+
+- Average input: ~4 K tokens (error + context + optional citations).
+- Average output: ~400 tokens (fix steps + reasoning).
+- Bedrock Claude Sonnet pricing: ~$0.020 per A3 call.
+- p99 latency: ~8 s (with one retry on schema failure).
+- Typical: 3–4 s.
+
+### 13.7 Failure recovery
+
+If A3:
+- times out (>8 s) → escalate to human review (post in Slack with
+  "timeout, needs manual review").
+- returns malformed JSON after one retry → same escalation.
+- returns confidence <0.50 → post with "low confidence" flag,
+  invite human review.
+
+For Phase 1–3, low-confidence answers still post (so the system
+accumulates real production signals). Phase 4+ may route <0.60 to
+human review if metrics warrant.
+
+---
+
+### 14.1 Why 50 one-line pairs is not enough on its own
 
 **Statistical power.** At n=50 the standard error on an accuracy
 estimate near 80% is roughly ±5.7%. The 95% CI for the *difference*
@@ -755,7 +955,7 @@ catastrophic regressions (~20%+) are reliably detectable.
 | Cosine similarity threshold | Yes (only on clean short inputs) |
 | LLM Synthesizer fallback | Yes |
 
-### 13.2 Three-track mitigation
+### 14.2 Three-track mitigation
 
 **Track 1 — Reframe the 50 as a regression suite, not a statistical
 benchmark.** Each pair becomes a pass/fail assertion: *given this
@@ -772,57 +972,60 @@ catastrophic regressions; cannot prove "A is better than B".
 - (b) **Synthetic variants of the 50 seeds.** Author 3–5 variants
   per seed that change version numbers, file paths, timestamps, or
   container IDs but should still map to the same fix. Tests
-  normalizer + A3 directly. Yield: 150–250 new pairs.
+  normalizer + A2/A3 directly. Yield: 150–250 new pairs.
 - (c) **LLM-generated stress tests.** Use Claude to paraphrase each
   seed into 2–3 realistic variants with surrounding log noise.
-  Flags brittle normalizer regexes and A3 prompt failure modes.
+  Flags brittle normalizer regexes and A2/A3 prompt failure modes.
   Yield: 100–150 pairs labeled "synthetic, not gold".
 
 Combined: 50 → ~400 pairs. Enough for Phase-1-grade offline checks.
 
 **Track 3 — Make live shadow mode the primary accuracy signal.**
 Offline eval at n=50–400 cannot distinguish small lift from noise.
-Production telemetry can. Phase 2 runs A3 in shadow mode on every
-qualifying request and logs its decisions. Over 2 weeks at
-1,000 requests/day that is ~15,000 real-world samples — far stronger
-than any offline eval.
+Production telemetry can. Phase 2 runs A2 in shadow mode; Phase 3
+adds A3 shadow. Over 2 weeks at 1,000 requests/day that is ~15,000
+real-world samples per agent — far stronger than any offline eval.
 
-### 13.3 Revised phase gates
+### 14.3 Revised phase gates
 
 | Phase | Sparse-data gate |
 |---|---|
 | 0 | Build regression suite from 50 seeds + augment to ~200–400 via tracks 2(a–c); ship pass/fail CI harness |
-| 1 | No regressions on regression suite + SME spot-check of 20 live responses rates ≥ baseline |
-| 2 | A3 shadow-mode decisions match SME verdicts on ≥80% of shadowed requests over 2 weeks |
-| 3 | Cost within forecast; SME approval rate ≥ Phase 1 baseline |
-| 4 | Stable for 2 weeks |
+| 1 | No regressions on regression suite + SME spot-check of 20 live responses ≥ baseline; A1/A4 latency <100 ms p99 |
+| 2 | A2 shadow-mode decisions match SME verdicts ≥80% over 2 weeks; A2 p99 <6 s; cost ±10% forecast |
+| 3 | A3 shadow decisions on novel errors ≥90% prior LLM baseline; A3 p99 <8 s; combined cost ±15% forecast |
+| 4 | 10% traffic: cost within forecast; approval rate ≥ Phase 1 baseline; no safety incidents |
+| 5 | 100% traffic: stable metrics for 1 week; SME feedback positive |
 
-### 13.4 Feature deferrals
+### 14.4 Feature deferrals
 
-- **Context-cosine disambiguator (§5.5).** Ship behind its own
-  sub-flag `CONTEXT_COSINE_ENABLED=false`; enable only after shadow
-  mode accumulates real multi-line context samples.
-- **A3 `adjusted_fix`.** Cannot be offline-tested without
+- **Context-cosine disambiguator (§5.5).** Ship behind sub-flag
+  `CONTEXT_COSINE_ENABLED=false`; enable only after Phase 1 has
+  real multi-line context samples.
+- **A2 `adjusted_fix`.** Cannot be offline-tested without
   version-number / path variations. Track 2(b) synthetic variants
-  *must* include those, otherwise the
-  `applicable_with_adjustments` branch is untested on day one.
+  *must* include those, else `applicable_with_adjustments` branch
+  untested on day one.
+- **A3 low-confidence handling.** Phase 1–3: post all answers
+  (accumulate signal). Phase 4+: route <0.60 confidence to human
+  review if metrics warrant.
 
-### 13.5 What we need from the team
+### 14.5 What we need from the team
 
 1. Read/export access to the current prod `fix_embeddings`
    collection (track 2(a)).
 2. One SME-hour to spot-check the first 20 synthetic variants
-   (track 2(b)) so we confirm the "same fix should still apply"
-   assumption holds before generating the rest.
-3. Agreement that the Phase 1 accuracy gate is qualitative (no
-   regressions + SME spot-check), not a specific accuracy
-   percentage. This is the honest position at n=400.
-4. A budget for shadow-mode logging in Phase 2: ~2 KB extra log per
-   shadowed request → ~60 MB over 2 weeks at 1 k/day.
+   (track 2(b)) so we confirm "same fix should still apply" before
+   generating the rest.
+3. Agreement that Phase 1 accuracy gate is qualitative (no
+   regressions + SME spot-check), not a specific accuracy %. This is
+   the honest position at n=400.
+4. A budget for shadow-mode logging: ~2 KB extra log per shadowed
+   request → ~60 MB per phase over 2 weeks at 1 k/day.
 
 ---
 
-## 14. Appendix C — Future-reader Checklist
+## 15. Appendix D — Future-reader Checklist
 
 If picking this up cold (new engineer, future Claude session):
 
