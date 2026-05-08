@@ -11,10 +11,10 @@ same fix for unrelated build failures. The root cause is four major bugs i.e err
 **What we are proposing.** A *Hybrid* design with two layers:
 
 - Issue must be fixed at Extractor/Analyzer:
-  separate error from context on request
-  Normalize before embedding, switch Chroma to cosine distance and update-not-insert on Slack approval.
+  separate error from context on request. 
+  Normalize the error before embedding, switch Chroma(l2) to Chroma(cosine) distance and update-not-insert on Slack approval.
 - A single **LLM agent** (the *Deviation Analyzer*, "A3")
-  Now we have error and error context using few agents like Error Summariser, Deviation Analyzer, Solution Synthesizer, Reporter
+  Now we have error and error-context using few agents like Error Summariser, Deviation Analyzer, Solution Synthesizer, Reporter.
 
 | # | Agent | Role | LLM? | Input | Output |
 |---|---|---|---|---|---|
@@ -24,123 +24,14 @@ same fix for unrelated build failures. The root cause is four major bugs i.e err
 | A4 | **Reporter** | Format final structured output to Slack blocks + developer DM | No | structured fix | Slack payload |
 
 
-## 3. Root Cause (code-level)
-
-Four compounding bugs. Each alone would be a nuisance; together they
-guarantee the symptom.
-
-### 3.1 Error and context glued into one blob before embedding
-
-`src/log_error_extractor.py:138`:
-```python
-# Join all lines into a single string with newlines and return as list with one element
-return ['\n'.join(sections)]
-```
-
-The extractor concatenates matched error lines with their surrounding
-context, prefixes every line with `"Line N: ..."`, and returns it as a
-single-element list. The embedding is then dominated by generic
-context noise — timestamps, paths, surrounding build output — not by
-the specific failure.
-
-### 3.2 Similarity math uses the wrong metric
-
-`build-failure-analyzer/vector_db.py:47` creates the Chroma collection
-with the default distance metric (L2 / Euclidean). Later at
-`vector_db.py:212`:
-```python
-sim = 1 - dist   # ← only valid for cosine distance
-```
-
-`1 - distance` only yields a similarity score in `[0, 1]` when
-distance is cosine. With L2 the value can go negative for very
-different vectors, and for a long-text "centroid" embedding the L2
-distance tends to stay small, so the computed `sim` artificially
-rises above the 0.78 threshold even for unrelated queries.
-
-### 3.3 Vector row IDs are non-deterministic across restarts
-
-`vector_db.py:276`:
-```python
-unique_id = f"fix-{abs(hash(error_text)) & ((1 << 128) - 1):032x}"
-```
-
-Python's builtin `hash()` is salted per process, so the same error
-text produces a different ID every time the service restarts. Slack
-approvals that should update an existing row keep inserting new ones.
-Once the poisoning row exists, it is effectively permanent.
-
-### 3.4 Whole-blob SHA is used as the cache key
-
-`analyzer_service.py:284`:
-```python
-error_hash = hashlib.sha256(error_text.encode()).hexdigest()
-```
-
-Any timestamp change in the blob produces a different SHA, so the
-Redis `sme:fix:<hash>` and `ai:fix:<hash>` caches almost never hit.
-Every request re-embeds and re-queries, giving the poisoning row
-another opportunity to match.
-
-### 3.5 Why these compound
-
-| Bug | Alone it means… | Combined effect |
-|---|---|---|
-| 3.1 blob embedding | retrieval matches on context noise | wide similarity band to anything with similar surrounding output |
-| 3.2 L2 vs cosine | thresholds miscalibrated | blob row scores above 0.78 for everything |
-| 3.3 salted hash IDs | duplicates accumulate | bad row re-inserted forever, never updated |
-| 3.4 SHA-of-blob cache | cache hit rate near zero | bad retrievals get re-evaluated every request |
-
-The Hybrid design fixes all four at the source (§5), then layers a
-single LLM agent on top (§6) for cases where pure vector math is not
-enough.
-
----
-
-## 4. The Hybrid Design — Overview
-
-Two layers, deliberately stacked.
-
-```
-                    ┌──────────────────────────────────────┐
-                    │   Layer 2 — Agentic                  │
-                    │   A3 Deviation Analyzer              │
-                    │   (fires on ~15% of requests)        │
-                    └──────────────────────────────────────┘
-                              ▲       ▲
-                              │       │ ambiguous match
-                              │       │ (multiple candidates,
-                              │       │  or one in [0.90, 0.95))
-                              │       │
-                    ┌─────────┴───────┴────────────────────┐
-                    │   Layer 1 — Deterministic Foundation │
-                    │   Split error/context, normalize,    │
-                    │   cosine, deterministic IDs,         │
-                    │   update-not-insert                  │
-                    │   (handles ~85% of requests alone)   │
-                    └──────────────────────────────────────┘
-```
-
-The deterministic foundation handles the ~70% cache-hit traffic and
-the ~15% clear-hit / clear-miss traffic on its own. A3 only fires on
-the remaining ~15% — requests where the vector DB returns at least
-one meaningful candidate but applicability is uncertain.
-
-**Why two layers and not one.** A single-layer deterministic system
-(split error, cosine, etc.) catches exact and near-exact repeats but
-returns stored fixes verbatim — even when a small adjustment is
-needed (e.g., stored fix says "downgrade to react@17", new error is
-on `react@18.2.0`). A3 reads the new error, the stored error, and
-the stored fix, and decides whether the fix applies as-is or needs
-adjustments. That single judgment captures most of the "variant"
-bucket without paying the agent tax on every request.
+## 4. The Hybrid Design
 
 ### 4.1 Combined per-request flow
 
 ```
 POST /api/analyze
   │
-  ├─ Redis sme:fix:<fp> / ai:fix:<fp>           cache hits, ~70% of traffic
+  ├─ Redis sme:fix:<fp> / ai:fix:<fp>           cache hits, ~X% of traffic
   │     └─ HIT → DM developer, done
   │
   ├─ VectorDB.lookup_candidates(fp, top_k=10, threshold=0.90)
@@ -161,15 +52,11 @@ POST /api/analyze
         └─ none applicable                      → LLM Synthesizer
 ```
 
----
-
 ## 5. Foundation Layer — Deterministic Fixes
 
-This is what we ship in Phase 1 and what every subsequent layer
-depends on. Without this, an A3 agent reasoning over a poisoned DB
-just produces wrong answers more expensively.
+This is what we ship in Phase 1 and what every subsequent layer depends on.
 
-### 5.1 Wire contract change (extractor → analyzer)
+### 5.1 Change needed in BFA request (extractor → analyzer)
 
 Today the analyzer receives `FailedStep.error_lines = [<one big
 blob>]`. Change it to a list of per-region objects:
@@ -181,18 +68,14 @@ blob>]`. Change it to a list of per-region objects:
     {
       "error_lines":       ["npm ERR! code ERESOLVE", "npm ERR! peer dep ..."],
       "context_lines":     ["Resolving dependencies...", "..."],
-      "error_fingerprint": "npm err code eresolve peer dep <VERSION> <PATH>"
     }
   ]
 }
 ```
 
-Keep `error_lines: List[str]` on the analyzer for one release overlap
-so old extractor clients continue working.
-
 ### 5.2 Normalization
 
-New helper `normalize_error_text(error_lines) -> str`:
+The normalized text is used for the embedding input. New helper `normalize_error_text(error_lines) -> str`:
 
 - strip `"Line N:"` prefixes
 - strip ISO timestamps, `[HH:MM:SS]`, epoch millis
@@ -201,8 +84,6 @@ New helper `normalize_error_text(error_lines) -> str`:
 - collapse whitespace, lowercase
 - truncate to 512 tokens (granite-embedding's input ceiling)
 
-The normalized text is used for both the deterministic row ID and
-the embedding input.
 
 ### 5.3 Cosine distance + deterministic IDs
 
@@ -219,8 +100,7 @@ client.get_or_create_collection(
 L2-normalize every embedding vector before `add()` and `query()`.
 Replace the Python `hash()`-based ID with `sha256(fingerprint)`
 (stable across process restarts). Tighten the similarity threshold
-for the error-only embedding to **0.90** (meaningful on cosine,
-unlike today's 0.78 on miscalibrated L2).
+for the error-only embedding to **0.70 to 0.90**
 
 ### 5.4 Store only the error in the vector DB
 
@@ -232,8 +112,7 @@ Rewrite `save_fix_to_db`:
   (first ~2 KB of joined context, **metadata only**, never embedded),
   `approver`, `status`, `fix_id`, `revision`, repo/branch/job
 
-Context lines stay available for display and disambiguation but
-never pollute the retrieval embedding.
+Context lines stay available for display and disambiguation but never pollute the retrieval embedding.
 
 ### 5.5 Context-based disambiguation
 
@@ -268,31 +147,15 @@ bumped in metadata) instead of creating a duplicate.
 
 ---
 
-## 6. Agentic Layer — A3 Deviation Analyzer
+## 6. Agentic Layer
 
-### 6.1 Why exactly one agent
+### 6.1 Error Summariser
+### 6.2 Deviation Analyzer
+### 6.3 Solution Synthesizer
+### 6.4 Reporter
 
-A full agentic redesign was considered (seven coordinated agents:
-Classifier, Retrieval, Deviation Analyzer, Disambiguator,
-Synthesizer, Validator, Reporter — see `PROPOSAL.md` §4 for the full
-analysis). The key finding: only the Deviation Analyzer has
-leverage that justifies its cost.
 
-| Candidate agent | Why we drop it |
-|---|---|
-| Classifier (A1) | Redundant — `normalize_error_text` already produces a canonical fingerprint |
-| Retrieval (A2) | Not really an agent — just a vector DB tool call |
-| Disambiguator (A4) | Context-cosine in §5.5 already disambiguates |
-| Synthesizer (A5) | Already exists as today's LLM fallback (`call_llm`); no agent needed |
-| Validator (A6) | YAGNI until a real safety incident; regex pre-checks catch obvious dangers |
-| Reporter (A7) | Pure formatting — deterministic code |
-
-A3 is the only one where natural-language reasoning measurably beats
-geometry: it judges whether a 0.92-similar stored fix actually
-applies to this specific variant and, if so, proposes minimal
-adjustments.
-
-### 6.2 What A3 does
+### 6.2 What A3 Deviation Analyzer does
 
 Given:
 - the *new* error (its fingerprint, raw lines, and context sample)
