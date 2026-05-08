@@ -1,98 +1,27 @@
-# Build Failure Analyzer — Hybrid Redesign
+## 1. Overview
 
-A self-contained design document for the proposed redesign of the
-`build-failure-analyzer` service. Audience: engineering team review.
+BFA MVP-2 extends the current error analyzer tool with autonomous action capabilities — enabling automatic code fixes for pipeline failures, intelligent retry mechanisms after fix application, and failure tracking with knowledge base accumulation.
+The vision is to evolve from a passive analyzer into an active problem-solver that can detect failures, propose solutions, and help teams validate fixes seamlessly through GitLab CI pipelines.
 
-This is the implementation track. Background and the alternatives we
-considered live in `PROPOSAL.md`; current behavior is documented in
-`CURRENT_FLOW.md`.
+## Existing Problem
 
-Branch: `claude/setup-log-analysis-bedrock-gmLHN`.
-
----
-
-## 1. Executive Summary
-
-After roughly a week in production, the analyzer started returning the
-same fix for unrelated build failures. The root cause is four
-compounding bugs in how errors are embedded, hashed, stored, and
-matched in the Chroma vector database — not a tuning issue.
+If there is no approval, the analyzer is working fine. The moment we have approval with a big chunk of error message, the analyzer starts returning the
+same fix for unrelated build failures. The root cause is four major bugs i.e errors and context, Similarity math, slack insert (no updates), 
 
 **What we are proposing.** A *Hybrid* design with two layers:
 
-- A **deterministic foundation** that fixes the four bugs at the source:
-  separate error from context on the wire, normalize before embedding,
-  switch Chroma to cosine distance, use deterministic SHA IDs, and
-  update-not-insert on Slack approval.
-- A single **LLM agent** (the *Deviation Analyzer*, "A3") that fires
-  only on ambiguous matches — i.e., the ~15% of requests where the
-  vector DB returns a candidate that is meaningful but not clearly
-  exact. A3 decides whether the stored fix applies as-is, applies with
-  small adjustments (version numbers, paths), or does not apply.
+- Issue must be fixed at Extractor/Analyzer:
+  separate error from context on request
+  Normalize before embedding, switch Chroma to cosine distance and update-not-insert on Slack approval.
+- A single **LLM agent** (the *Deviation Analyzer*, "A3")
+  Now we have error and error context using few agents like Error Summariser, Deviation Analyzer, Solution Synthesizer, Reporter
+| # | Agent | Role | LLM? | Input | Output |
+|---|---|---|---|---|---|
+| A1 | **Error Summariser** | Analyze and Understand the error | Light Weight | Error lines and Context | Error summary |
+| A2 | **Deviation Analyzer** | Decide `exact / applicable_with_adjustments / partial / no_match` per candidate | Yes | current error, stored error, stored fix | `{match_quality, adjusted_fix?, reasoning, confidence}` |
+| A3 | **Solution Synthesizer** | Generate a fresh fix when no stored fix applies; cite any partial matches | Yes | error, context, domain snippet, partial matches | `{fix_text, confidence, cited_candidates[]}` |
+| A4 | **Reporter** | Format final structured output to Slack blocks + developer DM | No | structured fix | Slack payload |
 
-**Headline numbers at 1,000 requests/day:**
-
-| Metric | Today (broken) | Hybrid (proposed) |
-|---|---|---|
-| Cost per 1k requests | ~$15 | ~$3 |
-| LLM API calls per 1k requests | 1,000 (every request) | ~300 |
-| p50 latency | 5–8 s | 400 ms–8 s (depending on hit/miss) |
-| Wrong-answer rate (variant errors) | ~80% | ~13–15% |
-| Code change | — | ~900 LoC + 300 LoC tests |
-
-**Implementation order is non-negotiable.** Ship the deterministic
-foundation first. Add A3 behind a feature flag in a follow-up. Roll
-out at 10% traffic, then 100%. Every phase is revertible in <60s via
-env-var flip.
-
----
-
-## 2. The Problem
-
-### 2.1 What developers see today
-
-A build fails. The Slack DM arrives with a fix. The fix is confidently
-worded but describes a different problem — often the same "fix"
-another developer got yesterday for a completely unrelated failure.
-
-### 2.2 Why this matters
-
-- Developers lose confidence in the fix suggestions, traffic to the
-  channel drops, less SME feedback flows back.
-- SMEs see increasingly irrelevant "please approve" messages and
-  disengage. The human-in-the-loop curation that was meant to grow
-  the approved-fix corpus stalls.
-- The fallback LLM path is still in place but pays full Bedrock Claude
-  Sonnet price on every request because the existing cache key is a
-  SHA of the entire log blob — and any timestamp change misses the
-  cache.
-
-### 2.3 When it started
-
-The analyzer was deployed roughly a week ago. For the first few days
-it behaved well because the vector DB was nearly empty — the service
-fell through to the LLM for most requests, and the LLM did a
-reasonable job with fresh context each time.
-
-Then a very large log (several kilobytes of `error_lines` blob
-including 50 lines of surrounding context per error) was approved via
-Slack and saved to the vector DB. From that point on, the embedding
-of that large blob has been matching almost every new error —
-regardless of whether the root cause has anything to do with it.
-
-### 2.4 What the existing flow does (1-paragraph recap)
-
-The extractor (`src/log_error_extractor.py`) finds matched error
-lines, expands each match into a context window (50 lines before, 10
-after by default), merges overlapping ranges, and posts a single blob
-to `/api/analyze` as `failed_steps[*].error_lines = ["<big blob>"]`.
-The analyzer (`build-failure-analyzer/analyzer_service.py:267`) SHAs
-the full blob for cache lookup, queries Chroma with the blob's
-embedding, falls through to the LLM on a miss, and relies on Slack
-Approve/Edit (`slack_reviewer.py:139`) to persist fixes. See
-`CURRENT_FLOW.md` for the full walkthrough.
-
----
 
 ## 3. Root Cause (code-level)
 
