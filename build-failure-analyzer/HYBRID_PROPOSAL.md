@@ -337,3 +337,178 @@ bumped in metadata) instead of creating a duplicate.
 | Variant errors return stored fix verbatim | Still returns verbatim — Layer 2 (A3) handles this |
 
 ---
+
+## 6. Agentic Layer — A3 Deviation Analyzer
+
+### 6.1 Why exactly one agent
+
+A full agentic redesign was considered (seven coordinated agents:
+Classifier, Retrieval, Deviation Analyzer, Disambiguator,
+Synthesizer, Validator, Reporter — see `PROPOSAL.md` §4 for the full
+analysis). The key finding: only the Deviation Analyzer has
+leverage that justifies its cost.
+
+| Candidate agent | Why we drop it |
+|---|---|
+| Classifier (A1) | Redundant — `normalize_error_text` already produces a canonical fingerprint |
+| Retrieval (A2) | Not really an agent — just a vector DB tool call |
+| Disambiguator (A4) | Context-cosine in §5.5 already disambiguates |
+| Synthesizer (A5) | Already exists as today's LLM fallback (`call_llm`); no agent needed |
+| Validator (A6) | YAGNI until a real safety incident; regex pre-checks catch obvious dangers |
+| Reporter (A7) | Pure formatting — deterministic code |
+
+A3 is the only one where natural-language reasoning measurably beats
+geometry: it judges whether a 0.92-similar stored fix actually
+applies to this specific variant and, if so, proposes minimal
+adjustments.
+
+### 6.2 What A3 does
+
+Given:
+- the *new* error (its fingerprint, raw lines, and context sample)
+- one *stored* candidate (its stored error, its stored fix)
+
+A3 returns a strict JSON verdict:
+
+```json
+{
+  "match_quality":  "exact_match | applicable_with_adjustments | partial | no_match",
+  "confidence":     0.92,
+  "reasoning":      "<1-2 paragraphs>",
+  "adjusted_fix":   "<modified fix text, only if applicable_with_adjustments>",
+  "adjustments":    ["downgrade react: 17 -> 18.2", "path: /opt/old -> /opt/new"]
+}
+```
+
+A3 must not invent new fixes. If the stored fix doesn't mostly
+apply, A3 returns `partial` or `no_match` and the orchestrator
+falls through to the LLM Synthesizer.
+
+### 6.3 When A3 fires
+
+A3 runs **only** in two situations:
+
+1. The vector DB returns exactly one candidate with cosine similarity
+   in the band `[0.90, 0.95)` — meaningful but not clearly exact.
+2. The vector DB returns ≥2 candidates with cosine similarity ≥ 0.90.
+   In this case A3 runs in parallel on the top-3 candidates.
+
+A3 **never** runs when:
+- The cache shortcuts hit (Redis sme:fix or ai:fix). ~70% of traffic.
+- The single top candidate scores ≥0.95 (treated as high-confidence
+  exact). ~10% of traffic.
+- No candidate scores ≥0.90 (true miss; route to LLM Synthesizer).
+  ~5% of traffic.
+
+Net: A3 fires on roughly 15% of requests.
+
+### 6.4 A3 result caching
+
+Each A3 decision is cached in Redis for 7 days:
+
+- key  = `agent:deviation:sha(query_fingerprint + candidate_id)`
+- value = the full A3 verdict JSON
+
+Two developers hitting the same error pattern within a week share
+the A3 decision. The second request pays $0 for A3.
+
+### 6.5 Failure handling
+
+A3 is best-effort. If it:
+- times out (>6 s)
+- returns malformed JSON after one retry
+- returns confidence <0.5
+
+…the orchestrator skips A3 and routes to the LLM Synthesizer. Worst
+case: same behavior as the foundation layer alone. No regression.
+
+### 6.6 What A3 measurably adds
+
+The "variant" bucket — same root cause, different specifics. Examples:
+
+| Stored error | New error | Foundation alone | With A3 |
+|---|---|---|---|
+| `npm peer dep react@16 required, found react@17.0.1` | `npm peer dep react@16 required, found react@18.2.0` | returns "downgrade to 17" verbatim — wrong version | `applicable_with_adjustments`, fix updated to "downgrade to 17.0.x" |
+| `Maven build failed: missing artifact com.acme:lib:1.2.3` | `…:lib:1.4.0` | returns 1.2.3 fix as-is | adjusts version in mvn command |
+| `Jenkins agent timeout (node-12)` | `…(node-19)` | returns node-12 reset steps | adjusts node identifier in fix |
+
+Foundation accuracy on this bucket: ~60–70%. With A3: ~85–90%.
+Hybrid captures most of that lift without paying for A3 on the 70%
+of requests that are clear cache hits.
+
+---
+
+## 7. Past Errors and Migration
+
+### 7.1 What "past errors" are
+
+The fixes already approved by SMEs over the past week, sitting in
+the current Chroma `fix_embeddings` collection. Each is a real
+error + real SME-approved fix + metadata.
+
+### 7.2 Why preserving them is high-value
+
+These are the corpus that makes the vector DB economically useful.
+
+| Effect | Empty DB (start fresh) | With cleaned past errors |
+|---|---|---|
+| Cost per 1k requests | ~$15 (every request hits LLM) | ~$3 (Hybrid hit rates) |
+| p50 latency | ~5–8 s | 400 ms–8 s |
+| SME workload | Re-approve errors already approved once | Approvals accumulate; one decision serves N future devs |
+| Same error asked twice | Different LLM answers possible | SME-approved answer persists |
+| Cold-start | System starts cold | System starts hot |
+
+Concrete benefits:
+
+1. **Flywheel.** One SME approval serves N future developers. Starting
+   fresh resets the wheel.
+2. **Cost leverage.** At a 50% hit rate on past errors, ~$13 saved
+   per 1 k requests — roughly $400/month at 1 k/day.
+3. **Consistency.** Developers learn "this error has a known fix";
+   that breaks the moment the DB is emptied.
+4. **Latency floor.** Cached / vector-DB answers return in
+   hundreds of milliseconds; LLM calls take seconds.
+5. **Encoded tribal knowledge.** Some approved fixes capture things
+   a general-purpose LLM cannot reproduce — internal system names,
+   custom Jenkins agents, repo-specific quirks.
+6. **A3 leverage.** Every A3 candidate is a *past* fix. More past
+   fixes = more opportunities for A3 to find an
+   `applicable_with_adjustments` match = fewer expensive Synthesizer
+   fallbacks.
+
+### 7.3 Why we can't just import them as-is
+
+- Poisoning rows (>5 KB blobs) carry over and continue contaminating
+  retrieval.
+- Duplicate rows from the salted-hash ID bug persist forever.
+- Stored `error_text` has timestamps/paths baked in; without
+  re-normalizing, those rows can't match new normalized queries —
+  they sit in the DB unreachable.
+
+### 7.4 The migration script
+
+A one-off `scripts/migrate_vector_db.py` does the cleanup:
+
+1. Open the existing `fix_embeddings` collection read-only.
+2. For each row:
+   - Re-derive `error_fingerprint` via `normalize_error_text`.
+   - **Skip** if `len(metadata.error_text) > 5 KB` (poisoning
+     outliers), `fix_text` empty, or `status` not in
+     `("approved", "edited")`.
+   - Re-embed normalized fingerprint with `granite-embedding`.
+   - L2-normalize the vector.
+   - Write to `fix_embeddings_v2` with deterministic ID
+     `sha256(fingerprint)`. On duplicate fingerprint, keep the most
+     recent approval and bump `revision`.
+3. Run in staging first against a copy of prod. After verification,
+   flip `CHROMA_COLLECTION=fix_embeddings_v2` on the analyzer and
+   restart. Keep the old collection on disk for rollback.
+
+### 7.5 Expected outcome
+
+Rough estimate: ~70% of existing rows carry over cleanly into v2.
+The remaining ~30% are the poisoning outliers and the salted-hash
+duplicates we want gone. Numbers will firm up after the script runs
+in Phase 1.
+
+---
