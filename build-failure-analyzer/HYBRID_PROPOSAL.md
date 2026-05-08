@@ -512,3 +512,94 @@ duplicates we want gone. Numbers will firm up after the script runs
 in Phase 1.
 
 ---
+
+## 8. Why Hybrid (and not the alternatives)
+
+### 8.1 Why not deterministic alone
+
+The deterministic foundation (Layer 1) handles ~85% of requests
+correctly: cache hits, exact vector matches, true LLM-fallback misses.
+What it cannot do is reason about the **variant bucket** — same root
+cause, different specifics. Without A3, those queries either return a
+stored fix verbatim (developer has to mentally translate the version
+number) or fall through to the LLM unnecessarily.
+
+Foundation alone:
+- ✅ Fixes the four root-cause bugs.
+- ✅ Cheapest possible — ~$1.50 per 1 k requests.
+- ❌ Variant accuracy: ~60–70%.
+
+### 8.2 Why not full agentic (every request through 5–7 agents)
+
+A full agentic redesign has the highest accuracy ceiling but pays the
+agent tax on every request, including the 70% that are trivial cache
+hits. At 1 k requests/day:
+
+- **Cost**: ~$30–40/day vs ~$3/day for Hybrid.
+- **Latency**: 12 s p50 vs 400 ms p50 for Hybrid.
+- **Determinism**: full agentic is non-deterministic on every request;
+  same error can yield different advice on different days. SMEs lose
+  trust.
+- **Code complexity**: ~2,500 LoC vs ~900 LoC for Hybrid.
+
+The accuracy gain on the variant bucket is roughly the same as
+Hybrid's; we'd be paying ~10× the cost for ~0% accuracy lift.
+
+### 8.3 Hybrid splits the difference correctly
+
+- Inherits the deterministic foundation (cheap and fast on the 85%).
+- Pays for A3 only on the ~15% where it measurably helps.
+- Falls back gracefully to the LLM Synthesizer if A3 misbehaves —
+  worst case = foundation alone.
+- ~$3/day, 400 ms p50, ~85–90% on variants.
+
+---
+
+## 9. What Changes — File-by-File
+
+| # | File | Change | Est LoC |
+|---|---|---|---|
+| 1 | `src/log_error_extractor.py` | Split `extract_error_sections` to emit per-region `{error_lines, context_lines, error_fingerprint}` | 60 |
+| 2 | `src/api_poster.py` | New `errors` payload shape; legacy `error_lines` kept for one release | 30 |
+| 3 | `build-failure-analyzer/analyzer_service.py` | `FailedStep` schema → `errors: List[ErrorEntry]`; cache keys use fingerprint; delegate to orchestrator | 80 |
+| 4 | `build-failure-analyzer/vector_db.py` | `normalize_error_text`; deterministic sha256 ID; cosine space; `context_sample` metadata; top-K disambiguation | 150 |
+| 5 | `build-failure-analyzer/resolver_agent.py` | Pass `error_fingerprint` + `context_lines` through; enrich Synthesizer prompt with partial-match citations | 40 |
+| 6 | `build-failure-analyzer/slack_reviewer.py` | `collection.update()` on fingerprint ID (replaces `add()`) | 20 |
+| 7 | `build-failure-analyzer/agents/base.py` *(new)* | Bounded agent runner, tool-use loop, JSON schema validation, audit-trail entry | 120 |
+| 8 | `build-failure-analyzer/agents/deviation.py` *(new)* | A3 Deviation Analyzer | 80 |
+| 9 | `build-failure-analyzer/orchestrator.py` *(new)* | State machine from §4.1; feature flag; budget enforcement | 150 |
+| 10 | `build-failure-analyzer/prompts/deviation.md` *(new)* | A3 system + user prompts | — |
+| 11 | `scripts/migrate_vector_db.py` *(new)* | One-off migration | 80 |
+| 12 | Tests (`tests/`, `build-failure-analyzer/tests/`) | Unit tests + golden-set integration | 300 |
+| 13 | `build-failure-analyzer/eval/regression_set.jsonl` *(new)* | 50 seed pairs + augmented variants | data |
+| 14 | `build-failure-analyzer/eval/run_eval.py` *(new)* | Replay harness + grading | 120 |
+
+**Total:** ~1,130 LoC product code + 300 LoC tests + eval tooling
+and seed data. Estimated 2–3 weeks for one engineer including
+Phase 0.
+
+---
+
+## 10. Phased Rollout
+
+| Phase | Scope | Duration | Gate to advance | Rollback |
+|---|---|---|---|---|
+| **0 — Eval harness** | Build regression suite from the 50 seed pairs (pass/fail assertions). Augment to ~200–400 via prod Chroma dump + synthetic variants + LLM-generated stress tests (see §13). | ~1 week | Regression suite runs in CI; baseline grades published | n/a — pure tooling |
+| **1 — Land foundation** | Implement §5 in extractor + analyzer. Run migration script (§7.4) against staging copy of prod Chroma. Swap `CHROMA_COLLECTION` env var. | ~1 week | No regressions on regression suite; SME spot-check of 20 live responses rates ≥ baseline; poisoning row count in v2 = 0 | Revert env var to old collection |
+| **2 — Add A3 in shadow mode** | Implement `agents/base.py`, `agents/deviation.py`, `orchestrator.py`, prompt template. Feature flag `AGENTIC_MODE=off\|shadow\|on`. In shadow, A3 runs and logs decisions but the user-visible response comes from foundation alone. | ~1 week | A3 shadow decisions match SME verdicts on ≥80% of shadowed requests over 2 weeks; A3 p99 < 6 s; A3 JSON-schema failure rate < 2% | Flag back to `off` |
+| **3 — 10% traffic with A3 active** | Flip flag to `on` for 10% of `/api/analyze` traffic. Monitor cost, latency, SME approval rate, developer feedback. | ~2 weeks | Cost within forecast; SME approval rate ≥ Phase 1 baseline; no customer complaints attributable to A3 | Flag back to 0% |
+| **4 — 100% rollout** | All traffic. Close out. | ~1 week | Stable for 2 weeks | Flag back to 10% |
+| **5 (optional)** | Add further agents only if signals require: A6 Validator on a safety incident, A1 Classifier if retrieval precision is still low, A4 Disambiguator if §5.5 ties exceed 5%. | n/a | per-agent eval lift ≥ 5% | Per-agent flag |
+
+### 10.1 Non-negotiables
+
+- **Phase 0 before Phase 1.** Without the regression suite we have
+  nothing to fall back on if Phase 1 introduces a regression. This
+  is the single biggest risk item.
+- **Phase 1 before Phase 2.** A3 reasoning over an un-migrated DB is
+  still reasoning over poisoned data.
+- **Feature flag everywhere.** Every phase must be revertible in
+  under 60 seconds via env-var flip. No code-revert rollbacks on a
+  weekend.
+
+---
