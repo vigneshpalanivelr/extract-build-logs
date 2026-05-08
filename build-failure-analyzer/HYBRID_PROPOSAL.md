@@ -603,3 +603,250 @@ Phase 0.
   weekend.
 
 ---
+
+## 11. Open Questions for Team
+
+The team needs to make calls on these before implementation begins.
+
+1. **Orchestrator timeout vs upstream SLA.** Hybrid's total budget is
+   45 s per request. Does Jenkins/GitLab post-build hook tolerate
+   that? If the extractor retries on timeout we risk duplicate
+   analyses.
+
+2. **Eval-harness ownership.** Phase 0 is the biggest risk item.
+   Who owns curating the seed pairs, running augmentation, and
+   maintaining the replay/grading script over time?
+
+3. **Per-team threshold tuning.** Should the 0.90 vector threshold,
+   the top-K fan-out (currently 3 for A3), and the context-cosine
+   tie margin (0.05) be configurable per repo? Different teams have
+   very different log styles.
+
+4. **A3 `adjusted_fix` approval gating.** When A3 returns an
+   adjusted version of a stored fix, should it:
+   - (a) go to the developer directly with a note that it's derived;
+   - (b) go through a fresh SME Approve/Edit cycle; or
+   - (c) go through a lighter thumbs-up review in Slack?
+
+   Recommendation: (c) — base fix is already SME-approved, so a
+   lighter touch is appropriate.
+
+5. **Bedrock migration scope.** Branch is
+   `claude/setup-log-analysis-bedrock-gmLHN`. Does the Bedrock LLM
+   swap (from OpenWebUI to native Bedrock SDK) complete within this
+   scope or as a separate PR? Hybrid is LLM-backend-agnostic.
+
+6. **Salvage existing approved fixes.** Migration carries over
+   ~70% of `fix_embeddings` (dropping poisoning outliers and
+   duplicates) — the default per §7. Does the team prefer this, or
+   start with empty `fix_embeddings_v2` and have SMEs re-approve?
+   Recommendation: salvage.
+
+7. **`pipeline_context` collection.** The domain-RAG collection
+   (`pipeline_context_rag.py`) uses threshold 0.55. Should it also
+   migrate to explicit cosine space, or leave as-is? It is read-only
+   and not affected by the poisoning bug. Recommendation: leave for
+   now, revisit only if precision drops.
+
+---
+
+## 12. Appendix A — A3 Deviation Analyzer Specification
+
+### 12.1 Role
+
+Given the current error (normalized fingerprint + raw lines + context
+sample) and a candidate stored fix (its stored error + its stored fix
+text), decide whether the stored fix applies. If it applies with
+small adjustments (version numbers, paths, identifiers), emit an
+`adjusted_fix`. Do not invent new fixes — fall through to the
+Synthesizer for that.
+
+### 12.2 Output JSON schema
+
+```json
+{
+  "type": "object",
+  "required": ["match_quality", "confidence", "reasoning"],
+  "properties": {
+    "match_quality": {
+      "enum": ["exact_match", "applicable_with_adjustments", "partial", "no_match"]
+    },
+    "confidence":   { "type": "number", "minimum": 0, "maximum": 1 },
+    "reasoning":    { "type": "string", "maxLength": 2000 },
+    "adjusted_fix": { "type": "string" },
+    "adjustments":  { "type": "array", "items": { "type": "string" } }
+  }
+}
+```
+
+### 12.3 System prompt sketch
+
+> You compare a CURRENT CI/CD build error with one STORED error and
+> its approved STORED fix, and decide whether the stored fix applies.
+>
+> Output STRICT JSON matching the provided schema. No prose outside
+> the JSON object.
+>
+> Match-quality values:
+> - `exact_match` — identical root cause; fix applies verbatim
+> - `applicable_with_adjustments` — same root cause; small edits
+>   needed (version numbers, paths). Provide `adjusted_fix` and list
+>   changes in `adjustments`.
+> - `partial` — some steps of the stored fix apply; list which.
+> - `no_match` — different root cause.
+>
+> Do not invent new remediation steps. If the stored fix does not
+> mostly apply, return `partial` or `no_match` and let downstream
+> synthesis handle it.
+
+### 12.4 Trigger conditions
+
+A3 fires only when the orchestrator state machine reaches one of:
+
+- Exactly 1 candidate with cosine similarity in `[0.90, 0.95)`.
+- ≥2 candidates with cosine similarity ≥ 0.90 (A3 runs in parallel,
+  top-3 candidates).
+
+Never fires when:
+- 0 candidates above 0.90 → Synthesizer.
+- 1 candidate at ≥ 0.95 → high-confidence exact, no A3.
+- Cache shortcut hits → no A3.
+
+### 12.5 Caching
+
+- Redis key: `agent:deviation:sha(query_fingerprint + candidate_id)`
+- TTL: 7 days
+- Two developers hitting the same error pattern within a week share
+  the decision; second request pays $0 for A3.
+
+### 12.6 Cost & latency
+
+- Average input: ~3 K tokens (prompt + error + candidate fix).
+- Average output: ~300 tokens.
+- Bedrock Claude Sonnet pricing: ~$0.015 per A3 call.
+- p99 latency: ~6 s (with one retry on schema validation failure).
+
+---
+
+## 13. Appendix B — Eval Strategy Under Sparse Data
+
+Phase 0 starts with only ~50 labeled pairs, each a single error line
+and a single solution line (no multi-line context, no surrounding log
+noise). This appendix adapts the plan for that reality.
+
+### 13.1 Why 50 one-line pairs is not enough on its own
+
+**Statistical power.** At n=50 the standard error on an accuracy
+estimate near 80% is roughly ±5.7%. The 95% CI for the *difference*
+between two approaches is ±16–18 percentage points. The 3–4% overall
+lift Hybrid offers is invisible at this sample size — only
+catastrophic regressions (~20%+) are reliably detectable.
+
+**Coverage gaps.** Clean one-line pairs do not exercise:
+
+| Pipeline feature | Exercised by one-line pairs? |
+|---|---|
+| Normalizer (strip timestamps, paths, SHAs, line prefixes) | No — nothing to strip |
+| Context-cosine disambiguator (§5.5) | No — no context lines present |
+| A3 `adjusted_fix` / `adjustments` output | Barely — no version numbers or paths to adjust |
+| Multi-region merging in the extractor | No |
+| Blob-poisoning regression | No — clean inputs do not reproduce the bug |
+| Deterministic fingerprint ID | Yes |
+| Cosine similarity threshold | Yes (only on clean short inputs) |
+| LLM Synthesizer fallback | Yes |
+
+### 13.2 Three-track mitigation
+
+**Track 1 — Reframe the 50 as a regression suite, not a statistical
+benchmark.** Each pair becomes a pass/fail assertion: *given this
+error, the final response must contain these keywords and must not
+contain these anti-keywords.* Runs in CI on every PR. Catches
+catastrophic regressions; cannot prove "A is better than B".
+
+**Track 2 — Augment the corpus to ~200–400 pairs in a week.**
+
+- (a) **Prod Chroma dump.** Export all current `fix_embeddings` rows
+  with `status in ("approved", "edited")`. Drop poisoning rows
+  (>5 KB) and duplicates. Yield: 50–200 pairs with richer text than
+  the seed 50.
+- (b) **Synthetic variants of the 50 seeds.** Author 3–5 variants
+  per seed that change version numbers, file paths, timestamps, or
+  container IDs but should still map to the same fix. Tests
+  normalizer + A3 directly. Yield: 150–250 new pairs.
+- (c) **LLM-generated stress tests.** Use Claude to paraphrase each
+  seed into 2–3 realistic variants with surrounding log noise.
+  Flags brittle normalizer regexes and A3 prompt failure modes.
+  Yield: 100–150 pairs labeled "synthetic, not gold".
+
+Combined: 50 → ~400 pairs. Enough for Phase-1-grade offline checks.
+
+**Track 3 — Make live shadow mode the primary accuracy signal.**
+Offline eval at n=50–400 cannot distinguish small lift from noise.
+Production telemetry can. Phase 2 runs A3 in shadow mode on every
+qualifying request and logs its decisions. Over 2 weeks at
+1,000 requests/day that is ~15,000 real-world samples — far stronger
+than any offline eval.
+
+### 13.3 Revised phase gates
+
+| Phase | Sparse-data gate |
+|---|---|
+| 0 | Build regression suite from 50 seeds + augment to ~200–400 via tracks 2(a–c); ship pass/fail CI harness |
+| 1 | No regressions on regression suite + SME spot-check of 20 live responses rates ≥ baseline |
+| 2 | A3 shadow-mode decisions match SME verdicts on ≥80% of shadowed requests over 2 weeks |
+| 3 | Cost within forecast; SME approval rate ≥ Phase 1 baseline |
+| 4 | Stable for 2 weeks |
+
+### 13.4 Feature deferrals
+
+- **Context-cosine disambiguator (§5.5).** Ship behind its own
+  sub-flag `CONTEXT_COSINE_ENABLED=false`; enable only after shadow
+  mode accumulates real multi-line context samples.
+- **A3 `adjusted_fix`.** Cannot be offline-tested without
+  version-number / path variations. Track 2(b) synthetic variants
+  *must* include those, otherwise the
+  `applicable_with_adjustments` branch is untested on day one.
+
+### 13.5 What we need from the team
+
+1. Read/export access to the current prod `fix_embeddings`
+   collection (track 2(a)).
+2. One SME-hour to spot-check the first 20 synthetic variants
+   (track 2(b)) so we confirm the "same fix should still apply"
+   assumption holds before generating the rest.
+3. Agreement that the Phase 1 accuracy gate is qualitative (no
+   regressions + SME spot-check), not a specific accuracy
+   percentage. This is the honest position at n=400.
+4. A budget for shadow-mode logging in Phase 2: ~2 KB extra log per
+   shadowed request → ~60 MB over 2 weeks at 1 k/day.
+
+---
+
+## 14. Appendix C — Future-reader Checklist
+
+If picking this up cold (new engineer, future Claude session):
+
+Read order:
+1. `build-failure-analyzer/CURRENT_FLOW.md` — what the service does
+   today.
+2. `build-failure-analyzer/HYBRID_PROPOSAL.md` (this file) — what to
+   change and why.
+3. `build-failure-analyzer/PROPOSAL.md` — full alternatives analysis
+   (Approach A vs B vs C) for context.
+
+Source files to re-open when implementing:
+- `src/log_error_extractor.py:90` — `extract_error_sections`
+- `src/api_poster.py:104` — payload shape
+- `build-failure-analyzer/analyzer_service.py:192` — `FailedStep`
+- `build-failure-analyzer/analyzer_service.py:267` — `/api/analyze`
+- `build-failure-analyzer/vector_db.py:159` — `lookup_existing_fix`
+- `build-failure-analyzer/vector_db.py:240` — `save_fix_to_db`
+- `build-failure-analyzer/resolver_agent.py:64` — `resolve`
+- `build-failure-analyzer/slack_reviewer.py:139` — Approve handler
+
+Implementation order: Phase 0 → 1 → 2 → 3 → 4. Never skip.
+Feature flags everywhere; every phase must be revertible.
+
+Do not begin implementation without the regression suite in place —
+every "accuracy" number in this doc is an educated estimate until
+it is measured.
