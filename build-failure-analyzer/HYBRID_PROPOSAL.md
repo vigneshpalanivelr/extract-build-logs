@@ -19,8 +19,8 @@ same fix for unrelated build failures. The root cause is four major bugs i.e err
 | # | Agent | Role | LLM? | Input | Output |
 |---|---|---|---|---|---|
 | A1 | **Error Summariser** | Analyze and Understand the error | Light Weight | Error lines and Context | Error summary |
-| A2 | **Deviation Analyzer** | Decide `exact / applicable_with_adjustments / partial / no_match` per candidate | Yes | current error, stored error, stored fix | `{match_quality, adjusted_fix?, reasoning, confidence}` |
-| A3 | **Solution Synthesizer** | Generate a fresh fix when no stored fix applies; cite any partial matches | Yes | error, context, domain snippet, partial matches | `{fix_text, confidence, cited_candidates[]}` |
+| A2 | **Deviation Analyzer** | Decide `exact / applicable_with_adjustments / partial / no_match` | Yes | current error, stored error, stored fix | `match_quality, adjusted_fix?, reasoning, confidence` |
+| A3 | **Solution Synthesizer** | Generate a fresh fix when no stored fix| Yes | error, context | `fix_text, confidence` |
 | A4 | **Reporter** | Format final structured output to Slack blocks + developer DM | No | structured fix | Slack payload |
 
 
