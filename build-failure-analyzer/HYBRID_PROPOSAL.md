@@ -252,8 +252,24 @@ just produces wrong answers more expensively.
 
 ### 5.1 Wire contract change (extractor → analyzer)
 
-Today the analyzer receives `FailedStep.error_lines = [<one big
-blob>]`. Change it to a list of per-region objects:
+**Today's structure (the problem).** The extractor finds error lines,
+grabs ~50 lines before and ~10 lines after each error as "context",
+merges overlapping ranges, and glues everything into **one giant
+string** before posting:
+
+```json
+"failed_steps": [{
+  "step_name": "Build",
+  "error_lines": ["<5KB of error + context + timestamps + paths all mashed together>"]
+}]
+```
+
+`error_lines` is a list with a single element — a huge blob. The
+analyzer cannot tell where the actual error ends and the surrounding
+noise begins, so it embeds and stores the whole thing.
+
+**Proposed structure.** Send each error region as its own object,
+with error and context **separated** on the wire:
 
 ```json
 {
@@ -271,7 +287,15 @@ blob>]`. Change it to a list of per-region objects:
 Keep `error_lines: List[str]` on the analyzer for one release overlap
 so old extractor clients continue working.
 
+**Why it matters.** The vector DB only embeds the *error* part.
+Context is kept for display and disambiguation but never pollutes
+the search.
+
 ### 5.2 Normalization
+
+**Plain-terms goal.** Strip the parts of an error that change every
+run but don't change the meaning, so the same logical error always
+produces the same canonical fingerprint.
 
 New helper `normalize_error_text(error_lines) -> str`:
 
@@ -285,7 +309,31 @@ New helper `normalize_error_text(error_lines) -> str`:
 The normalized text is used for both the deterministic row ID and
 the embedding input.
 
+**Why it matters.** Today, the same error at 9 AM vs 10 AM produces
+different embeddings (because of timestamps), so the cache never
+hits and semantically identical errors don't cluster in the vector
+DB. After normalization, both produce the same canonical
+fingerprint — the cache hits, the vector DB clusters correctly, and
+SME-approved fixes get reused.
+
 ### 5.3 Cosine distance + deterministic IDs
+
+**Two different things share the name "L2" — clarify up front.**
+
+- **L2 *distance* (Euclidean):** Today's bug. Chroma defaults to L2
+  distance, but the code computes `sim = 1 - dist`, which only makes
+  sense for cosine. We are switching the distance metric **away** from
+  L2.
+- **L2 *normalize* the vector:** A math preprocessing step. Divide
+  each vector by its length so it has magnitude 1. After
+  L2-normalizing, cosine similarity equals a simple dot product
+  (faster, numerically stable). This is a preprocessing trick, not
+  the distance metric.
+
+So we are: dropping L2 *distance*, switching to *cosine* distance,
+and L2-*normalizing* the vectors before storing them.
+
+**Concrete changes.**
 
 At first write, create the Chroma collection with explicit cosine
 space:
@@ -303,20 +351,48 @@ Replace the Python `hash()`-based ID with `sha256(fingerprint)`
 for the error-only embedding to **0.90** (meaningful on cosine,
 unlike today's 0.78 on miscalibrated L2).
 
+**Why it matters.** Without this, (a) the same approved fix gets
+stored as multiple separate rows over a week because Python's
+`hash()` is salted per process, and (b) the threshold of 0.78 on a
+mismatched metric was matching unrelated errors. After these
+changes, the same fingerprint always maps to the same row, and the
+threshold is properly calibrated.
+
 ### 5.4 Store only the error in the vector DB
+
+**Plain-terms goal.** Embed only the normalized error fingerprint
+(short and specific). Keep context lines available as metadata for
+display and disambiguation, but never let them influence the vector
+search.
 
 Rewrite `save_fix_to_db`:
 
-- embedding input = normalized fingerprint (short, specific)
-- document = `fix_text`
-- metadata: `error_fingerprint`, `raw_error_lines`, `context_sample`
-  (first ~2 KB of joined context, **metadata only**, never embedded),
-  `approver`, `status`, `fix_id`, `revision`, repo/branch/job
+| Field | Where it goes | Embedded? |
+|---|---|---|
+| Normalized fingerprint | embedding input | ✅ yes |
+| `fix_text` | Chroma document | ❌ no |
+| `error_fingerprint` | metadata | ❌ no |
+| `raw_error_lines` | metadata | ❌ no |
+| `context_sample` (first ~2 KB) | metadata | ❌ no |
+| `approver`, `status`, `fix_id`, `revision`, repo/branch/job | metadata | ❌ no |
 
 Context lines stay available for display and disambiguation but
 never pollute the retrieval embedding.
 
+**Why it matters.** Today the embedding contains the error plus ~50
+lines of surrounding build output. That noise dominates the
+similarity math, so unrelated errors with similar surrounding output
+match against each other (this is the "poisoning" symptom we saw in
+production). Embedding only the normalized error fingerprint makes
+the search laser-focused on the failure itself.
+
 ### 5.5 Context-based disambiguation
+
+**Plain-terms goal.** When the vector DB returns multiple candidates
+above 0.90 — same error pattern, but the right fix depends on
+*where* the error happened (frontend vs backend repo, Node 12 vs
+Node 19 agent, etc.) — break the tie cheaply using context
+similarity, without spending an LLM call.
 
 `lookup_existing_fix` returns top-K=10 candidates with cosine
 similarity ≥ 0.90. When more than one passes:
@@ -325,10 +401,17 @@ similarity ≥ 0.90. When more than one passes:
   embed(candidate.context_sample))`
 - score = `0.7 * error_sim + 0.3 * ctx_sim`
 - return the top score if `score_1 − score_2 > 0.05`; otherwise
-  let A3 (Layer 2) decide
+  let A2 (Deviation Analyzer) decide
 
 No LLM call is involved in this disambiguation step — pure
 deterministic vector math.
+
+**Why it matters.** Two repos can have identical error text but the
+correct fix depends on surrounding context (which build tool, which
+CI agent, which language version). Pure error-text similarity cannot
+tell them apart. A small weighted boost from context similarity
+resolves most ties cheaply; only the genuinely ambiguous cases
+escalate to A2.
 
 ### 5.6 Update-not-insert on Slack approval
 
