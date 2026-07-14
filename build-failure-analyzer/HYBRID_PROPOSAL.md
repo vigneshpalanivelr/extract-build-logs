@@ -133,7 +133,7 @@ Agreed scope. IDs are referenced throughout this document.
 
 | # | Item |
 |---|---|
-| D-1 | REST APIs: list/filter/search, get detail, edit (RD-15321), deprecate (soft delete, filtered from retrieval) |
+| D-1 | REST APIs — **full CRUD**: add, list/filter/search, get detail, edit, deprecate (soft delete, filtered from retrieval). One API surface serving both CLI/automation consumers and the KB dashboard (RD-15321) |
 | D-2 | Dashboard: Resolved view, Pending/needs-attention view (editable, any age), Stats view — full filters (§16) |
 | D-3 | Monthly pruning job: deprecated / zero-hit > 6 months → archive + delete; surfaced in dashboard first |
 | D-4 | Chroma backup: daily snapshot + retention + documented restore |
@@ -157,6 +157,7 @@ Agreed scope. IDs are referenced throughout this document.
 | F-3 | Wire-contract JSON schema shared by extractor & analyzer tests |
 | F-4 | docker-compose E2E: mock GitLab/Jenkins + mock LLM (record/replay) + mock Slack; real Redis/Chroma; 6 scenarios incl. approval-updates-row and degradation-ladder chaos tests |
 | F-5 | Eval harness + metrics: routing accuracy ≥ 95%, poisoning 0%, recall ≥ 90%, keyword pass ≥ baseline, cost/latency vs forecast; CI mode (mock, every PR) + nightly (real LLM, report to DevOps) |
+| F-6 | Linter cleanup of the `build-failure-analyzer` repo (RD-15333) — prerequisite for enabling lint gates alongside the CI wiring |
 
 **Dropped by decision:** in-flight dedup lock, Slack request signing /
 SME allowlist (SME-only audience), API rate limiting,
@@ -1319,8 +1320,14 @@ it is measured.
 
 ### 16.1 REST APIs (D-1)
 
+Full CRUD. One API surface serves **both** consumers: CLI/automation
+(scripts, future Claude CLI integration) and the KB dashboard (§16.2)
+— the dashboard is just a UI over these endpoints, no separate write
+path.
+
 | Endpoint | Purpose |
 |---|---|
+| `POST /api/fixes` | Add a new fix manually (absorbs today's `add_manual_fix` / `bulk_manual_fix` endpoints into the same CRUD surface) |
 | `GET /api/fixes` | List/filter/search the KB: by product team, error_pattern, repo, branch, stage, source, status, approver, date range, free text |
 | `GET /api/fixes/{id}` | Full detail incl. revision history, hits, feedback, Jira link |
 | `PUT /api/fixes/{id}` | Edit a stored fix — any fix, any age (RD-15321). Bumps `revision`. |
@@ -1437,4 +1444,6 @@ real wiring are exercised.
 | Nightly | Level 5 real-LLM mode; report posted to DevOps channel |
 
 Housekeeping: wire the analyzer's test suite into the root
-`pyproject.toml` testpaths so one command runs both services' tests.
+`pyproject.toml` testpaths so one command runs both services' tests,
+and clear the analyzer repo's linter issues (F-6, RD-15333) before
+enabling lint gates in CI.
