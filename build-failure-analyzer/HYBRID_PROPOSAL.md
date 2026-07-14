@@ -329,32 +329,50 @@ applicable, reducing total latency on the critical path.
 
 ### 4.1 Combined per-request flow
 
+Ordering note: A1 runs **first** — the Redis cache keys
+(`sme:fix:<fp>`) are keyed by the fingerprint A1 produces, so the
+cache cannot be consulted before A1. Every terminal path goes through
+A4, which applies guardrail, routing, and dedup rules before anything
+reaches Slack.
+
 ```
-POST /api/analyze
+POST /api/analyze  → 202 Accepted, processed in background task (A-10)
+  │
+  ├─ A1 Error Summariser: normalize → error_fingerprint + summary
+  │       (deterministic, every request; in-request dedup by fingerprint, B-7)
   │
   ├─ Redis sme:fix:<fp> / ai:fix:<fp>           cache hits, ~70% of traffic
-  │     └─ HIT → A4 Reporter → DM developer, done
-  │
-  ├─ A1 Error Summariser: parse + normalize error fingerprint
+  │     └─ HIT → A4 Reporter → DM developer, done   (no LLM, no vector query)
   │
   ├─ VectorDB.lookup_candidates(fp, top_k=10, threshold=0.90)
   │
   ├─ 0 candidates ≥ 0.90                        → A3 Solution Synthesizer (generate fresh)
+  │                                                → store as pending → A4 (SME channel + DM)
   │
-  ├─ 1 candidate ≥ 0.95                         → return stored fix (high-confidence)
+  ├─ 1 candidate ≥ 0.95                         → stored fix (high-confidence, no LLM)
   │     └─ A4 Reporter → DM developer, done
   │
   ├─ 1 candidate in [0.90, 0.95)                → A2 Deviation Analyzer
-  │     ├─ exact_match                          → store + A4 Reporter
-  │     ├─ applicable_with_adjustments          → adjust + store + A4 Reporter
-  │     ├─ partial / no_match                   → A3 Solution Synthesizer (generate fresh)
+  │     ├─ exact_match                          → stored fix → A4 Reporter
+  │     ├─ applicable_with_adjustments          → adjusted fix → store → A4 Reporter
+  │     ├─ partial / no_match                   → A3 (with partial-match citations) → A4
   │
   └─ ≥2 candidates ≥ 0.90                       → A2 on each (parallel, top-3)
-        ├─ any exact_match                      → store + A4 Reporter
-        ├─ 1 applicable (adjusted)              → store + A4 Reporter
-        ├─ ≥2 applicable                        → context-cosine tie-breaker → store + A4 Reporter
-        └─ none applicable                      → A3 Solution Synthesizer (generate fresh)
+        ├─ any exact_match                      → A4 Reporter
+        ├─ exactly 1 applicable                 → adjusted → store → A4 Reporter
+        ├─ ≥2 applicable                        → context-cosine tie-breaker (deterministic,
+        │                                          0.7·error_sim + 0.3·ctx_sim) → A4 Reporter
+        └─ none applicable                      → A3 Solution Synthesizer → A4
+
+A4 Reporter, on every terminal path:
+  guardrail check (B-10) → infra/flaky routing (B-11) → stage grouping (B-4)
+  → recurring-error counter update (B-5) → provenance + feedback buttons (B-9, B-13)
 ```
+
+Fallbacks: A2 timeout/malformed/low-confidence → A3. A3 failure →
+"unable to analyze" + DevOps notification. Redis/Ollama/Chroma down →
+degradation ladder (§17.1). Worst case is always the same behavior as
+today's LLM fallback — never worse.
 
 ---
 
