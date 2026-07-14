@@ -51,6 +51,119 @@ foundation first (Phase 1). Add agents A1–A4 behind feature flags in
 Phase 2. Roll out at 10% traffic, then 100%. Every phase is revertible
 in <60s via env-var flip.
 
+### 1.1 MVP1 Pain Points (drivers of the scope)
+
+Reported by the team after MVP1 production use, plus issues found in
+code review. Each maps to a scope item in §1.2.
+
+| # | Pain point | Addressed by |
+|---|---|---|
+| P1 | Slack message flood — track lost, history unreadable | B-4, B-5, B-7 |
+| P2 | Multiple teams / projects, no way to filter or assign in Slack | B-6, B-8 |
+| P3 | Lack of metadata for better solutions, search, team assignment | A-4, C-2 |
+| P4 | Issue visualization missing | D-2 |
+| P5 | Database (KB) visualization missing | D-1, D-2 |
+| P6 | Resolution view / edit / update visibility missing | D-1, D-2, B-15 |
+| P7 | No Jira ticket creation from an issue | B-12 |
+| P8 | Secrets (tokens, passwords, credential URLs) flow unredacted into Redis/Chroma/Slack | A-8 |
+| P9 | Infra errors (runner down, network) blamed on developers via DM | A-9, B-11 |
+| P10 | Nothing stops a dangerous LLM fix (`rm -rf`, `chmod 777`) reaching a developer | B-10 |
+| P11 | Developer not found on Slack → fix silently lost | B-8 |
+| P12 | One slow LLM call blocks the whole event loop (`async def` + blocking calls) | A-10 |
+| P13 | Retry-exhausted payloads lost forever; silent analyzer death goes unnoticed | E-2, E-3 |
+| P14 | Same error in N stages → N analyses, N messages | B-7 |
+| P15 | Duplicated Slack handler code in two services | B-14 |
+| P16 | Redis keys immortal; `error_map` keyed by full multi-KB error text | A-7 |
+| P17 | No way to deprecate a bad fix (the poisoning row had to be removed by hand) | D-1 |
+| P18 | Embedding model upgrade would silently mix vector spaces | A-13 |
+| P19 | Tests mock all vector math — the production poisoning bug was invisible to a green suite | F-2, F-5 |
+
+### 1.2 Final MVP2 Scope — Six Pillars
+
+Agreed scope. IDs are referenced throughout this document.
+
+**Pillar A — Foundation**
+
+| # | Item |
+|---|---|
+| A-1 | Wire contract: split `error_lines` / `context_lines` per region (legacy shape kept one release) |
+| A-2 | Normalization + fingerprint (strip Line-N/timestamps, lowercase, collapse whitespace) |
+| A-3 | Chroma cosine space + `sha256(fingerprint)` IDs + L2-normalized vectors, threshold 0.90 |
+| A-4 | Embed only the error; full metadata schema — GitLab/Jenkins + analysis + lifecycle keys (§5.4) |
+| A-5 | Context-cosine disambiguation (0.7/0.3 weighted, tie → A2) |
+| A-6 | Update-not-insert on approval, `revision` bump |
+| A-7 | Redis TTLs (30 d) on `fix:*` / `error_map:*` / `thread_map:*`; `error_map` keyed by fingerprint hash |
+| A-8 | **Secret redaction** in extractor before posting (tokens, passwords, credential URLs) |
+| A-9 | ERROR_PATTERNS → config file; each pattern classified `code \| infra \| flaky` |
+| A-10 | Async processing: `202 Accepted` + background task (unblocks the event loop) |
+| A-11 | Analyzer adopts extractor's `logging_config.py` pattern; no more `print()` |
+| A-12 | Startup validation of all config files (routing JSON, patterns) — fail fast |
+| A-13 | `embedding_model` stamped in rows; mismatch at startup → refuse to start (forces migration) |
+
+**Pillar B — Agentic layer (4 agents)**
+
+| # | Item |
+|---|---|
+| B-1 | A1 Error Summariser (deterministic) — also replaces the `summarize_error_with_ai` LLM call |
+| B-2 | A2 Deviation Analyzer — JSON verdict, 7-day cache, fallback to A3 (§6.2) |
+| B-3 | A3 Solution Synthesizer — on failure → "unable to analyze" + DevOps email & Slack (§6.3) |
+| B-4 | A4 Reporter: one message **per failed stage**; multiple errors of that stage threaded under it |
+| B-5 | A4: recurring fingerprint → update canonical message with counter; DM developer directly |
+| B-6 | A4: routing via JSON config (repo pattern → channel, product_team, SME group); restart to apply |
+| B-7 | A4: dedup by fingerprint within one request ("seen in 3 stages" — one analysis, one DM) |
+| B-8 | A4: developer not found on Slack → fallback post to team channel, author named |
+| B-9 | A4: DM shows provenance ("SME-approved, served 12×"), last-seen, originating repo |
+| B-10 | Dangerous-fix guardrail: denylist regex on `fix_text` before any post; hit → SME review with ⚠️ |
+| B-11 | Infra/flaky errors (per A-9 classification) → DevOps channel / "retry" DM — never blame the developer |
+| B-12 | Jira: "Create Jira" button + auto-create on `no_match` / low confidence; `jira` key prevents duplicates |
+| B-13 | 👍/👎 feedback buttons on developer DM; 3× 👎 auto-flags fix to SME channel |
+| B-14 | Consolidate Slack handlers: delete `slack_reviewer.py`; keep FastAPI versions only |
+| B-15 | Slack edit-prompt: 15-min TTL + O(1) key lookup (editing stored fixes anytime = Edit API / dashboard) |
+
+**Pillar C — Stats & telemetry**
+
+| # | Item |
+|---|---|
+| C-1 | Pipeline stats: user (name, mail, commit, branch), per-stage E.Time + status, total time — success & failed |
+| C-2 | Decision telemetry per request: source, similarity, latency, cost estimate, fingerprint, team |
+| C-3 | Feedback counts (`helpful_count` / `unhelpful_count`) wired into stats |
+| C-4 | Zero-match telemetry: failed pipeline, no pattern matched → stat + DevOps notice with log tail |
+
+**Pillar D — KB management & dashboard**
+
+| # | Item |
+|---|---|
+| D-1 | REST APIs: list/filter/search, get detail, edit (RD-15321), deprecate (soft delete, filtered from retrieval) |
+| D-2 | Dashboard: Resolved view, Pending/needs-attention view (editable, any age), Stats view — full filters (§16) |
+| D-3 | Monthly pruning job: deprecated / zero-hit > 6 months → archive + delete; surfaced in dashboard first |
+| D-4 | Chroma backup: daily snapshot + retention + documented restore |
+
+**Pillar E — Resilience & ops**
+
+| # | Item |
+|---|---|
+| E-1 | Degradation ladder: Redis down → skip cache; Ollama/Chroma down → straight to A3; LLM down → notify + "unable to analyze" |
+| E-2 | Dead-letter dir for retry-exhausted payloads + `replay_failed.py` |
+| E-3 | systemd `Restart=on-failure` in service unit + silent-failure alert (webhooks > 0, analyses = 0 in 15 min) |
+| E-4 | Slack `RateLimitErrorRetryHandler` enabled |
+| E-5 | Region cap: already exists (`ERROR_ADAPTIVE_THRESHOLDS` / `MAX_LOG_LINES`) — document only |
+
+**Pillar F — Testing & validation**
+
+| # | Item |
+|---|---|
+| F-1 | Unit: normalizer golden tests, orchestrator state-machine branches, A2/A3 mocked-LLM, A4 formatting |
+| F-2 | Component with **real Chroma + real embeddings**: poisoning regression (gate: 0% false match), threshold calibration, deterministic-ID test |
+| F-3 | Wire-contract JSON schema shared by extractor & analyzer tests |
+| F-4 | docker-compose E2E: mock GitLab/Jenkins + mock LLM (record/replay) + mock Slack; real Redis/Chroma; 6 scenarios incl. approval-updates-row and degradation-ladder chaos tests |
+| F-5 | Eval harness + metrics: routing accuracy ≥ 95%, poisoning 0%, recall ≥ 90%, keyword pass ≥ baseline, cost/latency vs forecast; CI mode (mock, every PR) + nightly (real LLM, report to DevOps) |
+
+**Dropped by decision:** in-flight dedup lock, Slack request signing /
+SME allowlist (SME-only audience), API rate limiting,
+concurrent-approval lock.
+
+**Pre-rollout blockers:** A-8, A-10, A-12, B-10, B-11, E-1, F-2, F-5.
+
 ---
 
 ## 2. The Problem
@@ -365,16 +478,60 @@ threshold is properly calibrated.
 display and disambiguation, but never let them influence the vector
 search.
 
-Rewrite `save_fix_to_db`:
+Rewrite `save_fix_to_db`. Only **one** thing is embedded; everything
+else is inert cargo attached to the row:
 
 | Field | Where it goes | Embedded? |
 |---|---|---|
 | Normalized fingerprint | embedding input | ✅ yes |
 | `fix_text` | Chroma document | ❌ no |
-| `error_fingerprint` | metadata | ❌ no |
-| `raw_error_lines` | metadata | ❌ no |
-| `context_sample` (first ~2 KB) | metadata | ❌ no |
-| `approver`, `status`, `fix_id`, `revision`, repo/branch/job | metadata | ❌ no |
+| everything below | metadata | ❌ no |
+
+**Full metadata key list (A-4):**
+
+*From GitLab / Jenkins (via extractor):*
+
+| Key | Example / note |
+|---|---|
+| `ci_system` | `gitlab` / `jenkins` |
+| `repo` | `payments-service` |
+| `branch` | `feature/JIRA-123` |
+| `commit_sha` / `commit_message` | `a1b2c3d` / `"fix: bump react"` |
+| `author_name` / `author_email` | the developer to DM |
+| `pipeline_id` / `pipeline_url` | link to the run |
+| `job_name` / `job_url` | `build-frontend` |
+| `stage` | `Build` / `Test` / `Deploy` |
+| `build_number` | Jenkins `#482` |
+| `runner_or_agent` | `linux-node-12` — useful for infra errors |
+| `stage_durations` / `total_duration` | per-stage E.Time + total (feeds stats, C-1) |
+| `failed_at` | timestamp |
+
+*From analysis (analyzer-side):*
+
+| Key | Example / note |
+|---|---|
+| `error_fingerprint` | normalized error (§5.2) |
+| `error_pattern` | which pattern matched: `npm_error`, `maven_failure`, `timeout`, … |
+| `error_class` | `code \| infra \| flaky` (A-9; drives B-11 routing) |
+| `raw_error_lines` | original lines, untouched, for display |
+| `context_sample` | first ~2 KB of surrounding log |
+| `product_team` | auto-derived from repo name via routing JSON (B-6) |
+| `embedding_model` | e.g. `granite-embedding:latest` (A-13 upgrade guard) |
+
+*Fix lifecycle:*
+
+| Key | Example / note |
+|---|---|
+| `fix_text` | the solution (also the Chroma document) |
+| `source` | `manual` / `llm` / `sme_approved` / `sme_edited` / `llm_adjusted` (A2) |
+| `status` | `pending` / `approved` / `edited` / `deprecated` |
+| `approver` | Slack display name |
+| `revision` | bumped on each edit — edit history |
+| `created_at` / `updated_at` | timestamps |
+| `hits` | how many times this fix has been served — trust + pruning signal |
+| `last_served_at` | freshness signal; drives "needs attention" ordering |
+| `helpful_count` / `unhelpful_count` | 👍/👎 from developer DMs (B-13); 3× 👎 auto-flags |
+| `jira` | linked ticket key, e.g. `RD-15420` — prevents duplicate tickets (B-12) |
 
 Context lines stay available for display and disambiguation but
 never pollute the retrieval embedding.
@@ -461,6 +618,12 @@ the core failure pattern.
 every request. Failure is not an option — on normalization failure,
 use raw error lines as-is.
 
+**Replaces `summarize_error_with_ai` (B-1).** MVP1 makes an extra
+uncached LLM call per Slack message just to shorten long error text
+(`slack_helper.py:124`). A1's fingerprint + first N error lines become
+the display summary instead — that LLM call is deleted, saving cost
+and latency on every message.
+
 ### 6.2 A2 Deviation Analyzer
 
 **Role:** Given a stored fix candidate from the vector DB and the
@@ -529,20 +692,33 @@ to analyze" rather than a wrong fix. Let the user escalate to Slack.
 ### 6.4 A4 Reporter
 
 **Role:** Take the final decision (stored fix from vector DB, adjusted
-fix from A2, or synthesized fix from A3) and format it into a Slack
-DM payload with appropriate metadata and confidence level.
+fix from A2, or synthesized fix from A3), apply routing and safety
+rules, and format it into Slack payloads. A4 owns everything about
+*how results reach people* (scope items B-4 … B-13).
 
 **Inputs:**
 - The final fix (fix_text + source + confidence)
 - Metadata: error_fingerprint, candidate similarity (if applicable),
-  A2 reasoning (if applicable)
+  A2 reasoning (if applicable), error_class, product_team
 
-**Outputs:** Slack message payload with:
-- Fix text (properly formatted)
-- Confidence indicator
-- Citation of stored vs synthesized
-- SME "Approve/Edit" buttons (if applicable)
-- Link to full error details
+**Responsibilities:**
+
+| Scope | Behavior |
+|---|---|
+| B-4 | One Slack message **per failed stage**; multiple errors within that stage go as thread replies under it. Different stages → separate messages. |
+| B-5 | Recurring fingerprint → update the canonical message with a counter ("⚠️ seen 6× this week"), DM the developer directly instead of re-posting. |
+| B-6 | Resolve repo/job → channel + product_team + SME group from the routing JSON (restart to apply). Default route for unmapped repos. |
+| B-7 | Dedup by fingerprint within one request: same error in 3 stages → one analysis, one DM noting "seen in 3 stages". |
+| B-8 | `users_lookupByEmail` fails (service account, bot, email mismatch) → post to the team channel from routing config, naming the commit author. |
+| B-9 | DM shows provenance: source ("SME-approved fix, served 12× this month" vs "AI-generated, unverified"), last-seen date, originating repo. |
+| B-10 | Dangerous-fix guardrail: denylist regex (`rm -rf`, `chmod 777`, `git push --force`, `kubectl delete`, …) on fix_text before any post. Hit → hold for SME review with ⚠️, never DM'd raw. |
+| B-11 | `error_class = infra` → route to DevOps channel, not the developer. `flaky` → DM suggests pipeline retry. Only `code` errors DM the developer as actionable. |
+| B-12 | "🎫 Create Jira" button on SME messages; auto-create on `no_match`/low-confidence (configurable). Ticket pre-filled with error, context, probable fix, metadata, Slack permalink; `jira` key stored to link recurrences instead of duplicating. |
+| B-13 | 👍/👎 buttons on the developer DM; counts stored on the fix; 3× 👎 auto-flags to the SME channel. |
+
+**Outputs:** Slack channel message (stage-grouped, with SME
+Approve/Edit buttons where applicable) + developer DM (fix,
+provenance, feedback buttons) + optional Jira ticket.
 
 **Implementation:** Deterministic code (no LLM). A4 runs on every
 request that reaches the output stage.
@@ -1136,3 +1312,129 @@ Feature flags everywhere; every phase must be revertible.
 Do not begin implementation without the regression suite in place —
 every "accuracy" number in this doc is an educated estimate until
 it is measured.
+
+---
+
+## 16. KB Management & Dashboard (Pillar D)
+
+### 16.1 REST APIs (D-1)
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/fixes` | List/filter/search the KB: by product team, error_pattern, repo, branch, stage, source, status, approver, date range, free text |
+| `GET /api/fixes/{id}` | Full detail incl. revision history, hits, feedback, Jira link |
+| `PUT /api/fixes/{id}` | Edit a stored fix — any fix, any age (RD-15321). Bumps `revision`. |
+| `DELETE /api/fixes/{id}` | **Deprecate, not hard-delete**: sets `status=deprecated`; retrieval filters it out. A poisoning row becomes a 10-second API call instead of manual DB surgery. |
+
+### 16.2 Dashboard views (D-2)
+
+- **Resolved view** — every resolved error: error, solution, source
+  (manual/LLM/SME), approver, hits, product team, error_pattern,
+  Jira link, last served, feedback counts.
+- **Pending / needs-attention view** — errors awaiting SME review,
+  low-confidence LLM answers, 👎-flagged fixes. Same columns,
+  **editable from here regardless of age**.
+- **Stats view** — hit rates, per-product failure counts, per-pattern
+  trends, cost (powered by C-2/C-3/C-4 telemetry).
+- **Filters everywhere:** product team, error_pattern, repo, branch,
+  stage, source, status, approver, date range, free-text search.
+
+### 16.3 Lifecycle (D-3, D-4)
+
+- Monthly pruning job: `status=deprecated` or (hits=0 ∧ age > 6
+  months) → export to archive file, delete from collection. Candidates
+  surfaced in the dashboard before deletion.
+- Chroma backup: daily snapshot of the persist directory with
+  retention; restore procedure documented. Interim answer until
+  RD-15338 (scalable vector DB).
+
+---
+
+## 17. Resilience & Ops (Pillar E)
+
+### 17.1 Degradation ladder (E-1)
+
+Each dependency degrades; none of them 500s the request:
+
+| Dependency down | Behavior |
+|---|---|
+| Redis | skip cache, continue to vector DB |
+| Ollama (embeddings) | skip vector lookup, go straight to A3 |
+| Chroma | same — straight to A3 |
+| LLM endpoint | "unable to analyze" + DevOps email & Slack (B-3) |
+
+Every row is a chaos test in the E2E suite (§18, F-4).
+
+### 17.2 Recovery & alerting (E-2, E-3)
+
+- **Dead-letter queue:** payloads that exhaust `api_poster` retries are
+  written as JSON files to a dead-letter directory (today they are
+  only logged — `api_poster.py:1023` — and lost). `replay_failed.py`
+  re-posts them once the analyzer is back.
+- **Crash recovery:** `Restart=on-failure` in
+  `build-failure-analyzer.service` (covers RD-15248).
+- **Silent-failure alert:** systemd can't see "process alive but
+  nothing works" — one alert rule via `error_notifier.py`: webhooks
+  received > 0 while analyses completed = 0 over 15 min → notify
+  DevOps. Plus a cron hitting `/health`.
+
+### 17.3 Slack & config hygiene (E-4, A-12, B-14, B-15)
+
+- Enable slack_sdk's `RateLimitErrorRetryHandler` (burst of failures
+  → 429s are retried, not dropped).
+- Validate routing JSON + patterns config against a schema at startup;
+  refuse to start on error. Fail fast beats mis-route quietly.
+- Delete `slack_reviewer.py` (duplicate Flask copy of the FastAPI
+  handlers); one source of truth for Slack actions.
+- Slack edit-prompt keys get a 15-min TTL and O(1) per-user lookup
+  (replaces the `redis.keys()` scan per message event).
+
+### 17.4 Already covered by existing config (E-5)
+
+Extraction volume caps already exist — `ERROR_ADAPTIVE_THRESHOLDS`
+and `MAX_LOG_LINES` (`config_loader.py:339`,
+`log_error_extractor.py:527`). No new work; document the knobs in the
+ops runbook.
+
+---
+
+## 18. Testing & Validation Strategy (Pillar F)
+
+**Why this pillar exists (P19):** the MVP1 suite mocks all vector
+math — `_get_embedding` returns `[0.1, 0.2, 0.3]`, `collection.query`
+returns canned results. The production poisoning bug lived exactly in
+the mocked-out layer, which is why the suite stayed green while
+production was wrong. MVP2 adds layers where the real math and the
+real wiring are exercised.
+
+### 18.1 Five levels
+
+| Level | What | Runs |
+|---|---|---|
+| **1 — Unit** (extend existing pattern) | Normalizer golden tests (30–50 input→fingerprint pairs); orchestrator state machine — every branch of §4.1 with fake agents; A2/A3 with mocked LLM (schema, retry, confidence floor); A4 formatting/routing/guardrail | every PR |
+| **2 — Component, real vector math** | Real Chroma (temp dir) + real Ollama embeddings, no mocked distances. **Poisoning regression test** (insert old-style 5 KB blob → unrelated error must NOT match ≥ 0.90 — this test recreates the production incident and stays forever). Threshold calibration on ~20 known pairs. Deterministic-ID test (same fix saved twice across restarts → one row, revision bumped). | merge to main, on the Ollama test instance (RD-15346) |
+| **3 — Wire contract** | One shared JSON Schema for `/api/analyze`; extractor asserts its real output validates; analyzer asserts schema examples POST successfully. Both old + new payload shapes during the migration overlap. | every PR |
+| **4 — End-to-end, mocked externals** | docker-compose stack: real extractor + analyzer + Redis + Chroma; mock GitLab/Jenkins (canned logs), mock LLM (record real responses once, replay deterministically), mock Slack (captures payloads). Scenarios: cold → A3 → messages; repeat with changed timestamps → cache hit, zero LLM calls; Approve click → row **updated** not inserted; variant → A2 adjusted; unrelated error → no false match; 2 stages/3 errors → exactly 2 messages, 1 threaded; plus one chaos test per §17.1 row. | merge to main |
+| **5 — Eval harness** | `eval/regression_set.jsonl` cases (`error`, `context`, `expected_route`, `must_contain`, `must_not_contain`) replayed through the full pipeline by `eval/run_eval.py`, which computes the metrics below and emits a JSON + markdown report as a CI artifact. | CI mode (mock LLM) every PR; nightly mode (real Bedrock, ~50 gold cases, ~$1/night) with report to DevOps channel |
+
+### 18.2 Metrics & gates (F-5)
+
+| Metric | Calculation | Gate |
+|---|---|---|
+| Routing accuracy | % of cases taking `expected_route` (+ confusion matrix) | ≥ 95% |
+| False-positive match rate | % of known-unrelated pairs scoring ≥ 0.90 — *the poisoning metric* | **0%** |
+| Retrieval recall | % of known-variant pairs with the right stored fix in top-3 | ≥ 90% |
+| Answer keyword pass | `must_contain` present ∧ `must_not_contain` absent | ≥ baseline, never drops on a PR |
+| Cost per 1k | mock-LLM call count × per-call price | within forecast (~$6–8) |
+| Latency p50/p99 | measured per route | within §1 targets |
+
+### 18.3 CI wiring
+
+| When | What runs |
+|---|---|
+| Every PR | Level 1 + Level 3 + Level 5 (mock mode) |
+| Merge to main | Level 4 compose stack + Level 2 (Ollama test instance) |
+| Nightly | Level 5 real-LLM mode; report posted to DevOps channel |
+
+Housekeeping: wire the analyzer's test suite into the root
+`pyproject.toml` testpaths so one command runs both services' tests.
