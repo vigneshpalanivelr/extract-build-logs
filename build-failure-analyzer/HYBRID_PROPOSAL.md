@@ -56,29 +56,28 @@ in <60s via env-var flip.
 Reported by the team after MVP1 production use, plus issues found in
 code review. Each maps to a scope item in §1.2.
 
-| # | Pain point | Addressed by |
-|---|---|---|
-| P1 | Slack message flood — track lost, history unreadable | B-4, B-5, B-7 |
-| P2 | Multiple teams / projects, no way to filter or assign in Slack | B-6, B-8 |
-| P3 | Lack of metadata for better solutions, search, team assignment | A-4, C-2 |
-| P4 | Issue visualization missing | D-2 |
-| P5 | Database (KB) visualization missing | D-1, D-2 |
-| P6 | Resolution view / edit / update visibility missing | D-1, D-2, B-15 |
-| P7 | No Jira ticket creation from an issue | B-12 |
-| P8 | Secrets (tokens, passwords, credential URLs) flow unredacted into Redis/Chroma/Slack | A-8 |
-| P9 | Infra errors (runner down, network) blamed on developers via DM | A-9, B-11 |
-| P10 | Nothing stops a dangerous LLM fix (`rm -rf`, `chmod 777`) reaching a developer | B-10 |
-| P11 | Developer not found on Slack → fix silently lost | B-8 |
-| P12 | One slow LLM call blocks the whole event loop (`async def` + blocking calls) | A-10 |
-| P13 | Retry-exhausted payloads lost forever; silent analyzer death goes unnoticed | E-2, E-3 |
-| P14 | Same error in N stages → N analyses, N messages | B-7 |
-| P15 | Duplicated Slack handler code in two services | B-14 |
-| P16 | Redis keys immortal; `error_map` keyed by full multi-KB error text | A-7 |
-| P17 | No way to deprecate a bad fix (the poisoning row had to be removed by hand) | D-1 |
-| P18 | Embedding model upgrade would silently mix vector spaces | A-13 |
-| P19 | Tests mock all vector math — the production poisoning bug was invisible to a green suite | F-2, F-5 |
-| P20 | Two processes (analyzer + `slack_reviewer.py`) open the same embedded Chroma directory — embedded Chroma is not multi-process safe; corruption hazard | B-14 |
-
+| # | Pain point | What it means / why it hurts | Addressed by |
+|---|---|---|---|
+| P1 | Slack message flood — track lost, history unreadable | Every error in every failed stage posts a separate top-level message, and recurring errors re-post daily. A single pipeline can produce 5+ messages; the channel becomes unscannable and SMEs stop reading it. | B-4, B-5, B-7 |
+| P2 | Multiple teams / projects, no way to filter or assign in Slack | All messages land in one global channel (`SLACK_CHANNEL` env) regardless of which project/team owns the repo. SMEs cannot filter "mine" or assign ownership, so triage stalls. | B-6, B-8 |
+| P3 | Lack of metadata for better solutions, search, team assignment | Stored fixes carry almost no context (no team, stage, pattern, hit counts). We cannot search by product, route to the right team, or judge whether a fix is trusted or stale. | A-4, C-2 |
+| P4 | Issue visualization missing | There is no place to see open/analyzed failures; the only "view" of what happened is scrolling Slack history. | D-2 |
+| P5 | Database (KB) visualization missing | Chroma contents are invisible — nobody can list what fixes exist, which are stale, or find a poisoning row without writing ad-hoc scripts. | D-1, D-2 |
+| P6 | Resolution view / edit / update visibility missing | Once a fix is stored there is no UI or API to view, edit, or update it; any correction requires developer intervention directly in the DB. | D-1, D-2, B-15 |
+| P7 | No Jira ticket creation from an issue | Recurring or novel failures need manual Jira tickets, retyping error details by hand; nothing links a ticket back to the stored fix, so duplicates pile up. | B-12 |
+| P8 | Secrets (tokens, passwords, credential URLs) flow unredacted into Redis/Chroma/Slack | Error/context lines routinely contain live credentials (tokens, `password=`, credential URLs). They are stored permanently in Redis/Chroma and posted to Slack — a compliance incident waiting to happen. | A-8 |
+| P9 | Infra errors (runner down, network) blamed on developers via DM | Runner disconnects and network timeouts DM the committing developer, implying their code broke the build. Repeated false blame destroys trust in the tool. | A-9, B-11 |
+| P10 | Nothing stops a dangerous LLM fix (`rm -rf`, `chmod 777`) reaching a developer | An LLM-generated fix could contain destructive commands (`rm -rf`, `chmod 777`, force push). Today it would be DM'd verbatim to a developer who may run it. | B-10 |
+| P11 | Developer not found on Slack → fix silently lost | Pipelines triggered by service accounts, or by users whose CI email differs from their Slack email, fail `users_lookupByEmail` — the fix is generated, then silently dropped. | B-8 |
+| P12 | One slow LLM call blocks the whole event loop (`async def` + blocking calls) | The endpoint is `async def` but makes blocking Redis/LLM/Slack calls. One 8 s LLM call freezes the entire event loop; every concurrent webhook queues behind it. | A-10 |
+| P13 | Retry-exhausted payloads lost forever; silent analyzer death goes unnoticed | When POST retries are exhausted the payload is only logged — the analysis is lost. And if the analyzer dies silently, nothing alerts anyone; failures just stop being analyzed. | E-2, E-3 |
+| P14 | Same error in N stages → N analyses, N messages | The same error text appearing in 3 stages triggers 3 full analyses, 3 LLM calls, and 3 messages — cost and noise multiplied for zero added information. | B-7 |
+| P15 | Duplicated Slack handler code in two services | Approve/Edit/Discard logic exists in `slack_reviewer.py` (Flask) AND in `analyzer_service.py` (FastAPI). A bug fixed in one copy silently survives in the other. | B-14 |
+| P16 | Redis keys immortal; `error_map` keyed by full multi-KB error text | Redis keys are written with `set` (no TTL), and `error_map` uses the full multi-KB error text as the key itself — memory grows forever. | A-7 |
+| P17 | No way to deprecate a bad fix (the poisoning row had to be removed by hand) | The production poisoning row could only be removed by hand-editing the DB. There is no deprecate flag or delete API, so any bad approval is effectively permanent. | D-1 |
+| P18 | Embedding model upgrade would silently mix vector spaces | Chroma keeps no record of which embedding model wrote each vector. Upgrading the model would silently mix incompatible vector spaces and corrupt every similarity score. | A-13 |
+| P19 | Tests mock all vector math — the production poisoning bug was invisible to a green suite | Unit tests mock `_get_embedding` (returns `[0.1, 0.2, 0.3]`) and `collection.query` (canned results). All four production bugs lived in the mocked-out layer while the suite stayed green. | F-2, F-5 |
+| P20 | Two processes (analyzer + `slack_reviewer.py`) open the same embedded Chroma directory — embedded Chroma is not multi-process safe; corruption hazard | Embedded Chroma (`PersistentClient`) supports a single process. The analyzer and `slack_reviewer.py` both open the same directory today — concurrent writes risk index corruption. | B-14 |
 ### 1.2 Final MVP2 Scope — Six Pillars
 
 Agreed scope. IDs are referenced throughout this document.
@@ -251,15 +250,22 @@ rises above the 0.78 threshold even for unrelated queries.
 
 ### 3.3 Vector row IDs are non-deterministic across restarts
 
-`vector_db.py:276`:
+`vector_db.py:276` (inside `save_fix_to_db`, the function every
+Slack approval calls):
 ```python
 unique_id = f"fix-{abs(hash(error_text)) & ((1 << 128) - 1):032x}"
 ```
 
-Python's builtin `hash()` is salted per process, so the same error
+Python's builtin `hash()` is salted per process (PEP 456 — since
+Python 3.3, `PYTHONHASHSEED` is random by default), so the same error
 text produces a different ID every time the service restarts. Slack
 approvals that should update an existing row keep inserting new ones.
 Once the poisoning row exists, it is effectively permanent.
+
+**Aggravating detail:** a correct deterministic helper already exists
+in the same file — `_generate_id()` at `vector_db.py:149` uses
+`hashlib.sha1(error_text)` — but `save_fix_to_db` never calls it. The
+bug is not a missing capability; it is a missed wiring.
 
 ### 3.4 Whole-blob SHA is used as the cache key
 
@@ -281,6 +287,85 @@ another opportunity to match.
 | 3.2 L2 vs cosine | thresholds miscalibrated | blob row scores above 0.78 for everything |
 | 3.3 salted hash IDs | duplicates accumulate | bad row re-inserted forever, never updated |
 | 3.4 SHA-of-blob cache | cache hit rate near zero | bad retrievals get re-evaluated every request |
+
+### 3.6 Reproduction transcript (evidence for architecture review)
+
+Every claim above is reproducible from a shell. Outputs below were
+captured from this repository's code on 2026-07-15.
+
+**Bug 3.1 — context dominates the embedding (illustrative geometry).**
+Two *unrelated* errors (npm peer-dep vs Maven missing-artifact), each
+wrapped in the same 50 lines of build context — exactly what
+`log_error_extractor.py:138` produces. Cosine on token-count vectors
+(directionally identical to what any text embedding does with shared
+tokens):
+
+```
+UNRELATED errors, blob embedding (error+context):  cosine = 1.000  → above any threshold, WRONG MATCH
+UNRELATED errors, error-only embedding:            cosine = 0.000  → correctly no match
+```
+
+Labeled *illustrative* honestly: it uses bag-of-words cosine, not
+granite-embedding — but the mechanism (shared boilerplate tokens
+dominate the vector) is the same, and the production incident is the
+real-embedding confirmation. The F-2 poisoning-regression test makes
+this proof permanent with real embeddings.
+
+**Bug 3.2 — `sim = 1 − dist` on the wrong metric.** Chroma's default
+space is `l2` ([Chroma docs: `hnsw:space` defaults to `"l2"`]), which
+returns **squared** Euclidean distance. `1 − dist` is only a
+similarity for cosine distance. Three concrete vector pairs:
+
+```
+unit orthogonal:   cosine_sim = 0.00   code computes sim = 1−L2 = −1.00   ← negative "similarity"
+non-normalized:    cosine_sim = 0.992  code computes sim = 1−L2 = +0.838
+small magnitudes:  cosine_sim = −0.12  code computes sim = 1−L2 = +0.907  ← scores ABOVE the 0.78
+                                                                            threshold while pointing in
+                                                                            the OPPOSITE direction
+```
+
+The third row is the smoking gun: the code would serve this candidate
+as a confident match (0.907 > 0.78) when the true directional
+similarity is negative.
+
+**Bug 3.3 — salted `hash()` IDs.** The exact expression from
+`vector_db.py:276`, run in three separate Python processes:
+
+```
+$ python3 -c "err='npm ERR! code ERESOLVE'; print(f'fix-{abs(hash(err)) & ((1 << 128) - 1):032x}')"
+fix-000000000000000045e68e8094890e32
+$ python3 -c ...   (same command, new process)
+fix-0000000000000000695d521233f48a53
+$ python3 -c ...   (same command, new process)
+fix-00000000000000001e64d9b87e9cdd39
+```
+
+Same error text, three different row IDs — every service restart makes
+previously-saved rows un-updatable and every re-approval inserts a
+duplicate. (Also visible: `abs(hash()) & (2^128−1)` zero-pads to 32
+hex chars but Python's hash is only 64-bit — half the ID space is
+always zeros, so even the intended uniqueness is half-broken.)
+
+**Bug 3.4 — whole-blob SHA cache key.** Two blobs identical except a
+timestamp one second apart (`analyzer_service.py:284` hashes the full
+blob):
+
+```
+9:14:02 → sha256 = 910cb32919ead0bbf1e2b0d3…
+9:14:03 → sha256 = 1f59997608960587c065dfed…
+cache keys equal? False
+```
+
+Since every log line carries a timestamp, effectively **no two
+requests ever share a cache key** — the observed near-zero hit rate
+on `sme:fix:*` / `ai:fix:*` is structural, not tuning.
+
+**How the four compound into the production incident:** 3.1 creates a
+row whose vector matches broadly (context noise) → 3.2 lets that row
+clear the 0.78 threshold for almost any query → 3.3 makes the row
+impossible to update and duplicates it on re-approval → 3.4 guarantees
+every request re-runs retrieval (no cache short-circuit), giving the
+bad row a fresh chance to match every single time.
 
 The Hybrid design fixes all four at the source (§5), then layers a
 single LLM agent on top (§6) for cases where pure vector math is not
