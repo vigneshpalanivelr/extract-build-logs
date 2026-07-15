@@ -16,37 +16,95 @@ Team-size note: the plan (§12) is organized as independent
 ## 1. Component Architecture
 
 ```
-┌────────────────────────── Extractor (src/) ──────────────────────────┐
-│ webhook_listener.py ─► pipeline_extractor ─► log_fetcher             │
-│        │                                        │                    │
-│        ▼                                        ▼                    │
-│ log_error_extractor.py ──► redactor.py ──► api_poster.py             │
-│   (per-region split,        (A-8 secrets)   (v2 payload, dead-letter)│
-│    patterns from config A-9)                                         │
-└──────────────────────────────────┬───────────────────────────────────┘
-                                   │ POST /api/analyze (202)
-┌────────────────────────── Analyzer (build-failure-analyzer/) ────────┐
-│ analyzer_service.py (FastAPI)                                        │
-│   ├─ orchestrator.py ── state machine §4.1 of HYBRID_PROPOSAL        │
-│   │    ├─ agents/summarizer.py  (A1, deterministic)                  │
-│   │    ├─ agents/deviation.py   (A2, LLM)                            │
-│   │    ├─ agents/synthesizer.py (A3, LLM)                            │
-│   │    └─ agents/reporter.py    (A4, deterministic)                  │
-│   ├─ vector_db.py (v2: cosine, sha256 IDs, metadata)                 │
-│   ├─ kb_api.py    (full CRUD /api/fixes, D-1)                        │
-│   ├─ stats.py     (SQLite, C-1..C-4)                                 │
-│   ├─ jira_client.py (B-12)                                           │
-│   ├─ routing.py   (routing.json loader, B-6)                         │
-│   ├─ guardrail.py (denylist, B-10)                                   │
-│   └─ slack handlers (consolidated, B-14) + feedback (B-13)           │
-│ dashboard/ (static SPA served at /dashboard, D-2)                    │
-└──────────────────────────────────────────────────────────────────────┘
-External: Redis · Chroma (persistent dir) · Ollama (granite-embedding)
-          · Bedrock Claude via OpenWebUI · Slack API · Jira API · SMTP
+                         GitLab / Jenkins webhook (pipeline finished)
+                                          │
+                                          ▼
+╔═════════════════════════ LOG EXTRACTOR  (src/) ══════════════════════════╗
+║                                                                          ║
+║   ┌─────────────────────┐    ┌──────────────────────┐                    ║
+║   │ webhook_listener.py │───►│ pipeline_extractor.py│                    ║
+║   │ receive + validate  │    │ pipeline / stage info│                    ║
+║   └─────────────────────┘    └──────────┬───────────┘                    ║
+║                                         │                                ║
+║                                         ▼                                ║
+║   ┌─────────────────────┐    ┌──────────────────────┐                    ║
+║   │ log_fetcher.py      │───►│ log_error_extractor  │                    ║
+║   │ pull console log    │    │ per-region split A-1 │                    ║
+║   │ (GitLab / Jenkins)  │    │ patterns config  A-9 │                    ║
+║   └─────────────────────┘    └──────────┬───────────┘                    ║
+║                                         │  List[ErrorRegion]             ║
+║                                         ▼                                ║
+║   ┌─────────────────────┐    ┌──────────────────────┐                    ║
+║   │ redactor.py    A-8  │───►│ api_poster.py        │                    ║
+║   │ strip secrets before│    │ v2 payload      A-1  │                    ║
+║   │ anything leaves host│    │ retry + dead-letter  │──► dead_letter/*.json
+║   └─────────────────────┘    │              E-2     │    (replay_failed.py)
+║                              └──────────┬───────────┘                    ║
+╚═════════════════════════════════════════╪════════════════════════════════╝
+                                          │
+                                          │  POST /api/analyze
+                                          │  → 202 Accepted (A-10)
+                                          ▼
+╔═══════════════════ BUILD FAILURE ANALYZER  (build-failure-analyzer/) ════╗
+║                                                                          ║
+║   analyzer_service.py (FastAPI) ── background task per request           ║
+║        │                                                                 ║
+║        ▼                                                                 ║
+║   ┌──────────────────────────────────────────────────────────────────┐   ║
+║   │ orchestrator.py — state machine (HYBRID_PROPOSAL §4.1)           │   ║
+║   │                                                                  │   ║
+║   │   A1 agents/summarizer.py   no LLM   fingerprint + summary       │   ║
+║   │   A2 agents/deviation.py    LLM      stored fix applies?         │   ║
+║   │   A3 agents/synthesizer.py  LLM      fresh fix on miss           │   ║
+║   │   A4 agents/reporter.py     no LLM   route + format + deliver    │   ║
+║   └──────┬────────────────────────────────────────┬──────────────────┘   ║
+║          │ uses                                   │ A4 uses              ║
+║          ▼                                        ▼                      ║
+║   ┌─────────────────────────────┐   ┌─────────────────────────────────┐  ║
+║   │ normalizer.py          A-2  │   │ routing.py    routing.json B-6  │  ║
+║   │ vector_db.py  A-3/A-4/A-13  │   │ guardrail.py  denylist     B-10 │  ║
+║   │ (cosine · sha256 · upsert)  │   │ jira_client.py             B-12 │  ║
+║   └─────────────────────────────┘   │ slack handlers B-14 + fb  B-13  │  ║
+║                                     └─────────────────────────────────┘  ║
+║                                                                          ║
+║   ┌─────────────────────────────┐   ┌─────────────────────────────────┐  ║
+║   │ kb_api.py              D-1  │   │ stats.py (SQLite)   C-1…C-4     │  ║
+║   │ full CRUD /api/fixes        │◄──│ decisions · pipelines · feedback│  ║
+║   └──────────────▲──────────────┘   └─────────────────────────────────┘  ║
+║                  │ fetch                                                 ║
+║   ┌──────────────┴──────────────┐   ┌─────────────────────────────────┐  ║
+║   │ dashboard/  static SPA D-2  │   │ watchdog.py            E-3      │  ║
+║   │ resolved · pending · stats  │   │ silent-failure alert + /health  │  ║
+║   └─────────────────────────────┘   └─────────────────────────────────┘  ║
+╚══════════════════════════════════════════════════════════════════════════╝
+          │              │                │              │           │
+          ▼              ▼                ▼              ▼           ▼
+   ┌───────────┐  ┌────────────┐  ┌─────────────┐  ┌──────────┐  ┌───────┐
+   │  Redis    │  │  Chroma    │  │ Ollama      │  │ Bedrock  │  │ Slack │
+   │  caches   │  │  vector KB │  │ granite-    │  │ Claude   │  │  API  │
+   │  (§3.2)   │  │  (§3.3)    │  │ embedding   │  │ (OpenWebUI)│ └───────┘
+   └───────────┘  └────────────┘  └─────────────┘  └──────────┘  ┌───────┐
+                                                                 │ Jira  │
+                                                   ┌──────────┐  │  API  │
+                                                   │  SMTP    │  └───────┘
+                                                   │  alerts  │
+                                                   └──────────┘
 ```
 
-Deleted in MVP2: `slack_reviewer.py` (B-14), `summarize_error_with_ai`
-in `slack_helper.py` (B-1).
+Reading guide:
+
+| Zone | What happens there |
+|---|---|
+| Extractor (top) | webhook → fetch log → split into `ErrorRegion`s → redact secrets → POST v2 payload; failures land in `dead_letter/` for replay |
+| Orchestrator (middle) | one background task per request runs the A1→cache→vector→A2/A3→A4 state machine |
+| Left column | data path: normalization + vector KB (the layer the poisoning bug lived in) |
+| Right column | delivery path: routing, guardrail, Jira, Slack — everything A4 touches |
+| Bottom row inside analyzer | management plane: KB CRUD APIs, dashboard, stats, watchdog |
+| External (bottom) | Redis, Chroma, Ollama, Bedrock LLM, Slack, Jira, SMTP |
+
+Deleted in MVP2: `slack_reviewer.py` (duplicate Flask service, B-14)
+and `summarize_error_with_ai` in `slack_helper.py` (replaced by A1's
+deterministic summary, B-1).
 
 ---
 
