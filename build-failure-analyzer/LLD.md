@@ -39,7 +39,8 @@ flowchart TB
 
         subgraph DATA["data path"]
             NORM["normalizer.py A-2"]
-            VDB["vector_db.py A-3 / A-4 / A-13<br/>cosine · sha256 · upsert"]
+            VDB["vector_db.py A-3 / A-13<br/>cosine · sha256 · dim guard"]
+            KBS["kb_store.py A-4<br/>SQLite fixes + fix_revisions"]
         end
 
         subgraph DELIV["delivery path (A4)"]
@@ -50,7 +51,7 @@ flowchart TB
         end
 
         subgraph MGMT["management plane"]
-            KB["kb_api.py D-1<br/>full CRUD /api/fixes"]
+            KB["kb_api.py D-1<br/>full CRUD /api/fixes (SQL)"]
             ST["stats.py SQLite C-1..C-4"]
             DASH["dashboard/ SPA D-2"]
             WDG["watchdog.py E-3"]
@@ -62,7 +63,7 @@ flowchart TB
         ST --> KB
     end
 
-    DATA --> R[("Redis<br/>caches")] & CH[("Chroma<br/>vector KB")] & OL["Ollama<br/>granite-embedding"]
+    DATA --> R[("Redis<br/>caches")] & CH[("Chroma<br/>vectors only<br/>single process")] & KDB[("bfa_kb.db<br/>SQLite<br/>system of record")] & OL["Ollama<br/>granite-embedding"]
     ORC --> BR["Bedrock Claude<br/>via OpenWebUI"]
     SLK --> SAPI["Slack API"]
     JIRA --> JAPI["Jira API"]
@@ -91,41 +92,38 @@ candidate (the most complete route). Cache hits and exact matches
 exit earlier; every terminal path goes through A4.
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    participant GL as GitLab
-    participant EX as Extractor
-    participant AN as Analyzer
-    participant A1 as A1 Summariser
-    participant RD as Redis
-    participant CH as Chroma
-    participant A2 as A2 Deviation
-    participant A4 as A4 Reporter
-    participant SL as Slack
+flowchart TB
+    FP["fingerprint = normalize(error_lines)<br/>fph = sha256(fingerprint) — the join key"]
 
-    GL->>EX: webhook (pipeline failed)
-    EX->>GL: fetch console log
-    EX->>EX: split regions + redact (A-1, A-8)
-    EX->>AN: POST /api/analyze (v2 payload)
-    AN-->>EX: 202 Accepted (A-10)
-    Note over AN: background task starts
-    AN->>A1: run(region)
-    A1-->>AN: fingerprint + summary
-    AN->>RD: GET sme:fix / ai:fix
-    RD-->>AN: MISS
-    AN->>CH: lookup_candidates(fp, threshold 0.90)
-    CH-->>AN: 1 candidate, sim 0.92
-    AN->>RD: GET agent:deviation cache
-    RD-->>AN: MISS
-    AN->>A2: judge(current error, stored error, stored fix)
-    A2-->>AN: applicable_with_adjustments
-    AN->>RD: SETEX agent:deviation (7 d)
-    AN->>CH: upsert adjusted fix
-    AN->>A4: deliver(result)
-    Note over A4: guardrail → routing → stage grouping
-    A4->>SL: channel post (stage-grouped)
-    A4->>SL: developer DM (provenance + feedback buttons)
-    AN->>AN: record_decision(a2_adjusted, sim, latency, cost)
+    subgraph REDIS["Redis — caches, all TTLed"]
+        R1["sme:fix:fph · ai:fix:fph<br/>agent:deviation:* · agent:synthesizer:fph<br/>fix:error_id · error_map:fph · last_edit:*"]
+    end
+    subgraph CHROMA["Chroma — vectors ONLY (single process, P20)"]
+        C1["id = fix-sha256(fp)<br/>embedding(fp) · document = fix_text (debug copy)<br/>collection meta: embedding_model + embedding_dim"]
+    end
+    subgraph KB["SQLite bfa_kb.db — system of record (A-4)"]
+        K1["fixes: wire + analysis + lifecycle keys<br/>hits · feedback · jira · status"]
+        K2["fix_revisions: who / when /<br/>old / new fix_text"]
+        K1 --- K2
+    end
+    subgraph SQLITE["SQLite bfa_stats.db — stats"]
+        S1["analyze_decisions"]
+        S2["pipeline_events"]
+        S3["feedback_events"]
+    end
+    subgraph SLACK["Slack"]
+        SL1["msg:canonical:fph → channel, ts, count<br/>thread_map:channel:ts → error_id"]
+    end
+
+    FP --> REDIS
+    FP --> CHROMA
+    FP --> KB
+    FP --> SQLITE
+    FP --> SLACK
+    C1 == "join by id" ==> K1
+    K1 -- "jira" --> J["Jira ticket (RD-xxxxx)"]
+    S1 -. "fingerprint" .-> SL1
+    S3 -. "fix_id" .-> K1
 ```
 
 ---
@@ -211,6 +209,7 @@ startup (restart to apply); schema + regex validation at load (A-12).
 | `ERROR_PATTERNS_CONFIG` | `config/error_patterns.json` | extractor |
 | `DEAD_LETTER_DIR` | `dead_letter/` | api_poster |
 | `STATS_DB_PATH` | `bfa_stats.db` | stats.py |
+| `KB_DB_PATH` | `bfa_kb.db` | kb_store.py (fix metadata system-of-record) |
 | `JIRA_BASE_URL` / `JIRA_TOKEN` | — | jira_client |
 | `DASHBOARD_ENABLED` | `true` | analyzer_service |
 
@@ -314,18 +313,64 @@ All keys carry TTLs. `<fph> = sha256(fingerprint)[:32]`.
 | `msg:canonical:<fph>` | `{channel, ts, count, last_seen}` | 30 d | A4 (B-5 counter) |
 | `last_edit:<channel>:<user_id>` | error_id | **15 min** | edit handler (B-15; O(1) GET replaces `keys()` scan) |
 
-### 3.3 Chroma collection `fix_embeddings_v2` (A-3/A-4)
+### 3.3 Chroma collection `fix_embeddings_v2` (A-3/A-4) — vectors only
 
 - Space: `{"hnsw:space": "cosine"}`; vectors L2-normalized pre-add/query.
-- `id = "fix-" + sha256(fingerprint).hexdigest()`
-- `document = fix_text`
+- `id = "fix-" + sha256(fingerprint).hexdigest()` — the join key to SQLite.
+- `document = fix_text` (debug copy; SQLite is the source of truth).
 - `embedding = embed(fingerprint)` — the **only** embedded text.
-- `metadata` — flat dict (Chroma restriction: str/int/float/bool):
-  all keys from HYBRID_PROPOSAL §5.4 (wire keys, analysis keys,
-  lifecycle keys). Lists (`raw_error_lines`) stored JSON-encoded as
-  strings. `context_sample` truncated to 2 KB.
+- Collection metadata: `embedding_model` + `embedding_dim` (A-13/#5
+  guard). **No per-row business metadata in Chroma** — that lives in
+  SQLite (§3.4), because the KB APIs need SQL-grade filtering,
+  pagination, and free-text search that Chroma metadata cannot do.
+- **Multi-process rule (P20):** exactly ONE process may open the
+  embedded `PersistentClient`. MVP1 violates this today
+  (`slack_reviewer.py:19` + `analyzer_service.py` share the dir) —
+  B-14 deletes the second process at the start of Phase 1.
 
-### 3.4 Stats store (C-1..C-4) — SQLite `bfa_stats.db`
+### 3.4 KB store — SQLite `bfa_kb.db` (A-4, D-1)
+
+System of record for all fix facts. Retrieval = ANN in Chroma →
+join by id here. `kb_store.py` wraps it (WAL mode, like
+`monitoring.py`).
+
+```sql
+CREATE TABLE fixes (
+  id TEXT PRIMARY KEY,               -- fix-sha256(fingerprint), same as Chroma id
+  fingerprint TEXT NOT NULL, fix_text TEXT NOT NULL,
+  -- wire keys
+  ci_system TEXT, repo TEXT, branch TEXT, commit_sha TEXT, commit_message TEXT,
+  author_name TEXT, author_email TEXT, pipeline_id TEXT, pipeline_url TEXT,
+  job_name TEXT, job_url TEXT, stage TEXT, build_number TEXT, runner_or_agent TEXT,
+  -- analysis keys
+  error_pattern TEXT, error_class TEXT,
+  raw_error_lines TEXT,              -- JSON array
+  context_sample TEXT,               -- first ~2 KB
+  product_team TEXT,
+  -- lifecycle
+  source TEXT, status TEXT, approver TEXT, revision INTEGER DEFAULT 1,
+  created_at TEXT, updated_at TEXT,
+  hits INTEGER DEFAULT 0, last_served_at TEXT,
+  helpful_count INTEGER DEFAULT 0, unhelpful_count INTEGER DEFAULT 0,
+  jira TEXT
+);
+CREATE INDEX idx_fixes_team_status ON fixes(product_team, status);
+CREATE INDEX idx_fixes_pattern    ON fixes(error_pattern);
+CREATE INDEX idx_fixes_updated    ON fixes(updated_at);
+
+CREATE TABLE fix_revisions (         -- full edit history (D-1)
+  id INTEGER PRIMARY KEY, fix_id TEXT REFERENCES fixes(id),
+  revision INTEGER, editor TEXT, edited_at TEXT,
+  old_fix_text TEXT, new_fix_text TEXT,
+  change_source TEXT                 -- approve | edit | api | migration
+);
+```
+
+Write order: SQLite first, then Chroma upsert. A Chroma row with no
+SQLite row is ignored at join time (repairable by re-embedding from
+`fixes`), so partial failures degrade safely.
+
+### 3.5 Stats store (C-1..C-4) — SQLite `bfa_stats.db`
 
 Same approach as the extractor's `monitoring.py` (SQLite, WAL mode).
 
@@ -353,9 +398,12 @@ CREATE TABLE feedback_events (        -- C-3
 `stats.py` exposes `record_pipeline()`, `record_decision()`,
 `record_feedback()`, and read APIs for the dashboard
 (`GET /api/stats/*`). Writes are fire-and-forget (never block or fail
-an analysis).
+an analysis). Kept as a **separate file** from `bfa_kb.db`: stats is
+append-heavy, the KB is read-heavy — separate files avoid lock
+contention. Indexes on `ts`, `fingerprint`, `repo`, `product_team`;
+retention job reuses the extractor's `cleanup_old_records` pattern.
 
-### 3.5 Dead-letter format (E-2)
+### 3.6 Dead-letter format (E-2)
 
 `{DEAD_LETTER_DIR}/{pipeline_id}_{epoch}.json` — the exact payload
 that failed, plus `{"_dead_letter": {"first_failed_at": …,
@@ -426,7 +474,7 @@ positives (F-1). Patterns extendable via optional
   false after analyzer v2 ships).
 - On `RetryExhaustedError` (`api_poster.py:1008`): write dead-letter
   file (§3.5) **instead of** only logging.
-- New: `scripts/replay_failed.py` (see §3.5).
+- New: `scripts/replay_failed.py` (see §3.6).
 
 ---
 
@@ -466,8 +514,11 @@ Changed/new methods on `VectorDBClient`:
 ```python
 def __init__(..., collection=os.getenv("CHROMA_COLLECTION", "fix_embeddings_v2")):
     # create with {"hnsw:space": "cosine"}
-    # A-13: read collection.metadata["embedding_model"]; if set and
-    # != EMBEDDING_MODEL env → raise StartupError (forces migration)
+    # A-13: read collection.metadata["embedding_model" / "embedding_dim"];
+    # model name != EMBEDDING_MODEL env → raise StartupError (forces migration)
+    # dim guard (#5): every _embed_normalized() asserts
+    # len(vector) == embedding_dim — catches silent model/quantization
+    # drift and Ollama response-shape surprises that the name check misses
 
 def _generate_id(self, fingerprint: str) -> str:
     return "fix-" + hashlib.sha256(fingerprint.encode()).hexdigest()
@@ -480,17 +531,23 @@ def _embed_normalized(self, fingerprint: str) -> List[float]:
 def lookup_candidates(self, fingerprint: str, top_k=10, threshold=0.90)
         -> List[Candidate]:
     # query with normalized vector; sim = 1 - cosine_distance (valid now)
-    # filter: sim >= threshold AND metadata.status != "deprecated"
+    # join Chroma ids -> kb_store.fixes rows (SQLite, A-4);
+    # filter: sim >= threshold AND fixes.status != "deprecated";
+    # Chroma rows with no fixes row are ignored (safe partial-failure)
     # returns Candidate(id, fix_text, stored_error, metadata, similarity)
 
 def save_fix(self, fingerprint, fix_text, metadata, status) -> str:
-    # upsert semantics (A-6): if id exists → collection.update,
-    # revision += 1, updated_at=now; else add with revision=1
-    # stamps metadata["embedding_model"] = EMBEDDING_MODEL
+    # upsert semantics (A-6), SQLite FIRST then Chroma:
+    # 1 kb_store.upsert_fix(...) — writes fixes row, appends
+    #   fix_revisions entry (who/when/old/new), revision += 1
+    # 2 Chroma add/update: id + embedding + fix_text only
+    # (a Chroma failure leaves a consistent SQLite record that a
+    #  repair pass can re-embed)
 
-def touch_served(self, fix_id):        # hits += 1, last_served_at = now
-def set_status(self, fix_id, status)   # used by deprecate API
-def get_by_id / list_filtered(...)     # used by kb_api.py
+# metadata operations live on kb_store (SQLite), not Chroma:
+kb_store.touch_served(fix_id)          # hits += 1, last_served_at = now
+kb_store.set_status(fix_id, status)    # deprecate API (soft delete)
+kb_store.get_by_id / list_filtered(...)# plain SQL — used by kb_api.py
 ```
 
 Context disambiguation (A-5) in `disambiguate(candidates, context_lines)`:
@@ -767,6 +824,11 @@ Auto-create trigger (configurable, default on): `source == "a3"` and
 
 ### 7.1 `kb_api.py` — FastAPI router, JWT-protected like `/api/analyze`
 
+All reads/filters/search run as plain SQL on `bfa_kb.db` (§3.4) —
+fast, paginated, free-text-capable. Revision history comes from
+`fix_revisions`. Chroma is touched only by `POST` (embed) and
+`PUT` when `fix_text` changes (re-store document).
+
 | Endpoint | Request | Response / behavior |
 |---|---|---|
 | `POST /api/fixes` | `{error_text OR error_lines[], fix_text, metadata?}` | normalize → fingerprint → upsert; absorbs `add_manual_fix` / `bulk_manual_fix` (kept as deprecated aliases one release) |
@@ -831,10 +893,11 @@ as part of F-6.
 
 ### 8.4 Backup (D-4) & pruning (D-3)
 
-- `scripts/backup_chroma.sh`: stop-free snapshot — `tar czf
-  backups/chroma_$(date +%F).tar.gz $CHROMA_DIR` + `sqlite3
-  bfa_stats.db ".backup …"`; keep 14; daily cron. Restore procedure
-  documented in README-OPS.
+- `scripts/backup_bfa.sh` — daily cron using the **SQLite `.backup`
+  API** for every store: `bfa_kb.db`, `bfa_stats.db`, and Chroma's
+  internal `chroma.sqlite3` (+ copy of index segment dirs). Never a
+  raw `tar` of live DB files — a live tar can capture a mid-write
+  state (#3). Keep 14; restore procedure in README-OPS.
 - `scripts/prune_kb.py --dry-run|--apply`: select
   `status=deprecated OR (hits=0 AND created_at < now-6mo)` → export
   JSON archive → delete rows. Monthly cron with `--dry-run` output
@@ -860,9 +923,11 @@ flowchart LR
    (cosine) if absent; stamp `embedding_model`.
 2. Per row: skip if `len(error_text) > 5KB` (poisoning), empty fix,
    or status not in (approved, edited). Else: `normalize_error_text`
-   → fingerprint → re-embed → L2-normalize → upsert (dup fingerprint:
-   keep newest, bump revision) with metadata mapped to §5.4 schema
-   (missing keys defaulted, `source="migrated"`).
+   → fingerprint → re-embed → L2-normalize → upsert **into both
+   stores** (SQLite `fixes` row with metadata mapped to the §3.4
+   schema, `source="migrated"`, missing keys defaulted; then Chroma
+   id+embedding+fix_text). Dup fingerprint: keep newest, bump
+   revision (history row in `fix_revisions`).
 3. Report: total/migrated/skipped(reason)/deduped → JSON + stdout.
 4. Run on staging copy first; verify with F-2 suite; then prod run +
    flip `CHROMA_COLLECTION`. Rollback = flip env var back (old
@@ -978,7 +1043,7 @@ flowchart LR
 | WS | Content (scope IDs) | Files | Depends on |
 |---|---|---|---|
 | **1A Extractor** | region split A-1, redaction A-8, patterns config A-9, dead-letter E-2, schema F-3 | `log_error_extractor.py`, `redactor.py`, `api_poster.py`, `config/error_patterns.json` | — |
-| **1B Analyzer core** | normalizer A-2, vector_db v2 A-3/A-4/A-13, Redis TTLs A-7, async A-10, logging A-11, config validation A-12, migration §9 | `normalizer.py`, `vector_db.py`, `analyzer_service.py`, `scripts/migrate_vector_db.py` | — |
+| **1B Analyzer core** | normalizer A-2, vector_db v2 A-3/A-13 (+dim guard), **kb_store SQLite A-4**, Redis TTLs A-7, async A-10, logging A-11, config validation A-12, migration §9, **delete `slack_reviewer.py` first (P20 corruption hazard, B-14)** | `normalizer.py`, `vector_db.py`, `kb_store.py`, `analyzer_service.py`, `scripts/migrate_vector_db.py` | — |
 | **1C Test base** | normalizer goldens, redactor tests, F-2 component suite, F-3 schema tests, F-6 linter cleanup, test instance setup (RD-15346) | `tests/…`, `component/…` | 1B for F-2 |
 
 **Phase gate:** migration verified on staging copy; poisoning

@@ -77,6 +77,7 @@ code review. Each maps to a scope item in §1.2.
 | P17 | No way to deprecate a bad fix (the poisoning row had to be removed by hand) | D-1 |
 | P18 | Embedding model upgrade would silently mix vector spaces | A-13 |
 | P19 | Tests mock all vector math — the production poisoning bug was invisible to a green suite | F-2, F-5 |
+| P20 | Two processes (analyzer + `slack_reviewer.py`) open the same embedded Chroma directory — embedded Chroma is not multi-process safe; corruption hazard | B-14 |
 
 ### 1.2 Final MVP2 Scope — Six Pillars
 
@@ -89,7 +90,7 @@ Agreed scope. IDs are referenced throughout this document.
 | A-1 | Wire contract: split `error_lines` / `context_lines` per region (legacy shape kept one release) |
 | A-2 | Normalization + fingerprint (strip Line-N/timestamps, lowercase, collapse whitespace) |
 | A-3 | Chroma cosine space + `sha256(fingerprint)` IDs + L2-normalized vectors, threshold 0.90 |
-| A-4 | Embed only the error; full metadata schema — GitLab/Jenkins + analysis + lifecycle keys (§5.4) |
+| A-4 | Embed only the error. Metadata moves to a **SQLite system-of-record** (`fixes` + `fix_revisions` tables — full edit history); Chroma holds vectors + fix_text only (§5.4) |
 | A-5 | Context-cosine disambiguation (0.7/0.3 weighted, tie → A2) |
 | A-6 | Update-not-insert on approval, `revision` bump |
 | A-7 | Redis TTLs (30 d) on `fix:*` / `error_map:*` / `thread_map:*`; `error_map` keyed by fingerprint hash |
@@ -98,7 +99,7 @@ Agreed scope. IDs are referenced throughout this document.
 | A-10 | Async processing: `202 Accepted` + background task (unblocks the event loop) |
 | A-11 | Analyzer adopts extractor's `logging_config.py` pattern; no more `print()` |
 | A-12 | Startup validation of all config files (routing JSON, patterns) — fail fast |
-| A-13 | `embedding_model` stamped in rows; mismatch at startup → refuse to start (forces migration) |
+| A-13 | `embedding_model` **and `embedding_dim`** stamped in collection metadata; model-name mismatch at startup → refuse to start (forces migration); every embedding asserted against `embedding_dim` (catches silent model/quantization drift) |
 
 **Pillar B — Agentic layer (4 agents)**
 
@@ -117,7 +118,7 @@ Agreed scope. IDs are referenced throughout this document.
 | B-11 | Infra/flaky errors (per A-9 classification) → DevOps channel / "retry" DM — never blame the developer |
 | B-12 | Jira: "Create Jira" button + auto-create on `no_match` / low confidence; `jira` key prevents duplicates |
 | B-13 | 👍/👎 feedback buttons on developer DM; 3× 👎 auto-flags fix to SME channel |
-| B-14 | Consolidate Slack handlers: delete `slack_reviewer.py`; keep FastAPI versions only |
+| B-14 | Consolidate Slack handlers: delete `slack_reviewer.py`; keep FastAPI versions only. **Data-integrity fix, not just hygiene** (P20: two processes on one embedded Chroma risks index corruption) — execute at the start of Phase 1 |
 | B-15 | Slack edit-prompt: 15-min TTL + O(1) key lookup (editing stored fixes anytime = Edit API / dashboard) |
 
 **Pillar C — Stats & telemetry**
@@ -133,10 +134,10 @@ Agreed scope. IDs are referenced throughout this document.
 
 | # | Item |
 |---|---|
-| D-1 | REST APIs — **full CRUD**: add, list/filter/search, get detail, edit, deprecate (soft delete, filtered from retrieval). One API surface serving both CLI/automation consumers and the KB dashboard (RD-15321) |
+| D-1 | REST APIs — **full CRUD**: add, list/filter/search, get detail, edit, deprecate (soft delete, filtered from retrieval). **SQL-backed** (plain SQL filters, pagination, free-text; revision history from `fix_revisions`). One API surface serving both CLI/automation consumers and the KB dashboard (RD-15321) |
 | D-2 | Dashboard: Resolved view, Pending/needs-attention view (editable, any age), Stats view — full filters (§16) |
 | D-3 | Monthly pruning job: deprecated / zero-hit > 6 months → archive + delete; surfaced in dashboard first |
-| D-4 | Chroma backup: daily snapshot + retention + documented restore |
+| D-4 | Daily backup via the **SQLite `.backup` API** (`bfa_kb.db`, `bfa_stats.db`, Chroma's internal store — never raw `tar` of live DB files) + retention + documented restore |
 
 **Pillar E — Resilience & ops**
 
@@ -497,14 +498,19 @@ threshold is properly calibrated.
 display and disambiguation, but never let them influence the vector
 search.
 
-Rewrite `save_fix_to_db`. Only **one** thing is embedded; everything
-else is inert cargo attached to the row:
+Rewrite `save_fix_to_db`. Only **one** thing is embedded, and the
+stores split cleanly (A-4): **Chroma holds vectors, SQLite holds
+facts.** Metadata lives in a SQLite system-of-record (`fixes` table,
+with `fix_revisions` capturing full edit history — who, when,
+old/new text), because the KB APIs and dashboard need SQL-grade
+filtering, pagination, and free-text search that Chroma metadata
+cannot provide.
 
 | Field | Where it goes | Embedded? |
 |---|---|---|
-| Normalized fingerprint | embedding input | ✅ yes |
-| `fix_text` | Chroma document | ❌ no |
-| everything below | metadata | ❌ no |
+| Normalized fingerprint | Chroma embedding input | ✅ yes |
+| `fix_text` | Chroma document (debug copy) **+ SQLite `fixes.fix_text` (source of truth)** | ❌ no |
+| everything below | **SQLite `fixes` table** (joined to Chroma by the shared `fix-sha256(fp)` id) | ❌ no |
 
 **Full metadata key list (A-4):**
 
@@ -1338,10 +1344,12 @@ it is measured.
 
 ### 16.1 REST APIs (D-1)
 
-Full CRUD. One API surface serves **both** consumers: CLI/automation
-(scripts, future Claude CLI integration) and the KB dashboard (§16.2)
-— the dashboard is just a UI over these endpoints, no separate write
-path.
+Full CRUD, **SQL-backed**: list/filter/search/pagination run as
+plain SQL against the `fixes` table (A-4), and revision history comes
+from `fix_revisions` — no Chroma metadata queries involved. One API
+surface serves **both** consumers: CLI/automation (scripts, future
+Claude CLI integration) and the KB dashboard (§16.2) — the dashboard
+is just a UI over these endpoints, no separate write path.
 
 | Endpoint | Purpose |
 |---|---|
@@ -1369,9 +1377,12 @@ path.
 - Monthly pruning job: `status=deprecated` or (hits=0 ∧ age > 6
   months) → export to archive file, delete from collection. Candidates
   surfaced in the dashboard before deletion.
-- Chroma backup: daily snapshot of the persist directory with
-  retention; restore procedure documented. Interim answer until
-  RD-15338 (scalable vector DB).
+- Backups: daily, via the SQLite `.backup` API for `bfa_kb.db`,
+  `bfa_stats.db`, and Chroma's internal store — never a raw `tar` of
+  live database files (a live tar can capture a mid-write state).
+  Retention 14 days; restore procedure documented. Interim answer
+  until RD-15338 (scalable vector DB — direction: pgvector, which
+  would unify vectors + metadata + stats in one Postgres).
 
 ---
 
