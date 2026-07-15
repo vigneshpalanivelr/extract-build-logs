@@ -15,80 +15,58 @@ Team-size note: the plan (§12) is organized as independent
 
 ## 1. Component Architecture
 
-```
-                         GitLab / Jenkins webhook (pipeline finished)
-                                          │
-                                          ▼
-╔═════════════════════════ LOG EXTRACTOR  (src/) ══════════════════════════╗
-║                                                                          ║
-║   ┌─────────────────────┐    ┌──────────────────────┐                    ║
-║   │ webhook_listener.py │───►│ pipeline_extractor.py│                    ║
-║   │ receive + validate  │    │ pipeline / stage info│                    ║
-║   └─────────────────────┘    └──────────┬───────────┘                    ║
-║                                         │                                ║
-║                                         ▼                                ║
-║   ┌─────────────────────┐    ┌──────────────────────┐                    ║
-║   │ log_fetcher.py      │───►│ log_error_extractor  │                    ║
-║   │ pull console log    │    │ per-region split A-1 │                    ║
-║   │ (GitLab / Jenkins)  │    │ patterns config  A-9 │                    ║
-║   └─────────────────────┘    └──────────┬───────────┘                    ║
-║                                         │  List[ErrorRegion]             ║
-║                                         ▼                                ║
-║   ┌─────────────────────┐    ┌──────────────────────┐                    ║
-║   │ redactor.py    A-8  │───►│ api_poster.py        │                    ║
-║   │ strip secrets before│    │ v2 payload      A-1  │                    ║
-║   │ anything leaves host│    │ retry + dead-letter  │──► dead_letter/*.json
-║   └─────────────────────┘    │              E-2     │    (replay_failed.py)
-║                              └──────────┬───────────┘                    ║
-╚═════════════════════════════════════════╪════════════════════════════════╝
-                                          │
-                                          │  POST /api/analyze
-                                          │  → 202 Accepted (A-10)
-                                          ▼
-╔═══════════════════ BUILD FAILURE ANALYZER  (build-failure-analyzer/) ════╗
-║                                                                          ║
-║   analyzer_service.py (FastAPI) ── background task per request           ║
-║        │                                                                 ║
-║        ▼                                                                 ║
-║   ┌──────────────────────────────────────────────────────────────────┐   ║
-║   │ orchestrator.py — state machine (HYBRID_PROPOSAL §4.1)           │   ║
-║   │                                                                  │   ║
-║   │   A1 agents/summarizer.py   no LLM   fingerprint + summary       │   ║
-║   │   A2 agents/deviation.py    LLM      stored fix applies?         │   ║
-║   │   A3 agents/synthesizer.py  LLM      fresh fix on miss           │   ║
-║   │   A4 agents/reporter.py     no LLM   route + format + deliver    │   ║
-║   └──────┬────────────────────────────────────────┬──────────────────┘   ║
-║          │ uses                                   │ A4 uses              ║
-║          ▼                                        ▼                      ║
-║   ┌─────────────────────────────┐   ┌─────────────────────────────────┐  ║
-║   │ normalizer.py          A-2  │   │ routing.py    routing.json B-6  │  ║
-║   │ vector_db.py  A-3/A-4/A-13  │   │ guardrail.py  denylist     B-10 │  ║
-║   │ (cosine · sha256 · upsert)  │   │ jira_client.py             B-12 │  ║
-║   └─────────────────────────────┘   │ slack handlers B-14 + fb  B-13  │  ║
-║                                     └─────────────────────────────────┘  ║
-║                                                                          ║
-║   ┌─────────────────────────────┐   ┌─────────────────────────────────┐  ║
-║   │ kb_api.py              D-1  │   │ stats.py (SQLite)   C-1…C-4     │  ║
-║   │ full CRUD /api/fixes        │◄──│ decisions · pipelines · feedback│  ║
-║   └──────────────▲──────────────┘   └─────────────────────────────────┘  ║
-║                  │ fetch                                                 ║
-║   ┌──────────────┴──────────────┐   ┌─────────────────────────────────┐  ║
-║   │ dashboard/  static SPA D-2  │   │ watchdog.py            E-3      │  ║
-║   │ resolved · pending · stats  │   │ silent-failure alert + /health  │  ║
-║   └─────────────────────────────┘   └─────────────────────────────────┘  ║
-╚══════════════════════════════════════════════════════════════════════════╝
-          │              │                │              │           │
-          ▼              ▼                ▼              ▼           ▼
-   ┌───────────┐  ┌────────────┐  ┌─────────────┐  ┌──────────┐  ┌───────┐
-   │  Redis    │  │  Chroma    │  │ Ollama      │  │ Bedrock  │  │ Slack │
-   │  caches   │  │  vector KB │  │ granite-    │  │ Claude   │  │  API  │
-   │  (§3.2)   │  │  (§3.3)    │  │ embedding   │  │ (OpenWebUI)│ └───────┘
-   └───────────┘  └────────────┘  └─────────────┘  └──────────┘  ┌───────┐
-                                                                 │ Jira  │
-                                                   ┌──────────┐  │  API  │
-                                                   │  SMTP    │  └───────┘
-                                                   │  alerts  │
-                                                   └──────────┘
+```mermaid
+flowchart TB
+    WH(["GitLab / Jenkins webhook<br/>(pipeline finished)"]) --> WL
+
+    subgraph EXT["LOG EXTRACTOR (src/)"]
+        direction TB
+        WL["webhook_listener.py<br/>receive + validate"] --> PE["pipeline_extractor.py<br/>pipeline / stage info"]
+        PE --> LF["log_fetcher.py<br/>pull console log"]
+        LF --> LEE["log_error_extractor.py<br/>per-region split A-1 · patterns config A-9"]
+        LEE -- "List[ErrorRegion]" --> RED["redactor.py A-8<br/>strip secrets"]
+        RED --> AP["api_poster.py<br/>v2 payload A-1 · retry + dead-letter E-2"]
+        AP -.-> DL[("dead_letter/*.json<br/>replay_failed.py")]
+    end
+
+    AP == "POST /api/analyze → 202 Accepted (A-10)" ==> AS
+
+    subgraph ANA["BUILD FAILURE ANALYZER (build-failure-analyzer/)"]
+        direction TB
+        AS["analyzer_service.py (FastAPI)<br/>background task per request"] --> ORC
+
+        ORC["orchestrator.py — state machine<br/>A1 summarizer (no LLM) · A2 deviation (LLM)<br/>A3 synthesizer (LLM) · A4 reporter (no LLM)"]
+
+        subgraph DATA["data path"]
+            NORM["normalizer.py A-2"]
+            VDB["vector_db.py A-3 / A-4 / A-13<br/>cosine · sha256 · upsert"]
+        end
+
+        subgraph DELIV["delivery path (A4)"]
+            ROUT["routing.py B-6"]
+            GUARD["guardrail.py B-10"]
+            JIRA["jira_client.py B-12"]
+            SLK["slack handlers B-14<br/>+ feedback B-13"]
+        end
+
+        subgraph MGMT["management plane"]
+            KB["kb_api.py D-1<br/>full CRUD /api/fixes"]
+            ST["stats.py SQLite C-1..C-4"]
+            DASH["dashboard/ SPA D-2"]
+            WDG["watchdog.py E-3"]
+        end
+
+        ORC --> DATA
+        ORC --> DELIV
+        DASH --> KB
+        ST --> KB
+    end
+
+    DATA --> R[("Redis<br/>caches")] & CH[("Chroma<br/>vector KB")] & OL["Ollama<br/>granite-embedding"]
+    ORC --> BR["Bedrock Claude<br/>via OpenWebUI"]
+    SLK --> SAPI["Slack API"]
+    JIRA --> JAPI["Jira API"]
+    WDG --> SMTP["SMTP alerts"]
 ```
 
 Reading guide:
@@ -105,6 +83,50 @@ Reading guide:
 Deleted in MVP2: `slack_reviewer.py` (duplicate Flask service, B-14)
 and `summarize_error_with_ai` in `slack_helper.py` (replaced by A1's
 deterministic summary, B-1).
+
+### 1.1 End-to-end request sequence
+
+The life of one failed pipeline — happy path with an ambiguous
+candidate (the most complete route). Cache hits and exact matches
+exit earlier; every terminal path goes through A4.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GL as GitLab
+    participant EX as Extractor
+    participant AN as Analyzer
+    participant A1 as A1 Summariser
+    participant RD as Redis
+    participant CH as Chroma
+    participant A2 as A2 Deviation
+    participant A4 as A4 Reporter
+    participant SL as Slack
+
+    GL->>EX: webhook (pipeline failed)
+    EX->>GL: fetch console log
+    EX->>EX: split regions + redact (A-1, A-8)
+    EX->>AN: POST /api/analyze (v2 payload)
+    AN-->>EX: 202 Accepted (A-10)
+    Note over AN: background task starts
+    AN->>A1: run(region)
+    A1-->>AN: fingerprint + summary
+    AN->>RD: GET sme:fix / ai:fix
+    RD-->>AN: MISS
+    AN->>CH: lookup_candidates(fp, threshold 0.90)
+    CH-->>AN: 1 candidate, sim 0.92
+    AN->>RD: GET agent:deviation cache
+    RD-->>AN: MISS
+    AN->>A2: judge(current error, stored error, stored fix)
+    A2-->>AN: applicable_with_adjustments
+    AN->>RD: SETEX agent:deviation (7 d)
+    AN->>CH: upsert adjusted fix
+    AN->>A4: deliver(result)
+    Note over A4: guardrail → routing → stage grouping
+    A4->>SL: channel post (stage-grouped)
+    A4->>SL: developer DM (provenance + feedback buttons)
+    AN->>AN: record_decision(a2_adjusted, sim, latency, cost)
+```
 
 ---
 
@@ -198,6 +220,37 @@ after one release of deprecation warning.
 ---
 
 ## 3. Data Design
+
+How the stores relate — the fingerprint hash (`fph`) is the join key
+across all of them:
+
+```mermaid
+flowchart TB
+    FP["fingerprint = normalize(error_lines)<br/>fph = sha256(fingerprint) — the join key"]
+
+    subgraph REDIS["Redis — caches, all TTLed"]
+        R1["sme:fix:fph · ai:fix:fph<br/>agent:deviation:* · agent:synthesizer:fph<br/>fix:error_id · error_map:fph · last_edit:*"]
+    end
+    subgraph CHROMA["Chroma — knowledge base"]
+        C1["id = fix-sha256(fp)<br/>embedding(fp) ONLY<br/>document = fix_text<br/>metadata: wire + analysis + lifecycle keys"]
+    end
+    subgraph SQLITE["SQLite — stats"]
+        S1["analyze_decisions"]
+        S2["pipeline_events"]
+        S3["feedback_events"]
+    end
+    subgraph SLACK["Slack"]
+        SL1["msg:canonical:fph → channel, ts, count<br/>thread_map:channel:ts → error_id"]
+    end
+
+    FP --> REDIS
+    FP --> CHROMA
+    FP --> SQLITE
+    FP --> SLACK
+    C1 -- "metadata.jira" --> J["Jira ticket (RD-xxxxx)"]
+    S1 -. "fingerprint" .-> SL1
+    S3 -. "fix_id" .-> C1
+```
 
 ### 3.1 Wire contract v2 (A-1) — `POST /api/analyze`
 
@@ -447,6 +500,32 @@ return top if margin > 0.05 else `None` (→ A2). Behind
 
 ### 5.3 `orchestrator.py` (new) — state machine
 
+```mermaid
+flowchart TB
+    START(["POST /api/analyze → 202"]) --> A1["A1 normalize<br/>(never fails — raw-lines fallback)"]
+    A1 --> CACHE{"Redis cache?"}
+    CACHE -- "HIT (no LLM)" --> A4
+    CACHE -- MISS --> VEC["vector lookup<br/>(Chroma / Ollama down → 0 candidates)"]
+    VEC --> N{"candidates ≥ 0.90"}
+    N -- "0" --> A3["A3 synthesize fresh fix"]
+    N -- "1, sim ≥ 0.95" --> STORED["stored fix · touch_served"]
+    N -- "1 in [0.90, 0.95)" --> A2["A2 judge candidate"]
+    N -- "≥ 2" --> TIE{"deterministic tie-break<br/>(A-5, context-cosine)?"}
+    TIE -- winner --> STORED
+    TIE -- "no margin" --> A2P["A2 × top-3 parallel<br/>→ best verdict"]
+    A2 -- exact_match --> STORED
+    A2 -- applicable_with_adjustments --> ADJ["upsert adjusted fix"]
+    A2 -- "partial / no_match / A2 failure" --> A3
+    A2P -- "exact / adjusted" --> ADJ
+    A2P -- "none applicable" --> A3
+    A3 -- "A3 failure" --> UN["unable to analyze<br/>+ DevOps notify"]
+    STORED --> A4
+    ADJ --> A4
+    A3 --> A4
+    UN --> A4
+    A4["A4 Reporter<br/>guardrail → routing → stage grouping<br/>→ counters → DM + stats"] --> DONE([done])
+```
+
 ```python
 async def analyze_request(payload: AnalyzePayload) -> None:   # runs in background task
     stats_ctx = stats.start(payload)
@@ -546,6 +625,24 @@ release, then deleted.
 
 ### 6.5 `agents/reporter.py` — A4
 
+Delivery decision flow:
+
+```mermaid
+flowchart TB
+    R(["Result: stored / a2_adjusted / a3 / unable"]) --> RT["routing.resolve(repo, job) — B-6<br/>channel · product_team · SME group"]
+    RT --> G{"guardrail.check(fix_text) — B-10"}
+    G -- blocked --> SME["SME review only, warning flag — NO DM"]
+    G -- pass --> EC{"error_class — B-11"}
+    EC -- infra --> DEVOPS["DevOps channel<br/>(no developer DM)"]
+    EC -- flaky --> RETRY["DM: suggest pipeline retry"]
+    EC -- code --> CAN{"msg:canonical:fph exists? — B-5"}
+    CAN -- yes --> BUMP["edit canonical message:<br/>bump seen-N× counter"]
+    CAN -- "first time" --> GRP["stage grouping — B-4<br/>parent msg per stage,<br/>extra errors as thread replies"]
+    BUMP --> DM
+    GRP --> DM
+    DM["DM developer — B-8 / B-9<br/>provenance line + 👍/👎 (B-13) + Create Jira (B-12)<br/>lookup fails → team channel, author named"]
+```
+
 ```python
 class Reporter:
     async def deliver(self, result: Result, payload: AnalyzePayload):
@@ -585,6 +682,54 @@ class Reporter:
   unit golden tests; extendable via config.
 
 ### 6.6 Slack handlers (B-13, B-14, B-15)
+
+```mermaid
+sequenceDiagram
+    participant U as SME / Developer
+    participant S as Slack
+    participant H as Analyzer handlers
+    participant C as Chroma
+    participant R as Redis
+    participant Q as SQLite
+    participant J as Jira
+
+    rect rgb(232, 242, 255)
+    Note over U,C: Approve
+    U->>S: click Approve
+    S->>H: action payload
+    H->>C: save_fix (upsert, revision++)
+    H->>R: SETEX sme:fix:fph 30d
+    H->>S: update message + DM developer
+    end
+
+    rect rgb(232, 255, 240)
+    Note over U,R: Edit (15-minute session)
+    U->>S: click Edit
+    S->>H: action payload
+    H->>R: SETEX last_edit:ch:user 900 error_id
+    H->>S: thread prompt
+    U->>S: thread reply (new fix text)
+    S->>H: message event
+    H->>R: GET last_edit (O(1))
+    H->>C: save edited fix (upsert, revision++)
+    H->>S: confirmation
+    end
+
+    rect rgb(255, 248, 232)
+    Note over U,J: Feedback and Jira
+    U->>S: click thumbs up / down
+    S->>H: action payload
+    H->>Q: record_feedback
+    H->>C: helpful / unhelpful counter++
+    alt unhelpful count >= 3
+        H->>S: auto-flag to SME channel
+    end
+    U->>S: click Create Jira
+    S->>H: action payload
+    H->>J: create_or_link (never duplicates)
+    H->>S: ticket link added to message
+    end
+```
 
 - Delete `slack_reviewer.py`; `analyzer_service.py` keeps
   `/bfa/slack/events` + `/bfa/slack/actions` (already implemented
@@ -699,6 +844,18 @@ as part of F-6.
 
 ## 9. Migration (`scripts/migrate_vector_db.py`)
 
+```mermaid
+flowchart LR
+    OLD[("fix_embeddings<br/>old · L2 · blobs")] --> F{"filter row"}
+    F -- "error_text > 5 KB (poison)<br/>or empty fix<br/>or status not approved/edited" --> SKIP["skip<br/>+ count reason"]
+    F -- pass --> NRM["normalize<br/>→ fingerprint"] --> EMB["re-embed<br/>+ L2-normalize"] --> UP{"duplicate<br/>fingerprint?"}
+    UP -- yes --> KEEP["keep newest<br/>revision++"]
+    UP -- no --> NEW["insert"]
+    KEEP --> V2[("fix_embeddings_v2<br/>cosine · model stamped<br/>source = migrated")]
+    NEW --> V2
+    V2 --> REP["report: total / migrated /<br/>skipped(reason) / deduped"]
+```
+
 1. Open old `fix_embeddings` read-only; create `fix_embeddings_v2`
    (cosine) if absent; stamp `embedding_model`.
 2. Per row: skip if `len(error_text) > 5KB` (poisoning), empty fix,
@@ -714,6 +871,20 @@ as part of F-6.
 ---
 
 ## 10. Testing implementation (Pillar F)
+
+Test pyramid — many fast tests at the bottom, few expensive ones at
+the top; F-2 exists because MVP1 mocked all vector math and shipped
+the poisoning bug under a green build:
+
+```mermaid
+flowchart BT
+    F1["F-1 Unit — many, fast<br/>normalizer goldens · orchestrator branches · agents · reporter · kb_api"]
+    F3["F-3 Wire-contract schema — one schema, both services"]
+    F2["F-2 Component — REAL Chroma + REAL embeddings<br/>poisoning regression 0% · threshold calibration · deterministic IDs"]
+    F4["F-4 E2E docker-compose — 6 scenarios + 4 chaos tests"]
+    F5["F-5 Eval harness — metric gates · CI mode every PR · nightly real LLM"]
+    F1 --> F3 --> F2 --> F4 --> F5
+```
 
 ```
 tests-shared/schemas/analyze_payload.schema.json      (F-3, single source)
@@ -772,6 +943,35 @@ Workstreams (WS) are independently mergeable; the dependency graph is
 what matters. 1 engineer executes them top-to-bottom; 2–3 engineers
 take one column each. Estimates are effort (person-weeks), not
 calendar.
+
+### Workstream dependency graph
+
+```mermaid
+flowchart LR
+    subgraph P1["Phase 1 — Foundation & Safety (~4 pw)"]
+        WS1A["1A Extractor<br/>A-1 A-8 A-9 E-2 F-3"]
+        WS1B["1B Analyzer core<br/>A-2..A-7 A-10..A-13<br/>+ migration"]
+        WS1C["1C Test base<br/>F-1 F-2 F-6 · RD-15346"]
+    end
+    subgraph P2["Phase 2 — Agents & Delivery (~4 pw)"]
+        WS2A["2A Orchestrator + agents<br/>B-1 B-2 B-3 + shadow mode"]
+        WS2B["2B Reporter + Slack<br/>B-4..B-11 B-13..B-15"]
+        WS2C["2C E2E + Eval<br/>F-4 F-5 (starts on mocks)"]
+    end
+    subgraph P3["Phase 3 — Visibility & Ops (~3 pw)"]
+        WS3A["3A KB API + Dashboard<br/>D-1 D-2"]
+        WS3B["3B Stats + Jira<br/>C-1..C-4 B-12"]
+        WS3C["3C Ops hardening<br/>E-1 E-3 E-4 D-3 D-4"]
+    end
+    WS1A --> WS2B
+    WS1B --> WS2A
+    WS1B --> WS2B
+    WS1B --> WS3A
+    WS1C --> WS2C
+    WS2A --> WS2C
+    WS2A --> WS3C
+    WS2B --> WS3B
+```
 
 ### Phase 1 — Foundation & Safety (blockers first)   [~4 pw]
 
