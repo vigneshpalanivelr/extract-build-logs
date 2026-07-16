@@ -92,38 +92,41 @@ candidate (the most complete route). Cache hits and exact matches
 exit earlier; every terminal path goes through A4.
 
 ```mermaid
-flowchart TB
-    FP["fingerprint = normalize(error_lines)<br/>fph = sha256(fingerprint) — the join key"]
+sequenceDiagram
+    autonumber
+    participant GL as GitLab
+    participant EX as Extractor
+    participant AN as Analyzer
+    participant A1 as A1 Summariser
+    participant RD as Redis
+    participant CH as Chroma
+    participant A2 as A2 Deviation
+    participant A4 as A4 Reporter
+    participant SL as Slack
 
-    subgraph REDIS["Redis — caches, all TTLed"]
-        R1["sme:fix:fph · ai:fix:fph<br/>agent:deviation:* · agent:synthesizer:fph<br/>fix:error_id · error_map:fph · last_edit:*"]
-    end
-    subgraph CHROMA["Chroma — vectors ONLY (single process, P20)"]
-        C1["id = fix-sha256(fp)<br/>embedding(fp) · document = fix_text (debug copy)<br/>collection meta: embedding_model + embedding_dim"]
-    end
-    subgraph KB["SQLite bfa_kb.db — system of record (A-4)"]
-        K1["fixes: wire + analysis + lifecycle keys<br/>hits · feedback · jira · status"]
-        K2["fix_revisions: who / when /<br/>old / new fix_text"]
-        K1 --- K2
-    end
-    subgraph SQLITE["SQLite bfa_stats.db — stats"]
-        S1["analyze_decisions"]
-        S2["pipeline_events"]
-        S3["feedback_events"]
-    end
-    subgraph SLACK["Slack"]
-        SL1["msg:canonical:fph → channel, ts, count<br/>thread_map:channel:ts → error_id"]
-    end
-
-    FP --> REDIS
-    FP --> CHROMA
-    FP --> KB
-    FP --> SQLITE
-    FP --> SLACK
-    C1 == "join by id" ==> K1
-    K1 -- "jira" --> J["Jira ticket (RD-xxxxx)"]
-    S1 -. "fingerprint" .-> SL1
-    S3 -. "fix_id" .-> K1
+    GL->>EX: webhook (pipeline failed)
+    EX->>GL: fetch console log
+    EX->>EX: split regions + redact (A-1, A-8)
+    EX->>AN: POST /api/analyze (v2 payload)
+    AN-->>EX: 202 Accepted (A-10)
+    Note over AN: background task starts
+    AN->>A1: run(region)
+    A1-->>AN: fingerprint + summary
+    AN->>RD: GET sme:fix / ai:fix
+    RD-->>AN: MISS
+    AN->>CH: lookup_candidates(fp, threshold 0.90)
+    CH-->>AN: 1 candidate, sim 0.92
+    AN->>RD: GET agent:deviation cache
+    RD-->>AN: MISS
+    AN->>A2: judge(current error, stored error, stored fix)
+    A2-->>AN: applicable_with_adjustments
+    AN->>RD: SETEX agent:deviation (7 d)
+    AN->>CH: upsert adjusted fix
+    AN->>A4: deliver(result)
+    Note over A4: guardrail → routing → stage grouping
+    A4->>SL: channel post (stage-grouped)
+    A4->>SL: developer DM (provenance + feedback buttons)
+    AN->>AN: record_decision(a2_adjusted, sim, latency, cost)
 ```
 
 ---
@@ -323,7 +326,7 @@ All keys carry TTLs. `<fph> = sha256(fingerprint)[:32]`.
   guard). **No per-row business metadata in Chroma** — that lives in
   SQLite (§3.4), because the KB APIs need SQL-grade filtering,
   pagination, and free-text search that Chroma metadata cannot do.
-- **Multi-process rule (P20):** exactly ONE process may open the
+- **Multi-process rule (P5):** exactly ONE process may open the
   embedded `PersistentClient`. MVP1 violates this today
   (`slack_reviewer.py:19` + `analyzer_service.py` share the dir) —
   B-14 deletes the second process at the start of Phase 1.
@@ -1043,7 +1046,7 @@ flowchart LR
 | WS | Content (scope IDs) | Files | Depends on |
 |---|---|---|---|
 | **1A Extractor** | region split A-1, redaction A-8, patterns config A-9, dead-letter E-2, schema F-3 | `log_error_extractor.py`, `redactor.py`, `api_poster.py`, `config/error_patterns.json` | — |
-| **1B Analyzer core** | normalizer A-2, vector_db v2 A-3/A-13 (+dim guard), **kb_store SQLite A-4**, Redis TTLs A-7, async A-10, logging A-11, config validation A-12, migration §9, **delete `slack_reviewer.py` first (P20 corruption hazard, B-14)** | `normalizer.py`, `vector_db.py`, `kb_store.py`, `analyzer_service.py`, `scripts/migrate_vector_db.py` | — |
+| **1B Analyzer core** | normalizer A-2, vector_db v2 A-3/A-13 (+dim guard), **kb_store SQLite A-4**, Redis TTLs A-7, async A-10, logging A-11, config validation A-12, migration §9, **delete `slack_reviewer.py` first (P5 corruption hazard, B-14)** | `normalizer.py`, `vector_db.py`, `kb_store.py`, `analyzer_service.py`, `scripts/migrate_vector_db.py` | — |
 | **1C Test base** | normalizer goldens, redactor tests, F-2 component suite, F-3 schema tests, F-6 linter cleanup, test instance setup (RD-15346) | `tests/…`, `component/…` | 1B for F-2 |
 
 **Phase gate:** migration verified on staging copy; poisoning

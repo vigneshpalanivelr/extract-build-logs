@@ -51,33 +51,43 @@ foundation first (Phase 1). Add agents A1–A4 behind feature flags in
 Phase 2. Roll out at 10% traffic, then 100%. Every phase is revertible
 in <60s via env-var flip.
 
-### 1.1 MVP1 Pain Points (drivers of the scope)
+### 1.1 MVP1 Pain Points (priority order)
 
 Reported by the team after MVP1 production use, plus issues found in
-code review. Each maps to a scope item in §1.2.
+code review — **ordered by priority**: correctness bugs that produce
+wrong answers today (P1–P5), safety/compliance (P6), enablers and
+workflow (P7–P12), visibility (P13–P17), agent-era risks (P18–P19),
+performance and hygiene (P20–P22), testing (P23). Every "proof"
+reference points to §3.6. The duplicated-Slack-handler item was
+removed from this list per review (implementation detail — tracked in
+the LLD under B-14).
 
-| # | Pain point | What it means / why it hurts | Addressed by |
-|---|---|---|---|
-| P1 | Slack message flood — track lost, history unreadable | Every error in every failed stage posts a separate top-level message, and recurring errors re-post daily. A single pipeline can produce 5+ messages; the channel becomes unscannable and SMEs stop reading it. | B-4, B-5, B-7 |
-| P2 | Multiple teams / projects, no way to filter or assign in Slack | All messages land in one global channel (`SLACK_CHANNEL` env) regardless of which project/team owns the repo. SMEs cannot filter "mine" or assign ownership, so triage stalls. | B-6, B-8 |
-| P3 | Lack of metadata for better solutions, search, team assignment | Stored fixes carry almost no context (no team, stage, pattern, hit counts). We cannot search by product, route to the right team, or judge whether a fix is trusted or stale. | A-4, C-2 |
-| P4 | Issue visualization missing | There is no place to see open/analyzed failures; the only "view" of what happened is scrolling Slack history. | D-2 |
-| P5 | Database (KB) visualization missing | Chroma contents are invisible — nobody can list what fixes exist, which are stale, or find a poisoning row without writing ad-hoc scripts. | D-1, D-2 |
-| P6 | Resolution view / edit / update visibility missing | Once a fix is stored there is no UI or API to view, edit, or update it; any correction requires developer intervention directly in the DB. | D-1, D-2, B-15 |
-| P7 | No Jira ticket creation from an issue | Recurring or novel failures need manual Jira tickets, retyping error details by hand; nothing links a ticket back to the stored fix, so duplicates pile up. | B-12 |
-| P8 | Secrets (tokens, passwords, credential URLs) flow unredacted into Redis/Chroma/Slack | Error/context lines routinely contain live credentials (tokens, `password=`, credential URLs). They are stored permanently in Redis/Chroma and posted to Slack — a compliance incident waiting to happen. | A-8 |
-| P9 | Infra errors (runner down, network) blamed on developers via DM | Runner disconnects and network timeouts DM the committing developer, implying their code broke the build. Repeated false blame destroys trust in the tool. | A-9, B-11 |
-| P10 | Nothing stops a dangerous LLM fix (`rm -rf`, `chmod 777`) reaching a developer | An LLM-generated fix could contain destructive commands (`rm -rf`, `chmod 777`, force push). Today it would be DM'd verbatim to a developer who may run it. | B-10 |
-| P11 | Developer not found on Slack → fix silently lost | Pipelines triggered by service accounts, or by users whose CI email differs from their Slack email, fail `users_lookupByEmail` — the fix is generated, then silently dropped. | B-8 |
-| P12 | One slow LLM call blocks the whole event loop (`async def` + blocking calls) | The endpoint is `async def` but makes blocking Redis/LLM/Slack calls. One 8 s LLM call freezes the entire event loop; every concurrent webhook queues behind it. | A-10 |
-| P13 | Retry-exhausted payloads lost forever; silent analyzer death goes unnoticed | When POST retries are exhausted the payload is only logged — the analysis is lost. And if the analyzer dies silently, nothing alerts anyone; failures just stop being analyzed. | E-2, E-3 |
-| P14 | Same error in N stages → N analyses, N messages | The same error text appearing in 3 stages triggers 3 full analyses, 3 LLM calls, and 3 messages — cost and noise multiplied for zero added information. | B-7 |
-| P15 | Duplicated Slack handler code in two services | Approve/Edit/Discard logic exists in `slack_reviewer.py` (Flask) AND in `analyzer_service.py` (FastAPI). A bug fixed in one copy silently survives in the other. | B-14 |
-| P16 | Redis keys immortal; `error_map` keyed by full multi-KB error text | Redis keys are written with `set` (no TTL), and `error_map` uses the full multi-KB error text as the key itself — memory grows forever. | A-7 |
-| P17 | No way to deprecate a bad fix (the poisoning row had to be removed by hand) | The production poisoning row could only be removed by hand-editing the DB. There is no deprecate flag or delete API, so any bad approval is effectively permanent. | D-1 |
-| P18 | Embedding model upgrade would silently mix vector spaces | Chroma keeps no record of which embedding model wrote each vector. Upgrading the model would silently mix incompatible vector spaces and corrupt every similarity score. | A-13 |
-| P19 | Tests mock all vector math — the production poisoning bug was invisible to a green suite | Unit tests mock `_get_embedding` (returns `[0.1, 0.2, 0.3]`) and `collection.query` (canned results). All four production bugs lived in the mocked-out layer while the suite stayed green. | F-2, F-5 |
-| P20 | Two processes (analyzer + `slack_reviewer.py`) open the same embedded Chroma directory — embedded Chroma is not multi-process safe; corruption hazard | Embedded Chroma (`PersistentClient`) supports a single process. The analyzer and `slack_reviewer.py` both open the same directory today — concurrent writes risk index corruption. | B-14 |
+| # | Component | Pain point | What it hurts / proof | Addressed by |
+|---|---|---|---|---|
+| P1 | Extractor | Error and context glued into one blob before embedding | Error and context lines are sent as one single string (`log_error_extractor.py:138`). In many cases the exact error line differs but the context lines look similar — the embedding matches on context noise instead of the error. Proof: §3.6 Bug 1. | A-1, A-2 (runs as agent A1) |
+| P2 | Analyzer | L2 distance treated as cosine | Collection created without `hnsw:space` (`vector_db.py:47`) → Chroma defaults to L2 (squared Euclidean); code computes `sim = 1 - dist` (`:212`), only valid for cosine. Opposite-direction vectors can score above the 0.78 threshold. Proof: §3.6 Bug 2. | A-3 |
+| P3 | Analyzer | Non-deterministic row IDs (duplicates on every restart) | `save_fix_to_db` builds IDs from salted `hash()` (`vector_db.py:276`) — same error, different ID every process; approvals insert duplicates, bad rows become permanent. A deterministic sha1 helper exists at `:149` but is never called. Proof: §3.6 Bug 3. | A-3, A-6 |
+| P4 | Analyzer | Whole-log cache key — near-zero cache hits | Cache key is sha256 of the full blob incl. timestamps (`analyzer_service.py:284`); a 1-second change → different key → no request ever hits cache; every failure pays full LLM cost. Proof: §3.6 Bug 4. | A-2, A-7 |
+| P5 | Analyzer | Two processes open the same embedded Chroma directory | `analyzer_service.py` and `slack_reviewer.py:19` each construct a `PersistentClient` on the same directory. Embedded Chroma is single-process by design; concurrent writes risk index corruption. Proof: §3.6 item 5. | B-14 |
+| P6 | Extractor | Secrets flow unredacted into Redis/Chroma/Slack | The extractor masks secrets only in its own log files (`logging_config.py:39`); the wire payload never passes that filter — tokens/passwords/credential URLs are POSTed as-is, stored in Chroma metadata, cached in Redis, posted to Slack. Proof: §3.6 item 8. | A-8 |
+| P7 | Analyzer | Metadata too thin for search, trust, or team assignment | Stored fixes carry almost no context (no team, stage, pattern, hit counts). We cannot search by product, route to the right team, or judge whether a fix is trusted or stale. | A-4, C-2 |
+| P8 | Slack | Slack message flood (track lost, history unreadable) | Every error in every failed stage posts a message. Across all products and pipelines the channel becomes unscannable and SMEs stop reading it. | B-4, B-5, B-7 |
+| P9 | Analyzer | Same error in N stages → N analyses, N messages (common in GitLab) | Nested loop with no fingerprint dedup within a request (`analyzer_service.py:277`) — 3 stages → 3 analyses, 3 LLM calls, 3 messages for zero added information. Proof: §3.6 item 9. | B-7 |
+| P10 | Slack | Multiple teams/products; no way to filter or assign | One global channel (`SLACK_CHANNEL` env); multiple SPOCs handling different products often miss messages; no "mine" filter, no ownership — triage stalls. | B-6, B-8 |
+| P11 | Slack | Automated build failed → developer not found → fix silently lost | Service-account pipelines, or CI email ≠ Slack email, fail `users_lookupByEmail` — the fix is generated, then silently dropped. | B-8 |
+| P12 | Analyzer | Retry-exhausted payloads lost; silent analyzer death unnoticed | After retry exhaustion the payload is only logged (`api_poster.py:1023`) — analysis lost. A silently-dead analyzer alerts no one; failures just stop being analyzed. | E-2, E-3 |
+| P13 | Dashboard | Issue visualisation missing | No place to see open/analyzed failures; the only "view" is scrolling Slack history. | D-2 |
+| P14 | Dashboard | Database (KB) visualisation missing | Chroma contents are invisible — nobody can list what fixes exist, which are stale, or find a poisoning row without ad-hoc scripts. | D-1, D-2 |
+| P15 | Dashboard | No way to deprecate a bad fix | The poisoning row could only be removed by hand-editing the DB; no deprecate flag or delete API — any bad approval is effectively permanent. | D-1 |
+| P16 | Dashboard | Resolution view/edit/update visibility missing | No UI or API to view, edit, or update a stored fix; corrections require developer intervention directly in the DB. | D-1, D-2, B-15 |
+| P17 | Integration | No Jira ticket creation from an issue | Recurring/product-level failures need product-team attention or the proposed solution is wrong and needs tracking; no ticket creation exists and nothing links tickets to stored fixes. | B-12 |
+| P18 | Agent | Infra errors (runner down, network) blamed on developers via DM | Runner disconnects and network timeouts DM the committing developer, implying their code broke the build. Repeated false blame destroys trust. | A-9, B-11 |
+| P19 | Agent | Nothing stops a dangerous LLM fix reaching a developer | Destructive commands (`rm -rf`, `chmod 777`, force push) could reach a developer verbatim. Prompt instructions reduce but cannot guarantee safety (probabilistic output + attacker-controllable log text in the prompt) — hence prompt guidance + deterministic denylist + SME review for blocked output. | B-10 |
+| P20 | Analyzer | One slow LLM call blocks the whole event loop | `async def analyze` (`analyzer_service.py:268`) makes blocking Redis/LLM/Slack calls (`requests.post`, `llm_openwebui_client.py:135`). One 8 s LLM call freezes the event loop for every in-flight request. Proof: §3.6 item 10. | A-10 |
+| P21 | Analyzer | Redis keys never expire; error_map keyed by full error text | `store_fix` uses plain `set` — no TTL (`slack_helper.py:49,52,56`) while `resolver_agent.py:59` uses `setex` correctly, proving the omission; `error_map` uses the multi-KB blob as the key itself. Memory grows forever. Proof: §3.6 item 6. | A-7 |
+| P22 | Analyzer | Embedding model upgrade would silently mix vector spaces | No record of which embedding model wrote each vector; a model upgrade mixes incompatible vector spaces and corrupts every similarity score with no error raised. | A-13 |
+| P23 | Testing | Tests mock all vector math — bugs invisible to a green suite | `test_vector_db.py` patches `_get_embedding` → `[0.1, 0.2, 0.3]` and `collection.query` → canned distances. All four correctness bugs live in the mocked-out layer — the suite verified plumbing, not math, and stayed green through the incident. Explanation: §3.6 item 7. | F-2, F-5 |
+
 ### 1.2 Final MVP2 Scope — Six Pillars
 
 Agreed scope. IDs are referenced throughout this document.
@@ -117,7 +127,7 @@ Agreed scope. IDs are referenced throughout this document.
 | B-11 | Infra/flaky errors (per A-9 classification) → DevOps channel / "retry" DM — never blame the developer |
 | B-12 | Jira: "Create Jira" button + auto-create on `no_match` / low confidence; `jira` key prevents duplicates |
 | B-13 | 👍/👎 feedback buttons on developer DM; 3× 👎 auto-flags fix to SME channel |
-| B-14 | Consolidate Slack handlers: delete `slack_reviewer.py`; keep FastAPI versions only. **Data-integrity fix, not just hygiene** (P20: two processes on one embedded Chroma risks index corruption) — execute at the start of Phase 1 |
+| B-14 | Consolidate Slack handlers: delete `slack_reviewer.py`; keep FastAPI versions only. **Data-integrity fix, not just hygiene** (P5: two processes on one embedded Chroma risks index corruption) — execute at the start of Phase 1 |
 | B-15 | Slack edit-prompt: 15-min TTL + O(1) key lookup (editing stored fixes anytime = Edit API / dashboard) |
 
 **Pillar C — Stats & telemetry**
@@ -359,6 +369,64 @@ cache keys equal? False
 Since every log line carries a timestamp, effectively **no two
 requests ever share a cache key** — the observed near-zero hit rate
 on `sme:fix:*` / `ai:fix:*` is structural, not tuning.
+
+**Item 5 — two processes on one embedded Chroma (P5).**
+`slack_reviewer.py:19` (`db = init_vector_db()`) and
+`analyzer_service.py` startup both construct
+`chromadb.PersistentClient(path=CHROMA_DB_PATH)` on the same
+directory, as two separate OS processes. PersistentClient is an
+embedded, in-process engine (SQLite + HNSW segment files) — safe
+within one process, unsupported with concurrent writers from separate
+processes. B-14 (consolidation) removes the hazard entirely.
+
+**Item 6 — Redis keys never expire; blob used as key (P21).**
+`slack_helper.py` `store_fix()`:
+
+```python
+redis_conn.set(f"fix:{error_id}", json.dumps(data))          # :49  no TTL
+redis_conn.set(f"error_map:{error_title}", error_id)         # :52  no TTL — and the KEY
+                                                             #      is the full error text
+redis_conn.set(f"thread_map:{channel_id}:{message_ts}", …)   # :56  no TTL
+```
+
+The contrast proving it's an omission, not a choice:
+`resolver_agent.py:59` in the same codebase uses
+`setex(f"ai:fix:{…}", REDIS_TTL_AI, …)` with a 24 h TTL. Every
+approval leaks three immortal keys, one of them multi-KB.
+
+**Item 7 — why a green suite missed all four bugs (P23).**
+`tests/test_vector_db.py` patches `_get_embedding` to a constant
+`[0.1, 0.2, 0.3]` and `collection.query` to canned distances. So:
+Bug 1 (no real embedding → context domination invisible), Bug 2
+(hand-written distances → the L2/cosine mismatch never runs on real
+geometry), Bug 3 (no process restart in a unit test → ID instability
+invisible), Bug 4 (fixed test strings → timestamp sensitivity
+invisible). The suite verified plumbing, not math — hence test level
+F-2 with real Chroma + real embeddings.
+
+**Item 8 — secrets in the wire payload (P6).** The extractor masks
+secrets **only in its own log files** (`logging_config.py:39`,
+`SensitiveDataFilter` on loggers). The payload built by
+`api_poster.py` never passes through that filter — error/context
+lines go to the analyzer verbatim, then into Redis (`store_fix`),
+Chroma metadata (`save_fix_to_db` stores `error_text`), and the Slack
+channel post. One leaked `password=…` becomes permanent in three
+stores plus Slack history.
+
+**Item 9 — same error, N stages, N× cost (P9).**
+`analyzer_service.py:277` — `for step in payload.failed_steps: for
+error_line in step.error_lines:` — no fingerprint dedup in the loop;
+identical error text in build/test/package is embedded, matched,
+LLM-analyzed, and posted three separate times.
+
+**Item 10 — blocking calls inside the async event loop (P20).**
+`analyzer_service.py:268` declares `async def analyze`; inside it,
+`r.get()` (sync redis-py), the LLM call
+(`llm_openwebui_client.py:135`, sync `requests.post`), and Slack SDK
+calls all block. FastAPI runs an `async def` endpoint on the single
+event loop — a blocking call stalls **every** in-flight request
+(a plain `def` endpoint would at least run in a threadpool). One 8 s
+LLM call = 8 s global freeze.
 
 **How the four compound into the production incident:** 3.1 creates a
 row whose vector matches broadly (context noise) → 3.2 lets that row
@@ -1521,7 +1589,7 @@ ops runbook.
 
 ## 18. Testing & Validation Strategy (Pillar F)
 
-**Why this pillar exists (P19):** the MVP1 suite mocks all vector
+**Why this pillar exists (P23):** the MVP1 suite mocks all vector
 math — `_get_embedding` returns `[0.1, 0.2, 0.3]`, `collection.query`
 returns canned results. The production poisoning bug lived exactly in
 the mocked-out layer, which is why the suite stayed green while
