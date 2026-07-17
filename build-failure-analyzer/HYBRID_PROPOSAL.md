@@ -104,7 +104,7 @@ Agreed scope. IDs are referenced throughout this document.
 | A-6 | Update-not-insert on approval, `revision` bump |
 | A-7 | Redis TTLs (30 d) on `fix:*` / `error_map:*` / `thread_map:*`; `error_map` keyed by fingerprint hash |
 | A-8 | **Secret redaction** in extractor before posting (tokens, passwords, credential URLs) |
-| A-9 | ERROR_PATTERNS → config file; each pattern classified `code \| infra \| flaky` |
+| A-9 | ERROR_PATTERNS → config file; each pattern classified `code \| infra` (team decision — `flaky` can be added later) |
 | A-10 | Async processing: `202 Accepted` + background task (unblocks the event loop) |
 | A-11 | Analyzer adopts extractor's `logging_config.py` pattern; no more `print()` |
 | A-12 | Startup validation of all config files (routing JSON, patterns) — fail fast |
@@ -128,7 +128,7 @@ Agreed scope. IDs are referenced throughout this document.
 | B-12 | Jira: "Create Jira" button + auto-create on `no_match` / low confidence; `jira` key prevents duplicates |
 | B-13 | 👍/👎 feedback buttons on developer DM; 3× 👎 auto-flags fix to SME channel |
 | B-14 | Consolidate Slack handlers: delete `slack_reviewer.py`; keep FastAPI versions only. **Data-integrity fix, not just hygiene** (P5: two processes on one embedded Chroma risks index corruption) — execute at the start of Phase 1 |
-| B-15 | Slack edit-prompt: 15-min TTL + O(1) key lookup (editing stored fixes anytime = Edit API / dashboard) |
+| B-15 | Slack edit-prompt: TTL (configurable, default 1 week — team decision) + O(1) key lookup (editing stored fixes anytime = Edit API / dashboard) |
 
 **Pillar C — Stats & telemetry**
 

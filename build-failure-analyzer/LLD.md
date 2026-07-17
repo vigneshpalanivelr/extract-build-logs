@@ -7,7 +7,7 @@ signatures, schemas, and pseudocode are normative unless a better
 option is found during implementation (deviations go in PR
 descriptions).
 
-Team-size note: the plan (§12) is organized as independent
+Team-size note: the plan (§13) is organized as independent
 **workstreams** with explicit dependencies — it works for 1 engineer
 (sequential), 2, or 3 (parallel), without re-planning.
 
@@ -131,9 +131,574 @@ sequenceDiagram
 
 ---
 
-## 2. Configuration
+## 2. Requirement-by-Requirement — Issue and Solution
 
-### 2.1 `src/config/error_patterns.json` (A-9) — extractor
+**How to read this document.** This section is the map: every
+requirement from the Scope document appears here with (a) the issue
+it fixes, (b) the solution step by step, and (c) the files touched
+and where the detailed reference design lives in this document.
+Read this section first; use the later sections as reference detail.
+
+**Solution approach in one paragraph.** A deterministic foundation
+(normalize → fingerprint → cosine vector search with exact and
+candidate thresholds) answers the easy 85%: cache hits, exact
+repeats, and clear misses. Four agents cover the rest: A1 produces
+the fingerprint on every request, A2 judges ambiguous stored-fix
+candidates, A3 synthesizes fresh fixes on misses, and A4 applies
+safety/routing rules and delivers. The full flow diagram is in
+§6.3 (orchestrator state machine); every fallback lands on "same
+behavior as today's LLM fallback — never worse."
+
+### A — Foundation
+
+#### A-1 — Split error/context on the wire
+
+**Issue:** P1 — extractor glues error + 50 context lines into one blob; the embedding matches context noise, causing the poisoning incident.
+
+**Solution:**
+
+1. Change `extract_error_sections` to return `List[ErrorRegion]` (error_lines, context_lines, pattern, class) — stop joining regions, stop `Line N:` prefixes.
+2. `api_poster` builds the v2 payload with an `errors[]` array per step; legacy blob field kept while `API_LEGACY_COMPAT=true` (one release).
+3. Analyzer accepts both shapes; legacy blobs converted to an ErrorRegion at the boundary.
+4. Freeze the shape in `schemas/analyze_payload.schema.json` — both test suites validate against it (F-3).
+
+**Files:** log_error_extractor.py · api_poster.py · analyzer_service.py · schemas/ · **Reference design:** §5
+
+#### A-2 — Normalization + stable fingerprint
+
+**Issue:** P1/P5 — timestamps and line numbers make every occurrence of the same error look unique: cache never hits, vectors never cluster.
+
+**Solution:**
+
+1. New `normalizer.py`: ordered rule table — strip `Line N:` prefixes, ISO/`[HH:MM:SS]`/epoch timestamps, SHA/UUID → placeholders; lowercase; collapse whitespace; cap 2000 chars.
+2. `fingerprint_hash = sha256(fingerprint)`.
+3. Use the fingerprint everywhere: Redis cache keys, Chroma row IDs, embedding input.
+4. Golden tests: table of input → exact expected fingerprint (F-1).
+
+**Files:** normalizer.py · **Reference design:** §6
+
+#### A-3 — Cosine space, deterministic IDs, threshold 0.90
+
+**Issue:** P3/P4 — collection defaults to L2 while code computes `1-dist` (cosine-only math); row IDs come from salted `hash()` so every restart duplicates rows.
+
+**Solution:**
+
+1. Create `fix_embeddings_v2` with `{"hnsw:space": "cosine"}`.
+2. L2-normalize every vector before `add()`/`query()`; now `sim = 1 - dist` is valid.
+3. Thresholds: candidate ≥ 0.90, high-confidence exact ≥ 0.95.
+4. Row ID = `fix-` + sha256(fingerprint) — stable across restarts and processes.
+
+**Files:** vector_db.py · **Reference design:** §6
+
+#### A-4 — SQLite system-of-record for metadata
+
+**Issue:** P7 — fixes carry almost no metadata, and Chroma metadata can't do SQL-grade filtering; nothing supports search, trust signals, or team assignment.
+
+**Solution:**
+
+1. Create `bfa_kb.db`: `fixes` table (wire + analysis + lifecycle keys, indexed) and `fix_revisions` (who/when/old/new per edit) via `kb_store.py`.
+2. Chroma keeps only id + embedding + fix_text (debug copy).
+3. Write order: SQLite first, then Chroma — partial failure leaves a repairable, consistent record.
+4. Retrieval: ANN in Chroma → join metadata from SQLite by shared id.
+
+**Files:** kb_store.py · vector_db.py · **Reference design:** §4
+
+#### A-5 — Context-cosine disambiguation
+
+**Issue:** Multiple candidates above 0.90 can be the same error from different contexts; picking blind risks the wrong fix.
+
+**Solution:**
+
+1. Compute `ctx_sim = cosine(embed(query context), embed(candidate context_sample))`.
+2. Score = 0.7·error_sim + 0.3·ctx_sim; return winner if margin > 0.05.
+3. No clear winner → escalate to A2. Ship behind `CONTEXT_COSINE_ENABLED=false` until real context data accumulates.
+
+**Files:** vector_db.py · **Reference design:** §6
+
+#### A-6 — Update-not-insert on approval
+
+**Issue:** P4 — every re-approval inserted a new row; duplicates accumulated forever.
+
+**Solution:**
+
+1. `save_fix` checks the deterministic id: exists → update + revision++ + `fix_revisions` history row; else insert with revision=1.
+2. Test: same fix approved twice across two client instances → exactly one row (F-2).
+
+**Files:** vector_db.py · kb_store.py · **Reference design:** §6
+
+#### A-7 — Redis TTLs + fingerprint keys
+
+**Issue:** P5/P11 — cache keys built from whole blobs never hit; `store_fix` writes immortal keys; `error_map`'s key is the multi-KB error text itself.
+
+**Solution:**
+
+1. All fix/error_map/thread_map keys switch to `SETEX` with 30-day TTL.
+2. `error_map` keyed by fingerprint hash, never raw text.
+3. Cache keys become `sme:fix:<fph>` / `ai:fix:<fph>` — same error at any timestamp hits the same key.
+
+**Files:** slack_helper.py · analyzer_service.py · **Reference design:** §4
+
+#### A-8 — Secret redaction in the extractor
+
+**Issue:** P2 — the wire payload bypasses the extractor's log-only masking; credentials end up permanent in Redis/Chroma/Slack. Pre-rollout blocker.
+
+**Solution:**
+
+1. New `redactor.py`: pattern table (password/token/secret assignments, Bearer, JWT, AWS keys, GitLab/GitHub tokens, user:pass@ URLs) → placeholders.
+2. Apply in `api_poster` to every field carrying log content (error_lines, context_lines, tail_lines, commit_message).
+3. Golden-file tests with true/false positives; patterns extendable via config.
+
+**Files:** redactor.py · api_poster.py · **Reference design:** §5
+
+#### A-9 — Patterns to config with code|infra class
+
+**Issue:** P21 — patterns are hardcoded (deploy to add one), and nothing distinguishes infra failures from code failures, so developers get blamed for runner outages.
+
+**Solution:**
+
+1. Move ERROR_PATTERNS to `config/error_patterns.json`: {name, regex, class: code|infra, enabled}.
+2. Validate at startup (unique names, valid regex) — fail fast naming the bad pattern.
+3. The matched pattern's name/class travel in the payload as `error_pattern`/`error_class` and drive B-11 routing.
+
+**Files:** config/error_patterns.json · config_loader.py · log_error_extractor.py · **Reference design:** §3
+
+#### A-10 — 202 + background processing
+
+**Issue:** P10 — `async def` endpoint makes blocking Redis/LLM/Slack calls; one 8 s LLM call freezes every in-flight request. Pre-rollout blocker.
+
+**Solution:**
+
+1. `/api/analyze` validates, returns `202 {request_id}` immediately.
+2. Orchestrator runs in a FastAPI background task.
+3. Blocking clients wrapped: LLM via thread executor, redis/Slack likewise (or async clients).
+
+**Files:** analyzer_service.py · orchestrator.py · **Reference design:** §6
+
+#### A-11 — Structured logging in the analyzer
+
+**Issue:** Analyzer uses print() everywhere; incidents are undiagnosable and RD-15339 is open.
+
+**Solution:**
+
+1. `logging_setup.py` mirroring the extractor's `logging_config.py` (rotating files, structured extras: request_id, fingerprint, agent).
+2. Mechanical PR replacing all print(); then flake8-print (T201) gate keeps it clean (with F-6).
+
+**Files:** logging_setup.py + all analyzer modules · **Reference design:** §9
+
+#### A-12 — Config validation at startup
+
+**Issue:** A typo in routing/patterns config must not silently mis-route at 2 AM.
+
+**Solution:**
+
+1. JSON-Schema for each config file; validate at startup; refuse to start with a clear error message.
+2. Unit tests feed malformed configs and assert the exact failure (F-1).
+
+**Files:** routing.py · config_loader.py · **Reference design:** §3
+
+#### A-13 — Embedding model + dimension guard
+
+**Issue:** P12 — a model upgrade would silently mix incompatible vector spaces; similarity turns to noise with no error raised.
+
+**Solution:**
+
+1. Stamp `embedding_model` + `embedding_dim` into collection metadata at creation.
+2. Startup: env model ≠ recorded model → StartupError (forces migration to a fresh collection).
+3. Every embedding asserted against `embedding_dim` — catches quantization/response-shape drift the name check misses.
+
+**Files:** vector_db.py · **Reference design:** §6
+
+### B — Agents & Delivery
+
+#### B-1 — A1 Error Summariser (deterministic)
+
+**Issue:** P1 — plus MVP1 pays an extra LLM call per Slack message just to shorten text (`summarize_error_with_ai`).
+
+**Solution:**
+
+1. `Summarizer.run(region)` → fingerprint (via normalizer) + display summary (first 3 error lines, ≤300 chars) + pattern/class passthrough.
+2. Never fails: normalization error → raw lines as fingerprint.
+3. Delete `summarize_error_with_ai` — display text becomes free and deterministic.
+
+**Files:** agents/summarizer.py · **Reference design:** §7
+
+#### B-2 — A2 Deviation Analyzer
+
+**Issue:** Variant errors (same cause, different version/path) either get a verbatim wrong fix or an unnecessary fresh synthesis.
+
+**Solution:**
+
+1. `LLMAgent` base: render prompt → LLM in executor → JSON parse → schema validate → ONE retry echoing the validation error.
+2. Verdict schema: match_quality (exact/applicable_with_adjustments/partial/no_match), confidence, reasoning, adjusted_fix, adjustments.
+3. Redis cache `agent:deviation:sha(fph+candidate_id)` 7 d.
+4. Timeout 6 s / malformed / confidence < 0.5 → fall back to A3. No regression possible.
+
+**Files:** agents/base.py · agents/deviation.py · prompts/deviation.md · **Reference design:** §7
+
+#### B-3 — A3 Solution Synthesizer
+
+**Issue:** The LLM fallback is unstructured free text with unstructured failures.
+
+**Solution:**
+
+1. Formalize as `LLMAgent`: strict JSON {fix_text, confidence, reasoning, source, citations}, timeout 8 s.
+2. Accepts partial-match citations from A2 to seed the prompt.
+3. Cache `agent:synthesizer:<fph>` 7 d.
+4. On failure: respond "unable to analyze" + DevOps email & Slack via error_notifier — never a wrong fix.
+
+**Files:** agents/synthesizer.py · prompts/synthesizer.md · **Reference design:** §7
+
+#### B-4 — Stage-grouped Slack messages
+
+**Issue:** P17 — every error posts a separate top-level message; the channel is an unreadable firehose.
+
+**Solution:**
+
+1. A4 groups results by `stage` per request.
+2. First result of a stage posts the parent message (stage, repo, branch, pipeline link, author).
+3. Further errors of that stage post as thread replies under the parent's `thread_ts`.
+
+**Files:** agents/reporter.py · **Reference design:** §7
+
+#### B-5 — Recurring-error counter instead of re-post
+
+**Issue:** P17 — the same known error re-posts on every recurrence.
+
+**Solution:**
+
+1. `msg:canonical:<fph>` in Redis stores {channel, ts, count, last_seen} (30 d TTL).
+2. Recurrence → `chat_update` the canonical message ("seen N× this week") + DM the developer directly. No new channel post.
+
+**Files:** agents/reporter.py · **Reference design:** §7
+
+#### B-6 — Team routing via config
+
+**Issue:** P18 — one global channel for every product; SPOCs miss their items.
+
+**Solution:**
+
+1. `config/routing.json`: repo_pattern → channel, product_team, sme_group, jira_project; first match wins; default route for unmapped repos.
+2. `routing.resolve(repo, job)` called by A4 for every delivery; SME group mentioned on post.
+3. Change file + restart = new routing live; schema-validated at startup (A-12).
+
+**Files:** routing.py · config/routing.json · **Reference design:** §3
+
+#### B-7 — In-request fingerprint dedup
+
+**Issue:** P8 — the same error in N stages runs N analyses and posts N messages.
+
+**Solution:**
+
+1. `dedupe_by_fingerprint(all_regions(payload))` at orchestrator entry.
+2. One analysis; the DM and channel message note "seen in N stages: build, test, package".
+
+**Files:** orchestrator.py · **Reference design:** §6
+
+#### B-8 — Delivery fallback when developer not found
+
+**Issue:** P19 — service-account pipelines and email mismatches silently drop the generated fix.
+
+**Solution:**
+
+1. `users_lookupByEmail` failure → post the fix to `route.channel` (B-6) naming the commit author.
+2. A generated fix always lands somewhere visible; the miss is counted in stats.
+
+**Files:** agents/reporter.py · **Reference design:** §7
+
+#### B-9 — Provenance in the developer DM
+
+**Issue:** Developers can't tell a battle-tested SME fix from a fresh AI guess.
+
+**Solution:**
+
+1. DM includes: source (SME-approved / AI-generated), `hits` ("served 12×"), `last_served_at`, originating repo — all read from kb_store.
+
+**Files:** agents/reporter.py · **Reference design:** §7
+
+#### B-10 — Dangerous-fix guardrail
+
+**Issue:** P22 — nothing stops `rm -rf` reaching a developer; prompts alone can't guarantee safety (probabilistic output + attacker-controllable log text in the prompt). Pre-rollout blocker.
+
+**Solution:**
+
+1. `guardrail.py`: table-driven denylist regex (rm -rf, chmod -R 777, force-push to protected, kubectl delete ns/deploy, DROP TABLE/DATABASE, mkfs, dd if=, fork bomb, curl|sh).
+2. Runs on final fix_text before ANY post, on every terminal path.
+3. Hit → SME review with ⚠ warning; the developer never receives it directly.
+4. Plus prompt guidance in A3 (reduces frequency; the denylist is the enforcement).
+
+**Files:** guardrail.py · agents/reporter.py · **Reference design:** §7
+
+#### B-11 — Infra errors to DevOps, never the developer
+
+**Issue:** P21 — runner outages DM the committing developer as if their code failed; false blame kills trust.
+
+**Solution:**
+
+1. A4 switches on `error_class` (from A-9): infra → DevOps channel post, no developer DM; code → normal flow.
+
+**Files:** agents/reporter.py · **Reference design:** §7
+
+#### B-12 — Jira creation from an issue
+
+**Issue:** P20 — recurring/product failures need tickets; manual creation is retyped, unlinked, duplicated.
+
+**Solution:**
+
+1. `jira_client.create_or_link(error_id)`: fix already has `jira` key → return it (link, never duplicate).
+2. Else POST issue: project from routing config; summary `[BFA] <pattern>: <summary>`; description = error + context + probable fix + pipeline metadata + Slack permalink.
+3. Store key in `fixes.jira`; update the Slack message with the link.
+4. Triggers: 🎫 button on SME messages; optional auto-create on no-match/low-confidence.
+
+**Files:** jira_client.py · **Reference design:** §7
+
+#### B-13 — Feedback buttons + auto-flag
+
+**Issue:** No signal whether served fixes actually help; bad fixes survive silently.
+
+**Solution:**
+
+1. 👍/👎 on every developer DM (`fb_up_<fph>` / `fb_down_<fph>` actions).
+2. Handler → `stats.record_feedback` + `fixes.helpful_count/unhelpful_count`.
+3. `unhelpful_count ≥ 3` → auto-flag post to the owning SME channel + appears in the dashboard needs-attention view.
+
+**Files:** slack handlers · stats.py · kb_store.py · **Reference design:** §7
+
+#### B-14 — Consolidate Slack handlers (delete slack_reviewer.py)
+
+**Issue:** P6 — two processes open the same embedded Chroma directory (corruption hazard) and carry duplicated handler code.
+
+**Solution:**
+
+1. Delete `slack_reviewer.py`; the FastAPI handlers in analyzer_service are the single implementation.
+2. Point the Slack app's event/action URLs at the analyzer.
+3. Execute FIRST in Phase 1 — it is a data-integrity fix, and trivial (a deletion).
+
+**Files:** delete slack_reviewer.py · **Reference design:** §7
+
+#### B-15 — Sane edit-session TTL + O(1) lookup
+
+**Issue:** P16 — a clicked-but-abandoned Edit leaves the SME in edit mode forever, and every channel message triggers a full Redis keys() scan.
+
+**Solution:**
+
+1. Edit click → `SETEX last_edit:<channel>:<user> <TTL> <error_id>` (configurable; default 1 week per team decision).
+2. Message handler does one O(1) GET (replaces the keys() scan).
+3. Expired → friendly "edit session expired" prompt. Any-age editing lives in the Edit API/dashboard (D-1/D-2).
+
+**Files:** slack handlers · **Reference design:** §7
+
+### C — Stats & Telemetry
+
+#### C-1 — Pipeline statistics
+
+**Issue:** No record of pipeline outcomes, durations, or who is affected.
+
+**Solution:**
+
+1. `stats.py` (SQLite `bfa_stats.db`, WAL): `pipeline_events` row per webhook — user (name, mail, commit, branch, product), per-stage E.time + status, total time, success/failed.
+2. Fire-and-forget writes: never block or fail an analysis.
+
+**Files:** stats.py · **Reference design:** §4
+
+#### C-2 — Decision telemetry
+
+**Issue:** P7 — nobody can say what fraction of answers came from cache vs vector vs LLM, at what cost.
+
+**Solution:**
+
+1. `analyze_decisions` row per analyzed error: source, similarity, latency_ms, llm_calls, est_cost, fingerprint, product_team.
+2. Emitted at every orchestrator terminal path; feeds the dashboard Stats view.
+
+**Files:** stats.py · orchestrator.py · **Reference design:** §4
+
+#### C-3 — Feedback counts in stats
+
+**Issue:** Fix quality is invisible without aggregating the B-13 signal.
+
+**Solution:**
+
+1. `feedback_events` rows + rollups exposed via `GET /api/stats/*` for the dashboard.
+
+**Files:** stats.py · **Reference design:** §4
+
+#### C-4 — Zero-match telemetry
+
+**Issue:** A failed pipeline matching no pattern disappears silently — the tool goes blind without anyone knowing.
+
+**Solution:**
+
+1. Extractor still posts with `errors: []` + `tail_lines` (last 50).
+2. Analyzer records `zero_match=1` and notifies DevOps with the tail so the missing pattern gets added.
+
+**Files:** log_error_extractor.py · stats.py · **Reference design:** §4
+
+### D — KB Management & Dashboard
+
+#### D-1 — Full-CRUD KB APIs (SQL-backed)
+
+**Issue:** P14/P15/P16 — the KB is a black box: no list, no edit, no deprecate; the poisoning row needed manual DB surgery.
+
+**Solution:**
+
+1. `kb_api.py` router: POST add · GET list (team/pattern/repo/stage/source/status/approver/date/free-text filters, pagination) · GET detail (+revision history) · PUT edit (revision++) · DELETE deprecate (soft; retrieval filters it out).
+2. All reads are plain SQL on `bfa_kb.db`; Chroma touched only on add / fix_text change.
+3. JWT-protected like /api/analyze; serves CLI/automation and the dashboard alike.
+
+**Files:** kb_api.py · kb_store.py · **Reference design:** §8
+
+#### D-2 — Dashboard
+
+**Issue:** P13/P14/P16 — the only view of anything is Slack scroll-back.
+
+**Solution:**
+
+1. Static SPA (plain HTML+JS, no build toolchain) served at `/dashboard` by FastAPI StaticFiles.
+2. Tabs mapping 1:1 to APIs: Resolved · Needs-attention (pending review, low-confidence, 👎-flagged; edit/deprecate inline, any age) · Stats.
+3. Filters are query-param passthroughs to D-1.
+
+**Files:** dashboard/ · **Reference design:** §8
+
+#### D-3 — Monthly KB pruning
+
+**Issue:** Deprecated and dead fixes accumulate forever.
+
+**Solution:**
+
+1. `prune_kb.py --dry-run|--apply`: status=deprecated OR (hits=0 ∧ age>6 mo) → JSON archive → delete.
+2. Monthly cron posts the dry-run to DevOps; --apply run manually after review; candidates visible in the dashboard first.
+
+**Files:** scripts/prune_kb.py · **Reference design:** §9
+
+#### D-4 — Safe daily backups
+
+**Issue:** The KB is accumulated tribal knowledge with zero backup; a raw tar of live DB files can capture a mid-write state.
+
+**Solution:**
+
+1. `backup_bfa.sh` daily cron: SQLite `.backup` API for bfa_kb.db, bfa_stats.db, and Chroma's internal chroma.sqlite3 (+ index dir copy).
+2. Keep 14; documented restore procedure in README-OPS.
+
+**Files:** scripts/backup_bfa.sh · **Reference design:** §9
+
+### E — Resilience & Operations
+
+#### E-1 — Degradation ladder
+
+**Issue:** Any dependency outage currently surfaces as unhandled 500s.
+
+**Solution:**
+
+1. Thin wrappers everywhere: Redis error → skip cache, continue; Ollama/Chroma error → `VectorUnavailable` → treat as 0 candidates → A3; LLM error → "unable to analyze" + notify.
+2. Every recovery increments a stats counter (dashboard-visible) and is watchdog/health-check notified.
+3. One chaos test per ladder row in the E2E suite (F-4).
+
+**Files:** orchestrator.py · vector_db.py · **Reference design:** §9
+
+#### E-2 — Dead-letter + replay
+
+**Issue:** P9 — retry-exhausted payloads are only logged; analyses are lost.
+
+**Solution:**
+
+1. On RetryExhaustedError, write the exact payload + failure metadata to `dead_letter/<pipeline>_<epoch>.json`.
+2. `replay_failed.py` re-POSTs oldest-first; success → `replayed/`; `--dry-run` supported.
+
+**Files:** api_poster.py · scripts/replay_failed.py · **Reference design:** §9
+
+#### E-3 — Auto-restart + silent-failure alert
+
+**Issue:** P9 — crashes need manual restarts, and the process-alive-but-broken mode alerts no one.
+
+**Solution:**
+
+1. systemd unit: `Restart=on-failure`, `RestartSec=5`.
+2. `watchdog.py` cron (15 min): failed webhooks > 0 AND analyses = 0 in window → error_notifier (Slack DM + email); also curls `/health`.
+
+**Files:** build-failure-analyzer.service · watchdog.py · **Reference design:** §9
+
+#### E-4 — Slack rate-limit handling
+
+**Issue:** Failure bursts hit Slack 429s and messages drop with a print.
+
+**Solution:**
+
+1. Construct WebClient with `RateLimitErrorRetryHandler(max_retry_count=3)` — combined with B-4/B-5/B-7 volume cuts, bursts survive.
+
+**Files:** slack client setup · **Reference design:** §9
+
+### F — Testing & Validation
+
+#### F-1 — Unit tests for all new logic
+
+**Issue:** New modules need the fast layer of the pyramid.
+
+**Solution:**
+
+1. Normalizer golden table; orchestrator branch coverage with fake agents (every flow branch incl. fallbacks); A2/A3 contract tests with mocked LLM (schema, retry, floors); reporter grouping/routing/guardrail; kb_api CRUD.
+
+**Files:** tests/… · **Reference design:** §11
+
+#### F-2 — Component tests with real vector math
+
+**Issue:** P23 — mocked math is how four production bugs shipped under a green suite. Pre-rollout blocker.
+
+**Solution:**
+
+1. Real Chroma (temp dir) + real Ollama embeddings, no mocked distances.
+2. Permanent poisoning-regression test: old-style 5 KB blob inserted → unrelated error must NOT match ≥ 0.90 (gate: 0%).
+3. Threshold calibration on ~20 labeled pairs; deterministic-ID test across two client instances.
+4. Runs on the Ollama test instance (RD-15346); skipped elsewhere via marker.
+
+**Files:** tests/component/ · **Reference design:** §11
+
+#### F-3 — Shared wire-contract schema
+
+**Issue:** The extractor and analyzer can silently drift apart during the payload migration.
+
+**Solution:**
+
+1. One `analyze_payload.schema.json`; extractor asserts real output validates; analyzer asserts schema examples POST OK; both v1+v2 shapes during overlap.
+
+**Files:** schemas/ · both test suites · **Reference design:** §11
+
+#### F-4 — docker-compose end-to-end
+
+**Issue:** Nothing exercises the two services wired together.
+
+**Solution:**
+
+1. Compose stack: real extractor+analyzer+Redis+Chroma; mock GitLab/Jenkins (canned logs), mock LLM (record/replay), mock Slack (captures posts).
+2. 6 scenarios (cold→A3, cache-hit with changed timestamps = zero LLM calls, approve-updates-row, variant→A2-adjusted, unrelated→no false match, stage threading) + one chaos test per E-1 ladder row.
+
+**Files:** e2e/ · **Reference design:** §11
+
+#### F-5 — Eval harness with metric gates
+
+**Issue:** P23 — without measured gates, 'accuracy' is anecdote. Pre-rollout blocker.
+
+**Solution:**
+
+1. `regression_set.jsonl` cases: error, context, expected_route, must_contain, must_not_contain.
+2. `run_eval.py` replays through the orchestrator; computes routing accuracy (≥95%), poisoning (0%), recall (≥90%), keyword pass (≥baseline), cost/latency vs forecast; emits report.{json,md}.
+3. CI mode (mock LLM) every PR; nightly real-LLM mode (~$1/night) with report to DevOps.
+
+**Files:** eval/ · **Reference design:** §11
+
+#### F-6 — Linter cleanup
+
+**Issue:** Lint gates on a dirty repo fail instantly; RD-15333 open.
+
+**Solution:**
+
+1. Fix existing linter issues in build-failure-analyzer; then enable the lint gate (incl. flake8-print for A-11) in CI.
+
+**Files:** build-failure-analyzer/* · **Reference design:** §11
+
+---
+
+## 3. Configuration
+
+### 3.1 `src/config/error_patterns.json` (A-9) — extractor
 
 Replaces the hardcoded `ERROR_PATTERNS` list in
 `log_error_extractor.py:29`. Loaded by `config_loader.py` at startup;
@@ -165,12 +730,12 @@ schema-validated (A-12).
 }
 ```
 
-Rules: `name` unique; `class ∈ {code, infra, flaky}`; invalid regex →
+Rules: `name` unique; `class ∈ {code, infra}` (team decision — a third `flaky` class can be added later without schema change); invalid regex →
 startup failure with the pattern name in the error. The matched
 pattern's `name` and `class` travel in the payload as `error_pattern`
 / `error_class`.
 
-### 2.2 `build-failure-analyzer/config/routing.json` (B-6) — analyzer
+### 3.2 `build-failure-analyzer/config/routing.json` (B-6) — analyzer
 
 ```json
 {
@@ -197,7 +762,7 @@ pattern's `name` and `class` travel in the payload as `error_pattern`
 `repo_pattern` wins (list order), else `default`. Loaded once at
 startup (restart to apply); schema + regex validation at load (A-12).
 
-### 2.3 Environment variables (new / changed)
+### 3.3 Environment variables (new / changed)
 
 | Var | Default | Used by |
 |---|---|---|
@@ -221,7 +786,7 @@ after one release of deprecation warning.
 
 ---
 
-## 3. Data Design
+## 4. Data Design
 
 How the stores relate — the fingerprint hash (`fph`) is the join key
 across all of them:
@@ -254,7 +819,7 @@ flowchart TB
     S3 -. "fix_id" .-> C1
 ```
 
-### 3.1 Wire contract v2 (A-1) — `POST /api/analyze`
+### 4.1 Wire contract v2 (A-1) — `POST /api/analyze`
 
 Shared JSON Schema lives at `schemas/analyze_payload.schema.json`
 (repo root; single source for extractor and analyzer tests, F-3).
@@ -300,7 +865,7 @@ Analyzer accepts **either** `errors` (v2) or legacy `error_lines`
 `ErrorEntry(error_lines=[blob], context_lines=[], error_pattern="legacy", error_class="code")`.
 Response is `202 {"status": "accepted", "request_id": "<uuid>"}` (A-10).
 
-### 3.2 Redis key design (A-7)
+### 4.2 Redis key design (A-7)
 
 All keys carry TTLs. `<fph> = sha256(fingerprint)[:32]`.
 
@@ -316,7 +881,7 @@ All keys carry TTLs. `<fph> = sha256(fingerprint)[:32]`.
 | `msg:canonical:<fph>` | `{channel, ts, count, last_seen}` | 30 d | A4 (B-5 counter) |
 | `last_edit:<channel>:<user_id>` | error_id | **15 min** | edit handler (B-15; O(1) GET replaces `keys()` scan) |
 
-### 3.3 Chroma collection `fix_embeddings_v2` (A-3/A-4) — vectors only
+### 4.3 Chroma collection `fix_embeddings_v2` (A-3/A-4) — vectors only
 
 - Space: `{"hnsw:space": "cosine"}`; vectors L2-normalized pre-add/query.
 - `id = "fix-" + sha256(fingerprint).hexdigest()` — the join key to SQLite.
@@ -324,14 +889,14 @@ All keys carry TTLs. `<fph> = sha256(fingerprint)[:32]`.
 - `embedding = embed(fingerprint)` — the **only** embedded text.
 - Collection metadata: `embedding_model` + `embedding_dim` (A-13/#5
   guard). **No per-row business metadata in Chroma** — that lives in
-  SQLite (§3.4), because the KB APIs need SQL-grade filtering,
+  SQLite (§4.4), because the KB APIs need SQL-grade filtering,
   pagination, and free-text search that Chroma metadata cannot do.
 - **Multi-process rule (P5):** exactly ONE process may open the
   embedded `PersistentClient`. MVP1 violates this today
   (`slack_reviewer.py:19` + `analyzer_service.py` share the dir) —
   B-14 deletes the second process at the start of Phase 1.
 
-### 3.4 KB store — SQLite `bfa_kb.db` (A-4, D-1)
+### 4.4 KB store — SQLite `bfa_kb.db` (A-4, D-1)
 
 System of record for all fix facts. Retrieval = ANN in Chroma →
 join by id here. `kb_store.py` wraps it (WAL mode, like
@@ -373,7 +938,7 @@ Write order: SQLite first, then Chroma upsert. A Chroma row with no
 SQLite row is ignored at join time (repairable by re-embedding from
 `fixes`), so partial failures degrade safely.
 
-### 3.5 Stats store (C-1..C-4) — SQLite `bfa_stats.db`
+### 4.5 Stats store (C-1..C-4) — SQLite `bfa_stats.db`
 
 Same approach as the extractor's `monitoring.py` (SQLite, WAL mode).
 
@@ -406,7 +971,7 @@ append-heavy, the KB is read-heavy — separate files avoid lock
 contention. Indexes on `ts`, `fingerprint`, `repo`, `product_team`;
 retention job reuses the extractor's `cleanup_old_records` pattern.
 
-### 3.6 Dead-letter format (E-2)
+### 4.6 Dead-letter format (E-2)
 
 `{DEAD_LETTER_DIR}/{pipeline_id}_{epoch}.json` — the exact payload
 that failed, plus `{"_dead_letter": {"first_failed_at": …,
@@ -416,9 +981,9 @@ keeps failures in place; `--dry-run` supported.
 
 ---
 
-## 4. Extractor Changes (`src/`)
+## 5. Extractor Changes (`src/`)
 
-### 4.1 `log_error_extractor.py` — per-region output (A-1)
+### 5.1 `log_error_extractor.py` — per-region output (A-1)
 
 Today `extract_error_sections` merges everything and returns
 `['\n'.join(sections)]` (line 138). Change the return type:
@@ -446,7 +1011,7 @@ def extract_error_sections(self, log_text: str) -> List[ErrorRegion]: ...
   DevOps with the log tail (C-4). Extractor attaches
   `tail_lines: last 50 lines` in that case.
 
-### 4.2 `src/redactor.py` (new, A-8)
+### 5.2 `src/redactor.py` (new, A-8)
 
 ```python
 SECRET_PATTERNS: List[Tuple[str, str]] = [
@@ -470,20 +1035,20 @@ content (`error_lines`, `context_lines`, `tail_lines`,
 positives (F-1). Patterns extendable via optional
 `config/redaction_patterns.json` (same loader style as A-9).
 
-### 4.3 `api_poster.py` — v2 payload + dead-letter (A-1, E-2)
+### 5.3 `api_poster.py` — v2 payload + dead-letter (A-1, E-2)
 
-- Build the §3.1 payload; keep legacy `error_lines` field populated
+- Build the §4.1 payload; keep legacy `error_lines` field populated
   for one release (`API_LEGACY_COMPAT=true` env, default true → flip
   false after analyzer v2 ships).
 - On `RetryExhaustedError` (`api_poster.py:1008`): write dead-letter
-  file (§3.5) **instead of** only logging.
-- New: `scripts/replay_failed.py` (see §3.6).
+  file (§4.5) **instead of** only logging.
+- New: `scripts/replay_failed.py` (see §4.6).
 
 ---
 
-## 5. Analyzer Core
+## 6. Analyzer Core
 
-### 5.1 `normalizer.py` (new, A-2) — the fingerprint function
+### 6.1 `normalizer.py` (new, A-2) — the fingerprint function
 
 ```python
 _RULES: List[Tuple[Pattern, str]] = [
@@ -510,7 +1075,7 @@ Scope decision honored: **no** path replacement in MVP2 normalization
 SHA/UUID/epoch which are timestamp-like). Rules are ordered and
 table-driven → golden tests assert exact outputs (F-1).
 
-### 5.2 `vector_db.py` — v2 behavior (A-3, A-4, A-13)
+### 6.2 `vector_db.py` — v2 behavior (A-3, A-4, A-13)
 
 Changed/new methods on `VectorDBClient`:
 
@@ -558,7 +1123,7 @@ Context disambiguation (A-5) in `disambiguate(candidates, context_lines)`:
 return top if margin > 0.05 else `None` (→ A2). Behind
 `CONTEXT_COSINE_ENABLED` (default false until shadow data exists).
 
-### 5.3 `orchestrator.py` (new) — state machine
+### 6.3 `orchestrator.py` (new) — state machine
 
 ```mermaid
 flowchart TB
@@ -617,7 +1182,7 @@ async def analyze_region(region, payload) -> Result:
     return pick_best(verdicts, cands, fp, region)   # exact > adjusted > A3
 ```
 
-- `run_a2` / `run_a3` wrap the agents with: Redis result cache (§3.2),
+- `run_a2` / `run_a3` wrap the agents with: Redis result cache (§4.2),
   timeout, one retry on schema failure, confidence floor; every
   failure path degrades exactly as HYBRID_PROPOSAL §4.1 fallbacks.
 - `AGENTS_MODE=off` → skip A2 entirely (candidates in [0.90,0.95)
@@ -627,9 +1192,9 @@ async def analyze_region(region, payload) -> Result:
 
 ---
 
-## 6. Agents (`agents/`)
+## 7. Agents (`agents/`)
 
-### 6.1 `agents/base.py`
+### 7.1 `agents/base.py`
 
 ```python
 class AgentResult(TypedDict): ...          # parsed JSON + _meta (latency, retries)
@@ -649,7 +1214,7 @@ A1/A4 are plain classes (no LLM, no base inheritance) — they must
 never fail; internal exceptions are caught and degrade (A1 → raw
 lines; A4 → minimal fallback message).
 
-### 6.2 `agents/summarizer.py` — A1
+### 7.2 `agents/summarizer.py` — A1
 
 ```python
 class Summarizer:
@@ -664,14 +1229,14 @@ class Summarizer:
 `_summary` replaces `summarize_error_with_ai` (B-1) — display text is
 now free and deterministic.
 
-### 6.3 `agents/deviation.py` — A2
+### 7.3 `agents/deviation.py` — A2
 
 `LLMAgent(name="deviation", timeout=A2_TIMEOUT_S)` with the verdict
 schema from HYBRID_PROPOSAL §12.2 and prompt `prompts/deviation.md`
 (system prompt from §12.3). Wrapper adds the Redis cache
 (`agent:deviation:*`) and returns `AgentFailure → caller routes to A3`.
 
-### 6.4 `agents/synthesizer.py` — A3
+### 7.4 `agents/synthesizer.py` — A3
 
 `LLMAgent(name="synthesizer", timeout=A3_TIMEOUT_S)`; schema from
 HYBRID_PROPOSAL §13.2; prompt `prompts/synthesizer.md` — refactor of
@@ -683,7 +1248,7 @@ the SME channel and `error_notifier` alerts DevOps (email + Slack).
 `resolver_agent.py` is reduced to a thin deprecated shim for one
 release, then deleted.
 
-### 6.5 `agents/reporter.py` — A4
+### 7.5 `agents/reporter.py` — A4
 
 Delivery decision flow:
 
@@ -741,7 +1306,7 @@ class Reporter:
   `mkfs`, `dd if=`, `:(){ :|:& };:`, `curl … | sh`. Table-driven +
   unit golden tests; extendable via config.
 
-### 6.6 Slack handlers (B-13, B-14, B-15)
+### 7.6 Slack handlers (B-13, B-14, B-15)
 
 ```mermaid
 sequenceDiagram
@@ -803,9 +1368,9 @@ sequenceDiagram
   (`helpful_count/unhelpful_count`); on `unhelpful_count >= 3` → post
   alert to `route.channel` SME group (auto-flag). `jira_*` →
   `jira_client.create_or_link`.
-- Approval handler: `save_fix` (upsert §5.2) + `SETEX sme:fix:<fph>`.
+- Approval handler: `save_fix` (upsert §6.2) + `SETEX sme:fix:<fph>`.
 
-### 6.7 `jira_client.py` (B-12)
+### 7.7 `jira_client.py` (B-12)
 
 ```python
 def create_or_link(error_id: str) -> str:   # returns jira key
@@ -823,11 +1388,11 @@ Auto-create trigger (configurable, default on): `source == "a3"` and
 
 ---
 
-## 7. KB API & Dashboard (Pillar D)
+## 8. KB API & Dashboard (Pillar D)
 
-### 7.1 `kb_api.py` — FastAPI router, JWT-protected like `/api/analyze`
+### 8.1 `kb_api.py` — FastAPI router, JWT-protected like `/api/analyze`
 
-All reads/filters/search run as plain SQL on `bfa_kb.db` (§3.4) —
+All reads/filters/search run as plain SQL on `bfa_kb.db` (§4.4) —
 fast, paginated, free-text-capable. Revision history comes from
 `fix_revisions`. Chroma is touched only by `POST` (embed) and
 `PUT` when `fix_text` changes (re-store document).
@@ -839,11 +1404,11 @@ fast, paginated, free-text-capable. Revision history comes from
 | `GET /api/fixes/{id}` | — | `FixDetail` (all metadata + revision history from `revisions` field) |
 | `PUT /api/fixes/{id}` | `{fix_text?, status?, metadata_patch?}` | `collection.update`, revision += 1, `updated_at`; `sme:fix` cache refreshed |
 | `DELETE /api/fixes/{id}` | — | `status=deprecated` (soft); excluded from retrieval + caches purged |
-| `GET /api/stats/summary` | `from,to,team?` | hit-rate split by source, cost, latency percentiles (reads §3.4) |
+| `GET /api/stats/summary` | `from,to,team?` | hit-rate split by source, cost, latency percentiles (reads §4.4) |
 | `GET /api/stats/pipelines` | filters | success/failure counts, per-stage durations |
 | `GET /api/issues` | `status=pending\|flagged` | pending SME reviews + 👎-flagged fixes (needs-attention feed) |
 
-### 7.2 `dashboard/` (D-2)
+### 8.2 `dashboard/` (D-2)
 
 Static single-page app (plain HTML + JS + fetch, no build toolchain)
 served by FastAPI `StaticFiles` at `/dashboard`. Three tabs mapping
@@ -855,9 +1420,9 @@ query-param passthroughs. No separate backend, no separate deploy.
 
 ---
 
-## 8. Resilience & Ops implementation (Pillar E)
+## 9. Resilience & Ops implementation (Pillar E)
 
-### 8.1 Degradation ladder (E-1)
+### 9.1 Degradation ladder (E-1)
 
 Thin wrappers, used everywhere instead of raw clients:
 
@@ -869,24 +1434,24 @@ def safe_cache_get(key) -> Optional[str]:
 
 class VectorUnavailable(Exception): ...
 # vector_db raises it on Chroma/Ollama errors; orchestrator catches → cands=[]
-# LLM failure inside agents → AgentFailure → A3 "unable" path (§6.4)
+# LLM failure inside agents → AgentFailure → A3 "unable" path (§7.4)
 ```
 
 Rules: dependency errors are **never** propagated to the webhook
 response; each recovery increments a stats counter (visible on the
 dashboard); each ladder row has a chaos test (F-4).
 
-### 8.2 Alerts & recovery (E-2, E-3)
+### 9.2 Alerts & recovery (E-2, E-3)
 
 - `build-failure-analyzer.service`: add `Restart=on-failure`,
   `RestartSec=5`.
 - Silent-failure alert: a lightweight `watchdog.py` cron (every 15
-  min) reads §3.4: `pipeline_events(status=failed)` in window > 0 AND
+  min) reads §4.4: `pipeline_events(status=failed)` in window > 0 AND
   `analyze_decisions` in window == 0 → `error_notifier` (Slack DM +
   email). Also curls `/health`.
 - Slack: `WebClient(retry_handlers=[RateLimitErrorRetryHandler(max_retry_count=3)])` (E-4).
 
-### 8.3 Logging (A-11)
+### 9.3 Logging (A-11)
 
 Analyzer gets `logging_setup.py` mirroring `src/logging_config.py`
 (rotating file + console, structured extras: `request_id`,
@@ -894,7 +1459,7 @@ Analyzer gets `logging_setup.py` mirroring `src/logging_config.py`
 mechanical PR, enforced afterwards by lint rule (`T201` flake8-print)
 as part of F-6.
 
-### 8.4 Backup (D-4) & pruning (D-3)
+### 9.4 Backup (D-4) & pruning (D-3)
 
 - `scripts/backup_bfa.sh` — daily cron using the **SQLite `.backup`
   API** for every store: `bfa_kb.db`, `bfa_stats.db`, and Chroma's
@@ -908,7 +1473,7 @@ as part of F-6.
 
 ---
 
-## 9. Migration (`scripts/migrate_vector_db.py`)
+## 10. Migration (`scripts/migrate_vector_db.py`)
 
 ```mermaid
 flowchart LR
@@ -927,7 +1492,7 @@ flowchart LR
 2. Per row: skip if `len(error_text) > 5KB` (poisoning), empty fix,
    or status not in (approved, edited). Else: `normalize_error_text`
    → fingerprint → re-embed → L2-normalize → upsert **into both
-   stores** (SQLite `fixes` row with metadata mapped to the §3.4
+   stores** (SQLite `fixes` row with metadata mapped to the §4.4
    schema, `source="migrated"`, missing keys defaulted; then Chroma
    id+embedding+fix_text). Dup fingerprint: keep newest, bump
    revision (history row in `fix_revisions`).
@@ -938,7 +1503,7 @@ flowchart LR
 
 ---
 
-## 10. Testing implementation (Pillar F)
+## 11. Testing implementation (Pillar F)
 
 Test pyramid — many fast tests at the bottom, few expensive ones at
 the top; F-2 exists because MVP1 mocked all vector math and shipped
@@ -960,7 +1525,7 @@ src → tests/ (existing)  + test_redactor.py, test_error_patterns_config.py,
                            test_extract_regions.py, test_payload_schema.py
 build-failure-analyzer/tests/ (existing) +
   test_normalizer_golden.py        # table: input → exact fingerprint (F-1)
-  test_orchestrator_paths.py       # fake agents; every §4.1 branch (F-1)
+  test_orchestrator_paths.py       # fake agents; every HYBRID-§4.1 branch (F-1)
   test_agents_contract.py          # mocked LLM: schema, retry, floors (F-1)
   test_reporter.py                 # grouping, routing, guardrail, provenance (F-1)
   test_kb_api.py                   # CRUD + filters (F-1)
@@ -989,7 +1554,7 @@ enabled after F-6 cleanup.
 
 ---
 
-## 11. Rollout & Feature Flags
+## 12. Rollout & Feature Flags
 
 | Lever | Values | Reverts |
 |---|---|---|
@@ -1005,7 +1570,7 @@ Order: migrate DB → foundation live (agents off) → A2 shadow → on at
 
 ---
 
-## 12. Implementation Plan — 3 Phases, Team-Size-Agnostic
+## 13. Implementation Plan — 3 Phases, Team-Size-Agnostic
 
 Workstreams (WS) are independently mergeable; the dependency graph is
 what matters. 1 engineer executes them top-to-bottom; 2–3 engineers
@@ -1046,7 +1611,7 @@ flowchart LR
 | WS | Content (scope IDs) | Files | Depends on |
 |---|---|---|---|
 | **1A Extractor** | region split A-1, redaction A-8, patterns config A-9, dead-letter E-2, schema F-3 | `log_error_extractor.py`, `redactor.py`, `api_poster.py`, `config/error_patterns.json` | — |
-| **1B Analyzer core** | normalizer A-2, vector_db v2 A-3/A-13 (+dim guard), **kb_store SQLite A-4**, Redis TTLs A-7, async A-10, logging A-11, config validation A-12, migration §9, **delete `slack_reviewer.py` first (P5 corruption hazard, B-14)** | `normalizer.py`, `vector_db.py`, `kb_store.py`, `analyzer_service.py`, `scripts/migrate_vector_db.py` | — |
+| **1B Analyzer core** | normalizer A-2, vector_db v2 A-3/A-13 (+dim guard), **kb_store SQLite A-4**, Redis TTLs A-7, async A-10, logging A-11, config validation A-12, migration §10, **delete `slack_reviewer.py` first (P5 corruption hazard, B-14)** | `normalizer.py`, `vector_db.py`, `kb_store.py`, `analyzer_service.py`, `scripts/migrate_vector_db.py` | — |
 | **1C Test base** | normalizer goldens, redactor tests, F-2 component suite, F-3 schema tests, F-6 linter cleanup, test instance setup (RD-15346) | `tests/…`, `component/…` | 1B for F-2 |
 
 **Phase gate:** migration verified on staging copy; poisoning
@@ -1087,15 +1652,15 @@ dashboard usable by SMEs; nightly eval green 1 week.
 
 | # | Blocker | Blocks | Resolution / owner action |
 |---|---|---|---|
-| K1 | Prod Chroma export access | migration §9, eval seed data | request read access before Phase 1 starts |
+| K1 | Prod Chroma export access | migration §10, eval seed data | request read access before Phase 1 starts |
 | K2 | Test instance w/ Ollama (RD-15346) | F-2, F-4 | provision during Phase 1 (WS 1C first task) |
 | K3 | Slack app scopes (`users:read.email`, `chat:write`, actions) | B-8, B-13 DMs/buttons | verify/extend app config before Phase 2 |
 | K4 | Jira API token + project keys | B-12 | request during Phase 2; auto-create ships config-off if late |
 | K5 | Bedrock/OpenWebUI quota for nightly eval | F-5 nightly | confirm budget (~$30/mo); nightly can start weekly if constrained |
 | K6 | SME hour to bless synthetic eval variants | F-5 quality | book during Phase 1 (per HYBRID_PROPOSAL §14.5) |
 | K7 | routing.json contents (repo→team→channel map) | B-6 | team provides mapping; default route works meanwhile |
-| K8 | Wire-contract freeze | 1A/1B parallelism | §3.1 schema in this doc is the freeze; changes require both-WS sign-off |
+| K8 | Wire-contract freeze | 1A/1B parallelism | §4.1 schema in this doc is the freeze; changes require both-WS sign-off |
 
-Cross-cutting rules: every WS lands behind its flag (§11); a WS is
+Cross-cutting rules: every WS lands behind its flag (§12); a WS is
 "done" only with its tests (F-1 additions ship inside the same PR);
 `main` stays releasable throughout.
