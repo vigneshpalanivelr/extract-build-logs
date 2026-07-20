@@ -134,10 +134,11 @@ sequenceDiagram
 ## 2. Requirement-by-Requirement — Issue and Solution
 
 **How to read this document.** This section is the map: every
-requirement from the Scope document appears here with (a) the issue
-it fixes, (b) the solution step by step, and (c) the files touched
-and where the detailed reference design lives in this document.
-Read this section first; use the later sections as reference detail.
+requirement from the Scope document appears here with the issue it
+fixes (current behavior → why it's a problem → impact), the solution
+step by step, the files touched, and where the detailed reference
+design lives. Read this section first; use the later sections as
+reference detail.
 
 **Solution approach in one paragraph.** A deterministic foundation
 (normalize → fingerprint → cosine vector search with exact and
@@ -145,15 +146,19 @@ candidate thresholds) answers the easy 85%: cache hits, exact
 repeats, and clear misses. Four agents cover the rest: A1 produces
 the fingerprint on every request, A2 judges ambiguous stored-fix
 candidates, A3 synthesizes fresh fixes on misses, and A4 applies
-safety/routing rules and delivers. The full flow diagram is in
-§6.3 (orchestrator state machine); every fallback lands on "same
-behavior as today's LLM fallback — never worse."
+safety/routing rules and delivers. The full flow diagram is in §6.3;
+every fallback lands on "same behavior as today's LLM fallback —
+never worse."
 
 ### A — Foundation
 
 #### A-1 — Split error/context on the wire
 
-**Issue:** P1 — extractor glues error + 50 context lines into one blob; the embedding matches context noise, causing the poisoning incident.
+**Issue — today:** The extractor merges matched error lines with their context windows (50 lines before, 10 after), prefixes every line with `Line N:`, and joins everything into ONE string — `return ['\n'.join(sections)]` (log_error_extractor.py:138). api_poster sends it as a single-element `error_lines`, and the analyzer embeds that whole blob as one vector.
+
+**Why it's a problem:** 95%+ of the blob is boilerplate (timestamps, paths, generic build output) shared by almost every pipeline. A text embedding is dominated by the majority of its tokens, so vectors of completely unrelated failures come out nearly identical — the 2 lines of actual error contribute almost nothing.
+
+**Impact:** This is the direct mechanism of the production poisoning incident: the first approved blob matched nearly every subsequent failure. Reproduction: two unrelated errors wrapped in the same 50 context lines score cosine 1.000 as blobs vs 0.000 error-only (Evidence Pack, Bug 1). Pain: P1.
 
 **Solution:**
 
@@ -166,7 +171,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-2 — Normalization + stable fingerprint
 
-**Issue:** P1/P5 — timestamps and line numbers make every occurrence of the same error look unique: cache never hits, vectors never cluster.
+**Issue — today:** Raw error text — timestamps, `Line N:` prefixes, epoch values included — is used directly as the cache-key input and the embedding input. There is no canonical identity for an error anywhere in the system.
+
+**Why it's a problem:** The same logical error at 9:14:02 and 9:14:03 is a different string → a different sha256 cache key (captured proof: Evidence Pack, Bug 4) and a slightly different vector. Identity changes every minute by construction.
+
+**Impact:** The cache essentially never hits — every recurrence of a known error pays the full LLM cost — and identical errors fail to cluster in the vector DB. Pains: P1, P5.
 
 **Solution:**
 
@@ -179,7 +188,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-3 — Cosine space, deterministic IDs, threshold 0.90
 
-**Issue:** P3/P4 — collection defaults to L2 while code computes `1-dist` (cosine-only math); row IDs come from salted `hash()` so every restart duplicates rows.
+**Issue — today:** The collection is created without `hnsw:space` (vector_db.py:47), so Chroma defaults to L2 — squared Euclidean — while vector_db.py:212 computes `sim = 1 - dist`, a formula valid only for cosine distance. Separately, row IDs come from Python's salted `hash()` (vector_db.py:276), which changes on every process restart; a correct sha1 helper exists at :149 but is never called.
+
+**Why it's a problem:** The computed 'similarity' is unbounded and directionless: a captured vector pair scores +0.907 — above the 0.78 serve threshold — while its true cosine is −0.12, i.e. pointing the opposite way (Evidence Pack, Bug 2). And because IDs are unreproducible across restarts, previously saved rows can never be updated — every re-approval inserts a duplicate (Bug 3: same error, three different IDs in three runs).
+
+**Impact:** The single gate deciding whether a stored fix is served is mathematically meaningless, and bad rows are both permanent and multiplying. Pains: P3, P4.
 
 **Solution:**
 
@@ -192,7 +205,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-4 — SQLite system-of-record for metadata
 
-**Issue:** P7 — fixes carry almost no metadata, and Chroma metadata can't do SQL-grade filtering; nothing supports search, trust signals, or team assignment.
+**Issue — today:** Fixes are stored with only ad-hoc metadata (error_text, approver, status) flattened into Chroma metadata. 'Revision' is at best a counter — no record of who changed what, when.
+
+**Why it's a problem:** Chroma metadata supports only exact-match filters: no free-text search, no ranges, no sorting, no pagination. And the data itself is missing — no team, no pattern, no usage counts, no history. The planned KB APIs and dashboard are unimplementable on this storage.
+
+**Impact:** Cannot search the KB by product, cannot route to owning teams, cannot distinguish a battle-tested fix (served 40×) from a stale one-off, cannot audit edits. Pain: P7.
 
 **Solution:**
 
@@ -205,7 +222,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-5 — Context-cosine disambiguation
 
-**Issue:** Multiple candidates above 0.90 can be the same error from different contexts; picking blind risks the wrong fix.
+**Issue — today:** When several stored fixes clear the similarity threshold, the code simply takes the top score.
+
+**Why it's a problem:** Identical error text can come from different contexts requiring different fixes — the same `npm ERESOLVE` in a frontend repo vs a backend service, different build tools, different agents. Error-text similarity alone cannot separate them; near-ties get resolved arbitrarily. Asking an LLM for every tie would be slow and costly.
+
+**Impact:** Wrong-but-similar fixes get served with high confidence in multi-candidate situations.
 
 **Solution:**
 
@@ -217,7 +238,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-6 — Update-not-insert on approval
 
-**Issue:** P4 — every re-approval inserted a new row; duplicates accumulated forever.
+**Issue — today:** Every Slack approval calls `collection.add()` — insert, never update — compounded by the non-deterministic IDs from A-3.
+
+**Why it's a problem:** Re-approving or correcting a fix creates a second row for the same error; retrieval then surfaces whichever version wins the similarity race that day.
+
+**Impact:** Duplicates accumulate forever; a corrected fix competes against its own outdated version; during the incident, the poisoning row could not be replaced — only joined by more copies. Pain: P4.
 
 **Solution:**
 
@@ -228,7 +253,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-7 — Redis TTLs + fingerprint keys
 
-**Issue:** P5/P11 — cache keys built from whole blobs never hit; `store_fix` writes immortal keys; `error_map`'s key is the multi-KB error text itself.
+**Issue — today:** `store_fix` writes `fix:`, `error_map:`, `thread_map:` keys with plain SET — no TTL (slack_helper.py:49, :52, :56). The same codebase uses SETEX correctly elsewhere (resolver_agent.py:59, 24 h TTL on ai:fix), proving this is an omission, not a policy. Worse, `error_map`'s Redis key is the full multi-KB error text itself.
+
+**Why it's a problem:** Every approval leaks three immortal keys, one of them multi-kilobyte. And keys built from raw blobs can never match again once a timestamp changes.
+
+**Impact:** Redis memory grows monotonically forever; the keyspace bloats, which also slows the edit flow's keys() scan (B-15). Pains: P5, P11.
 
 **Solution:**
 
@@ -240,7 +269,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-8 — Secret redaction in the extractor
 
-**Issue:** P2 — the wire payload bypasses the extractor's log-only masking; credentials end up permanent in Redis/Chroma/Slack. Pre-rollout blocker.
+**Issue — today:** The extractor masks secrets ONLY in its own log files — logging_config.py:39 is a logging filter attached to loggers. The analysis payload built by api_poster never passes through it: whatever the console log contains is POSTed verbatim.
+
+**Why it's a problem:** Build logs routinely contain Bearer tokens, `password=...` arguments, `https://user:token@...` URLs, and cloud keys printed by misconfigured steps.
+
+**Impact:** One leaked credential becomes PERMANENT in three stores — Redis (cached fix record), Chroma metadata (stored error_text), Slack history (channel post) — outliving any log rotation. Compliance incident waiting to happen. Pain: P2. Pre-rollout blocker.
 
 **Solution:**
 
@@ -252,7 +285,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-9 — Patterns to config with code|infra class
 
-**Issue:** P21 — patterns are hardcoded (deploy to add one), and nothing distinguishes infra failures from code failures, so developers get blamed for runner outages.
+**Issue — today:** ERROR_PATTERNS is a hardcoded Python list (log_error_extractor.py:29). Adding or fixing a pattern requires a code change and deployment. Patterns carry no classification — a runner disconnect and a compile error are processed identically.
+
+**Why it's a problem:** Pattern coverage lags reality (new failure types go undetected until the next release), and the system cannot tell infrastructure failures from code failures.
+
+**Impact:** Slow evolution of detection, plus the P21 blame problem: developers are DM'd fixes for runner outages that have nothing to do with their commit.
 
 **Solution:**
 
@@ -264,7 +301,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-10 — 202 + background processing
 
-**Issue:** P10 — `async def` endpoint makes blocking Redis/LLM/Slack calls; one 8 s LLM call freezes every in-flight request. Pre-rollout blocker.
+**Issue — today:** `/api/analyze` is declared `async def` (analyzer_service.py:268), but everything inside blocks: synchronous redis-py, synchronous `requests.post` to the LLM (llm_openwebui_client.py:135), synchronous Slack SDK calls.
+
+**Why it's a problem:** FastAPI runs an `async def` endpoint on the single event-loop thread. A blocking call inside it freezes EVERY in-flight request and stops new ones being accepted — strictly worse than a plain `def`, which would at least run in a threadpool.
+
+**Impact:** One 8-second LLM call = an 8-second global freeze. A burst of 10 failures serializes into ~80 s of frozen service; upstream webhooks time out; extractor retries amplify the load. Pain: P10. Pre-rollout blocker.
 
 **Solution:**
 
@@ -276,7 +317,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-11 — Structured logging in the analyzer
 
-**Issue:** Analyzer uses print() everywhere; incidents are undiagnosable and RD-15339 is open.
+**Issue — today:** The analyzer logs via bare `print()` — no levels, no structure, no rotation, no request correlation — while the extractor already has a full logging framework (logging_config.py) with rotation and masking.
+
+**Why it's a problem:** Production incidents cannot be traced: which request, which fingerprint, which agent produced a given line? Output capture depends on how the process happens to be launched.
+
+**Impact:** Every diagnosis is grep-and-guess; the existing backlog item RD-15339 tracks exactly this pain.
 
 **Solution:**
 
@@ -287,7 +332,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-12 — Config validation at startup
 
-**Issue:** A typo in routing/patterns config must not silently mis-route at 2 AM.
+**Issue — today:** Configuration files are read without validation. A malformed routing file or an invalid regex surfaces later — as a runtime exception on some request, or as silently wrong behavior (e.g., everything falling to a default).
+
+**Why it's a problem:** Config errors are discovered at use-time in production instead of at deploy-time.
+
+**Impact:** A typo deployed Friday evening mis-routes every message all weekend with nobody aware. Fail-fast validation converts that into a refused restart with a clear error message. Pre-rollout blocker.
 
 **Solution:**
 
@@ -298,7 +347,11 @@ behavior as today's LLM fallback — never worse."
 
 #### A-13 — Embedding model + dimension guard
 
-**Issue:** P12 — a model upgrade would silently mix incompatible vector spaces; similarity turns to noise with no error raised.
+**Issue — today:** Vectors carry no record of which embedding model produced them; the model is just an env var (OLLAMA_EMBED_MODEL). Nothing pins the collection to a model or a dimension.
+
+**Why it's a problem:** Embeddings from different models — or different quantizations of the same model — live in incompatible vector spaces. Mixed in one collection, every similarity computation is numerically valid but semantically meaningless, and no error is ever raised.
+
+**Impact:** A routine Ollama model upgrade or re-pull would silently reintroduce poisoning-like behavior with no obvious cause. Pain: P12.
 
 **Solution:**
 
@@ -312,7 +365,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-1 — A1 Error Summariser (deterministic)
 
-**Issue:** P1 — plus MVP1 pays an extra LLM call per Slack message just to shorten text (`summarize_error_with_ai`).
+**Issue — today:** There is no canonical 'understand the error' step — raw text flows into caches and vectors directly. Meanwhile, Slack display text is produced by an EXTRA uncached LLM call per message (`summarize_error_with_ai`, slack_helper.py:124).
+
+**Why it's a problem:** Error identity work is scattered across the codebase, and a paid, slow, non-deterministic model call is spent on a job a deterministic function does better.
+
+**Impact:** Cost and latency on every single Slack message; inconsistent identity between cache, vector store, and display. Pain: P1 (identity side).
 
 **Solution:**
 
@@ -324,7 +381,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-2 — A2 Deviation Analyzer
 
-**Issue:** Variant errors (same cause, different version/path) either get a verbatim wrong fix or an unnecessary fresh synthesis.
+**Issue — today:** Retrieval is binary: above the threshold the stored fix is served verbatim; below it, a fresh fix is synthesized. Nothing in between.
+
+**Why it's a problem:** The common 'variant' case — same root cause, different specifics — has no judge. A 0.92-similar stored fix that says 'downgrade to react@17' is served verbatim to a react@18.2 failure (wrong version), or discarded entirely and re-synthesized at full cost.
+
+**Impact:** Wrong specifics served confidently, or paid regeneration of knowledge that is 95% already stored.
 
 **Solution:**
 
@@ -337,7 +398,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-3 — A3 Solution Synthesizer
 
-**Issue:** The LLM fallback is unstructured free text with unstructured failures.
+**Issue — today:** The LLM fallback (`resolver_agent.call_llm`) returns free text: no schema, no confidence value, no structured failure mode, no citations.
+
+**Why it's a problem:** Output cannot be validated, safely post-processed, or measured; failures surface as exceptions or garbage messages; there is no way to distinguish 'the model answered badly' from 'the pipeline broke'.
+
+**Impact:** Unsafe/unusable output paths and no quality signal on the most expensive component in the system.
 
 **Solution:**
 
@@ -350,7 +415,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-4 — Stage-grouped Slack messages
 
-**Issue:** P17 — every error posts a separate top-level message; the channel is an unreadable firehose.
+**Issue — today:** Every analyzed error posts its own top-level channel message (send_error_message) — no threading, no grouping by pipeline or stage.
+
+**Why it's a problem:** One pipeline failing 3 stages posts 3+ disconnected messages; a busy day across products produces a wall of them.
+
+**Impact:** The channel becomes an unreadable firehose; SMEs stop scanning; approvals stall; the human-in-the-loop flywheel that grows the KB dies of fatigue. This was reported as the team's #1 daily friction. Pain: P17.
 
 **Solution:**
 
@@ -362,7 +431,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-5 — Recurring-error counter instead of re-post
 
-**Issue:** P17 — the same known error re-posts on every recurrence.
+**Issue — today:** A recurring known error posts a brand-new message on every recurrence.
+
+**Why it's a problem:** Recurrence is exactly when LESS attention is needed — the fix is already known and approved. Yet repeats dominate the channel volume.
+
+**Impact:** Genuinely new failures drown among repeats. Pain: P17.
 
 **Solution:**
 
@@ -373,7 +446,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-6 — Team routing via config
 
-**Issue:** P18 — one global channel for every product; SPOCs miss their items.
+**Issue — today:** The destination channel is one global env var (`SLACK_CHANNEL`, slack_helper.py:16). No repo→team mapping exists anywhere in the system.
+
+**Why it's a problem:** Every product's failures land in one shared channel. With multiple SPOCs each owning different products, everyone must read everything to find their own items; nothing can be assigned or mentioned to the right group.
+
+**Impact:** Messages are routinely missed; ownership is ambiguous; cross-team noise trains people to ignore the channel. Pain: P18.
 
 **Solution:**
 
@@ -385,7 +462,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-7 — In-request fingerprint dedup
 
-**Issue:** P8 — the same error in N stages runs N analyses and posts N messages.
+**Issue — today:** The analyzer loops `for step in failed_steps: for error_line in step.error_lines:` (analyzer_service.py:277) with no de-duplication inside a request.
+
+**Why it's a problem:** One root cause failing build, test, and package stages is treated as three unrelated problems — common in GitLab, where one broken dependency fails every stage that touches it.
+
+**Impact:** 3× embedding cost, 3× LLM calls, 3× messages and DMs — for zero added information. Pain: P8.
 
 **Solution:**
 
@@ -396,7 +477,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-8 — Delivery fallback when developer not found
 
-**Issue:** P19 — service-account pipelines and email mismatches silently drop the generated fix.
+**Issue — today:** The developer DM resolves its recipient via `users_lookupByEmail` on the CI-provided email; on failure the code logs the miss and DROPS the generated fix.
+
+**Why it's a problem:** Failures are routine, not exotic: scheduled/automated pipelines run as service accounts, and some developers' CI email differs from their Slack email.
+
+**Impact:** Precisely the unattended pipelines (nightly builds, release automation) — where a surfaced fix is most valuable — are the ones whose fixes silently evaporate after the full analysis cost was paid. Pain: P19.
 
 **Solution:**
 
@@ -407,7 +492,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-9 — Provenance in the developer DM
 
-**Issue:** Developers can't tell a battle-tested SME fix from a fresh AI guess.
+**Issue — today:** The DM shows the fix text and nothing else — no indication of where the fix came from or its track record.
+
+**Why it's a problem:** An SME-approved fix that has resolved 40 failures and a fresh unverified AI guess are visually identical to the recipient.
+
+**Impact:** Developers cannot calibrate trust: they either over-trust guesses (dangerous) or under-trust proven fixes (wasteful).
 
 **Solution:**
 
@@ -417,7 +506,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-10 — Dangerous-fix guardrail
 
-**Issue:** P22 — nothing stops `rm -rf` reaching a developer; prompts alone can't guarantee safety (probabilistic output + attacker-controllable log text in the prompt). Pre-rollout blocker.
+**Issue — today:** A3-synthesized fixes go straight to the developer DM with no safety check of any kind.
+
+**Why it's a problem:** Two reasons a prompt alone cannot fix this: (1) LLM output is probabilistic — instructions reduce frequency, never to zero; (2) the build log itself is part of the prompt, and log content is attacker-controllable — a malicious dependency can print text designed to steer the model (prompt injection). A guard living inside the prompt can be defeated by the prompt.
+
+**Impact:** One `rm -rf` suggestion followed by a tired developer is a disaster plus permanent trust loss. Pain: P22. Pre-rollout blocker.
 
 **Solution:**
 
@@ -430,7 +523,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-11 — Infra errors to DevOps, never the developer
 
-**Issue:** P21 — runner outages DM the committing developer as if their code failed; false blame kills trust.
+**Issue — today:** Every failure follows the same path: extract → analyze → DM the person who triggered the pipeline — regardless of cause.
+
+**Why it's a problem:** A runner disconnect, registry outage, or network timeout is not the developer's fault, but the DM implies 'your build failed, here is a fix'.
+
+**Impact:** Repeated false blame is the fastest way to get the bot muted; once muted, even correct fixes go unseen. Pain: P21.
 
 **Solution:**
 
@@ -440,7 +537,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-12 — Jira creation from an issue
 
-**Issue:** P20 — recurring/product failures need tickets; manual creation is retyped, unlinked, duplicated.
+**Issue — today:** Escalating a failure to the product team means manually creating a Jira ticket and retyping the error, context, and history by hand. Nothing links tickets to stored fixes.
+
+**Why it's a problem:** Friction means tickets often are not created at all; when they are, the next occurrence of the same failure creates a duplicate because nothing connects them.
+
+**Impact:** Recurring issues stay untracked; ticket history fragments. Pain: P20.
 
 **Solution:**
 
@@ -453,7 +554,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-13 — Feedback buttons + auto-flag
 
-**Issue:** No signal whether served fixes actually help; bad fixes survive silently.
+**Issue — today:** After a fix is DM'd, the loop simply ends — there is no signal whether the fix actually helped.
+
+**Why it's a problem:** Fix quality is unmeasurable, so bad fixes keep being served indefinitely and good ones earn no visible track record (see B-9).
+
+**Impact:** KB quality can only degrade silently; SMEs never learn which of their approvals work in practice.
 
 **Solution:**
 
@@ -465,7 +570,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-14 — Consolidate Slack handlers (delete slack_reviewer.py)
 
-**Issue:** P6 — two processes open the same embedded Chroma directory (corruption hazard) and carry duplicated handler code.
+**Issue — today:** Two OS processes run against the same data: the analyzer (FastAPI) and slack_reviewer.py (a separate Flask app) — each opens its own `chromadb.PersistentClient` on the SAME directory (slack_reviewer.py:19), and each carries a near-identical copy of the Approve/Edit/Discard handler code.
+
+**Why it's a problem:** Embedded Chroma is single-process by design (SQLite + memory-mapped HNSW segments); concurrent writers from separate processes are unsupported and can corrupt the index. The duplicated handlers also mean a bug fixed in one copy silently survives in the other.
+
+**Impact:** Every Slack approval (a write from the Flask process) races analyzer writes over the knowledge base. Pain: P6 — this is a data-integrity fix, scheduled FIRST in Phase 1.
 
 **Solution:**
 
@@ -477,7 +586,11 @@ behavior as today's LLM fallback — never worse."
 
 #### B-15 — Sane edit-session TTL + O(1) lookup
 
-**Issue:** P16 — a clicked-but-abandoned Edit leaves the SME in edit mode forever, and every channel message triggers a full Redis keys() scan.
+**Issue — today:** Clicking ✏ Edit stores the edit intent in Redis with NO TTL, and the message handler runs `redis.keys(pattern)` — a full keyspace scan — on EVERY channel message to check whether the sender is in edit mode.
+
+**Why it's a problem:** An SME who clicks Edit and walks away is stuck in edit mode forever: their next unrelated thread reply gets silently saved as a 'fix'. And the O(N) scan runs on every message in the channel, against a keyspace that (per A-7) only ever grows.
+
+**Impact:** Accidentally corrupted fixes + growing Redis load; and outside this fragile window there is NO way to edit a stored fix at all. Pain: P16.
 
 **Solution:**
 
@@ -491,7 +604,11 @@ behavior as today's LLM fallback — never worse."
 
 #### C-1 — Pipeline statistics
 
-**Issue:** No record of pipeline outcomes, durations, or who is affected.
+**Issue — today:** No pipeline outcome is recorded anywhere: success/failure counts, per-stage durations, and affected users flow through the system and are discarded.
+
+**Why it's a problem:** Basic operational questions are unanswerable: which products fail most? how long do stages take? is CI health improving or degrading?
+
+**Impact:** No baseline exists for measuring anything — including whether BFA itself helps.
 
 **Solution:**
 
@@ -502,7 +619,11 @@ behavior as today's LLM fallback — never worse."
 
 #### C-2 — Decision telemetry
 
-**Issue:** P7 — nobody can say what fraction of answers came from cache vs vector vs LLM, at what cost.
+**Issue — today:** The analyzer does not record what it decided: which path answered each request (cache / vector / LLM), at what similarity, latency, or cost.
+
+**Why it's a problem:** Cost and accuracy claims are anecdotes. A regression in cache hit-rate or a drift in similarity scores would be invisible until users complain.
+
+**Impact:** No basis for tuning thresholds, forecasting spend, or proving value. Pain: P7 (measurement side).
 
 **Solution:**
 
@@ -513,7 +634,11 @@ behavior as today's LLM fallback — never worse."
 
 #### C-3 — Feedback counts in stats
 
-**Issue:** Fix quality is invisible without aggregating the B-13 signal.
+**Issue — today:** Even once feedback buttons exist (B-13), individual clicks are useless without aggregation.
+
+**Why it's a problem:** Per-fix helpfulness must be queryable for the dashboard, the auto-flag rule, and pruning (D-3) to act on it.
+
+**Impact:** Without aggregation, the feedback signal collected from developers changes nothing.
 
 **Solution:**
 
@@ -523,7 +648,11 @@ behavior as today's LLM fallback — never worse."
 
 #### C-4 — Zero-match telemetry
 
-**Issue:** A failed pipeline matching no pattern disappears silently — the tool goes blind without anyone knowing.
+**Issue — today:** A failed pipeline that matches no ERROR_PATTERN produces nothing at all: no analysis, no message, no record that the miss happened.
+
+**Why it's a problem:** When a new failure class appears, the tool goes blind to it — and nobody can even know, because the miss leaves no trace.
+
+**Impact:** Silent coverage decay; the pattern config never learns; developers assume the tool 'went quiet'.
 
 **Solution:**
 
@@ -536,7 +665,11 @@ behavior as today's LLM fallback — never worse."
 
 #### D-1 — Full-CRUD KB APIs (SQL-backed)
 
-**Issue:** P14/P15/P16 — the KB is a black box: no list, no edit, no deprecate; the poisoning row needed manual DB surgery.
+**Issue — today:** The KB is writable only through Slack approval and readable only through ad-hoc Python scripts. There is no endpoint to list, search, edit, or retire a fix.
+
+**Why it's a problem:** During the incident, removing the poisoning row required hand-editing a live, single-process embedded database — the riskiest possible intervention (see B-14).
+
+**Impact:** Bad approvals are effectively permanent (P15); routine KB maintenance — corrections, updates, curation — is impossible (P14, P16).
 
 **Solution:**
 
@@ -548,7 +681,11 @@ behavior as today's LLM fallback — never worse."
 
 #### D-2 — Dashboard
 
-**Issue:** P13/P14/P16 — the only view of anything is Slack scroll-back.
+**Issue — today:** The only 'view' of failures, pending reviews, or KB contents is scrolling Slack history.
+
+**Why it's a problem:** SMEs triage from memory; managers have no failure overview; low-confidence answers and flagged fixes have no home where anyone would notice them.
+
+**Impact:** Work that needs attention is invisible until someone stumbles on it. Pains: P13, P14, P16.
 
 **Solution:**
 
@@ -560,7 +697,11 @@ behavior as today's LLM fallback — never worse."
 
 #### D-3 — Monthly KB pruning
 
-**Issue:** Deprecated and dead fixes accumulate forever.
+**Issue — today:** Nothing ever leaves the knowledge base — deprecated rows and fixes for repos deleted a year ago stay forever.
+
+**Why it's a problem:** Dead rows add retrieval noise (more candidates to score, more near-threshold accidents) and storage grows without bound.
+
+**Impact:** KB quality decays passively over time even if every individual approval was good.
 
 **Solution:**
 
@@ -571,7 +712,11 @@ behavior as today's LLM fallback — never worse."
 
 #### D-4 — Safe daily backups
 
-**Issue:** The KB is accumulated tribal knowledge with zero backup; a raw tar of live DB files can capture a mid-write state.
+**Issue — today:** No backups exist for the KB or stats. The naive approach — tar of the live directory — can capture a mid-write state and restore corruption.
+
+**Why it's a problem:** The KB is the system's main asset: accumulated, SME-curated tribal knowledge that cannot be regenerated.
+
+**Impact:** One disk failure erases everything the flywheel has built.
 
 **Solution:**
 
@@ -584,7 +729,11 @@ behavior as today's LLM fallback — never worse."
 
 #### E-1 — Degradation ladder
 
-**Issue:** Any dependency outage currently surfaces as unhandled 500s.
+**Issue — today:** An outage of Redis, Ollama, Chroma, or the LLM endpoint surfaces as unhandled exceptions → 500s → extractor retries → eventually dead letters.
+
+**Why it's a problem:** Each dependency has an obvious weaker-but-working fallback (skip cache; skip vector, synthesize fresh; report 'unable to analyze') — but none is implemented, so any single outage becomes total failure.
+
+**Impact:** Availability is the minimum of five dependencies, and retry storms amplify every incident. Pre-rollout blocker.
 
 **Solution:**
 
@@ -596,7 +745,11 @@ behavior as today's LLM fallback — never worse."
 
 #### E-2 — Dead-letter + replay
 
-**Issue:** P9 — retry-exhausted payloads are only logged; analyses are lost.
+**Issue — today:** When POST retries are exhausted, api_poster only LOGS the failed payload (api_poster.py:1023) and gives up.
+
+**Why it's a problem:** The analysis is lost; recovery means grepping log files and reconstructing payloads by hand.
+
+**Impact:** A two-hour analyzer outage silently swallows two hours of failures — none of them ever analyzed. Pain: P9.
 
 **Solution:**
 
@@ -607,7 +760,11 @@ behavior as today's LLM fallback — never worse."
 
 #### E-3 — Auto-restart + silent-failure alert
 
-**Issue:** P9 — crashes need manual restarts, and the process-alive-but-broken mode alerts no one.
+**Issue — today:** A crashed analyzer stays down until someone notices and restarts it. Worse, the 'process alive but nothing works' mode (bad env var, dead LLM endpoint, misconfigured after restart) alerts no one at all.
+
+**Why it's a problem:** systemd can restart a dead process, but cannot see a living process that fails every request — that needs an output-based signal.
+
+**Impact:** Outages are discovered by developers noticing the silence, hours later. Pain: P9.
 
 **Solution:**
 
@@ -618,7 +775,11 @@ behavior as today's LLM fallback — never worse."
 
 #### E-4 — Slack rate-limit handling
 
-**Issue:** Failure bursts hit Slack 429s and messages drop with a print.
+**Issue — today:** Slack 429 (rate-limit) responses are dropped with a print.
+
+**Why it's a problem:** Rate limits hit exactly during failure bursts — when the most messages are being sent and visibility matters most.
+
+**Impact:** Messages vanish without trace at the worst possible time.
 
 **Solution:**
 
@@ -630,7 +791,11 @@ behavior as today's LLM fallback — never worse."
 
 #### F-1 — Unit tests for all new logic
 
-**Issue:** New modules need the fast layer of the pyramid.
+**Issue — today:** The new MVP2 modules (normalizer, orchestrator, agents, reporter, KB APIs) do not exist yet, hence have no tests; the existing suite covers only MVP1 shapes.
+
+**Why it's a problem:** Without the fast unit layer, every regression in the new logic is discovered at integration time or in production.
+
+**Impact:** Slow feedback loops during the build phase; fragile refactors after it.
 
 **Solution:**
 
@@ -640,7 +805,11 @@ behavior as today's LLM fallback — never worse."
 
 #### F-2 — Component tests with real vector math
 
-**Issue:** P23 — mocked math is how four production bugs shipped under a green suite. Pre-rollout blocker.
+**Issue — today:** The existing suite patches `_get_embedding` to a constant `[0.1, 0.2, 0.3]` and `collection.query` to hand-written distances (test_vector_db.py).
+
+**Why it's a problem:** All four correctness bugs live exactly in the mocked-out layer: real embeddings (blob domination), real metric (L2/cosine), real IDs across restarts (salted hash), realistic inputs (cache keys). The mocks made them untestable by construction.
+
+**Impact:** The suite stayed green through the entire production incident — and nothing today prevents a recurrence. Pain: P23. Pre-rollout blocker.
 
 **Solution:**
 
@@ -653,7 +822,11 @@ behavior as today's LLM fallback — never worse."
 
 #### F-3 — Shared wire-contract schema
 
-**Issue:** The extractor and analyzer can silently drift apart during the payload migration.
+**Issue — today:** The /api/analyze payload shape exists only implicitly, duplicated in two codebases (what api_poster builds vs what FailedStep parses).
+
+**Why it's a problem:** During the v1→v2 payload migration, either side can drift — add, rename, or drop a field — without any test failing on either side.
+
+**Impact:** Silent contract breakage between the services, discovered in production.
 
 **Solution:**
 
@@ -663,7 +836,11 @@ behavior as today's LLM fallback — never worse."
 
 #### F-4 — docker-compose end-to-end
 
-**Issue:** Nothing exercises the two services wired together.
+**Issue — today:** No test exercises the two services wired together: extractor tests stop at a mocked POST; analyzer tests start at the endpoint.
+
+**Why it's a problem:** Everything between them — payload compatibility, Slack formatting, threading behavior, the degradation ladder — is untested as a system.
+
+**Impact:** Integration bugs reach production as the first real test.
 
 **Solution:**
 
@@ -674,7 +851,11 @@ behavior as today's LLM fallback — never worse."
 
 #### F-5 — Eval harness with metric gates
 
-**Issue:** P23 — without measured gates, 'accuracy' is anecdote. Pre-rollout blocker.
+**Issue — today:** There is no measurement of answer quality anywhere — no labeled cases, no replay, no metrics.
+
+**Why it's a problem:** 'Accuracy' claims are anecdotes; the effect of a threshold change, prompt change, or embedding-model change cannot be evaluated before shipping it.
+
+**Impact:** Quality regressions ship invisibly; tuning is guesswork. Pain: P23. Pre-rollout blocker.
 
 **Solution:**
 
@@ -686,7 +867,11 @@ behavior as today's LLM fallback — never worse."
 
 #### F-6 — Linter cleanup
 
-**Issue:** Lint gates on a dirty repo fail instantly; RD-15333 open.
+**Issue — today:** The analyzer repo has standing linter violations (tracked as RD-15333).
+
+**Why it's a problem:** A lint gate enabled on a dirty repo fails instantly on every PR, so no gate can be turned on — including the flake8-print rule that keeps A-11 honest.
+
+**Impact:** Style and print() regressions cannot be enforced in CI until the slate is clean.
 
 **Solution:**
 
