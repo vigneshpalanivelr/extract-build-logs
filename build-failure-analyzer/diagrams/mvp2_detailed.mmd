@@ -97,7 +97,8 @@ flowchart TB
     subgraph SLK["SLACK CLOUD — <b>NOTIFICATION ONLY</b> · outbound one-way · no buttons · no callbacks · no DB access"]
       direction LR
       CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage (threaded)<br/>+ <b>deep link to Dashboard</b>"]:::notify
-      DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b>"]:::notify
+      DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b><br/>+ 👍/👎 feedback buttons"]:::notify
+      FBK["<b>/slack/feedback</b> (single inbound endpoint)<br/>Slack request-signature verified<br/>records feedback ONLY — cannot create,<br/>edit, approve or delete a fix"]:::notify
       DEV["<b>DevOps channel</b><br/>infra-class errors · 'unable to analyze'<br/>silent-failure alerts"]:::notify
     end
 
@@ -129,6 +130,8 @@ flowchart TB
     STAPI -->|"<b>JOIN metadata + statistics</b>"| STA
     STAPI --> MTA
 
+    DM ==>|"👍/👎 click"| FBK
+    FBK ==>|"record feedback<br/>(no state change)"| STA
     CH -.->|"deep link"| SME
     DM -.->|"deep link"| SME
     SME ==>|"<b>approve · edit · deprecate</b> — ALL KB writes"| UIB

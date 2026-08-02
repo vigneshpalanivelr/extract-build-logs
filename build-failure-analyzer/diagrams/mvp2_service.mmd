@@ -1,0 +1,73 @@
+flowchart LR
+    classDef src fill:#ffffff,stroke:#333,stroke-width:2px
+    classDef lane fill:#d5e8d4,stroke:#2d6a2d,stroke-width:2px
+    classDef ui fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    classDef store fill:#ffe6cc,stroke:#d79b00,stroke-width:2px
+    classDef ext fill:#f5f5f5,stroke:#666,stroke-width:2px,stroke-dasharray:5 3
+    classDef human fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+    classDef notify fill:#f8cecc,stroke:#b85450,stroke-width:2px
+
+    GL(["GitLab"]):::src
+    JK(["Jenkins"]):::src
+
+    subgraph CORP["CORP NETWORK"]
+      direction TB
+
+      subgraph SVC["UNIFIED BFA SERVICE&nbsp;&nbsp;·&nbsp;&nbsp;one process&nbsp;·&nbsp;one port&nbsp;·&nbsp;one repo"]
+        direction TB
+        L1["<b>1 · INGEST</b><br/>/webhook/gitlab&nbsp;·&nbsp;/webhook/jenkins<br/>HMAC verify → <b>HTTP 202 Accepted</b>"]:::lane
+        L2["<b>2 · EXTRACTION</b><br/>Log Fetcher → Error Extractor → Redactor<br/>patterns from config (code/infra)<br/>per-region split&nbsp;·&nbsp;secrets masked"]:::lane
+        L3["<b>3 · ANALYSIS</b> — asyncio background task<br/>A1 normalize→fingerprint (no LLM)<br/>cache + cosine lookup ≥0.90<br/>A2 deviation · A3 synthesis · A4 reporter"]:::lane
+        L4["<b>4 · MANAGEMENT PLANE</b><br/>Dashboard UI&nbsp;·&nbsp;KB REST API (full CRUD)<br/>Stats&nbsp;·&nbsp;Watchdog&nbsp;·&nbsp;/health"]:::ui
+        L1 --> L2
+        L2 ==>|"<b>in-process Python call</b><br/>ErrorRegion list<br/><b>NO HTTP · NO JWT · no api_poster</b>"| L3
+      end
+
+      subgraph STORE["LOCAL STORES — single writer, single machine"]
+        direction TB
+        REDIS[("<b>Redis</b><br/>fingerprint-keyed cache · TTLs")]:::store
+        CHROMA[("<b>Chroma</b><br/>vectors only · cosine · sha256 ids")]:::store
+        KB[("<b>SQLite bfa_kb.db</b><br/>fixes + fix_revisions<br/><i>system of record</i>")]:::store
+        STS[("<b>SQLite bfa_stats.db</b><br/>pipeline + decision stats")]:::store
+      end
+
+      OLL["<b>Ollama</b><br/>granite-embedding"]:::ext
+      DLQ[/"<b>dead_letter/</b><br/>+ replay utility"/]:::store
+    end
+
+    SME(["<b>DevOps SME</b><br/>human-in-the-loop"]):::human
+    BED["<b>AWS Bedrock — Claude</b><br/>chat.sandvine.com/apis"]:::ext
+    CIAPI["<b>GitLab / Jenkins REST API</b><br/>job log retrieval"]:::ext
+
+    subgraph SLACK["SLACK CLOUD&nbsp;&nbsp;—&nbsp;&nbsp;<b>NOTIFICATION ONLY</b> (outbound, one-way)"]
+      direction TB
+      CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage<br/>+ deep link to Dashboard"]:::notify
+      DM["<b>Developer DM</b><br/>fix + provenance<br/>+ deep link to Dashboard"]:::notify
+    end
+
+    GL -->|"failed pipeline"| L1
+    JK -->|"failed pipeline"| L1
+
+    L2 -.->|"pull job logs"| CIAPI
+    L3 -.->|"embed"| OLL
+    L3 -->|"LLM (A2/A3)"| BED
+    L3 --> REDIS
+    L3 --> CHROMA
+    L3 --> KB
+    L3 --> STS
+    L3 -.->|"undelivered result"| DLQ
+    L4 --> KB
+    L4 --> CHROMA
+    L4 --> REDIS
+    L4 --> STS
+
+    L3 ==>|"notify"| CH
+    L3 ==>|"notify"| DM
+    CH -.->|"click link"| SME
+    DM -.->|"click link"| SME
+    SME ==>|"<b>approve · edit · deprecate</b><br/>all KB writes happen here"| L4
+
+    style CORP fill:#e1d5e7,stroke:#9673a6,stroke-width:3px
+    style SVC fill:#d5e8d4,stroke:#2d6a2d,stroke-width:3px
+    style STORE fill:#fff7e6,stroke:#d79b00,stroke-width:2px
+    style SLACK fill:#f8cecc,stroke:#b85450,stroke-width:3px,stroke-dasharray:8 4

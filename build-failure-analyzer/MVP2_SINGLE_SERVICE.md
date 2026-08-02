@@ -2,7 +2,8 @@
 
 Decision record + diagrams for merging `extract-build-logs` and
 `build-failure-analyzer` into **one service**, with Slack reduced to
-**notification-only** and all SME actions moved to the Dashboard UI.
+**notifications plus a single feedback callback**, and all SME state
+changes moved to the Dashboard UI.
 
 Companion to `HYBRID_PROPOSAL.md` (scope) and `LLD.md` (design detail).
 Where this document and the LLD disagree on service topology, **this
@@ -25,7 +26,7 @@ are the editable originals.
 | Chroma writers | 2 processes, same directory (corruption hazard) | **1 writer** |
 | Pipeline events consumed | failed only | **success AND failed** (KPI needs both) |
 | Stores | Redis + Chroma (+ scattered metadata) | **3**: Redis · Chroma · SQLite (metadata + statistics, linked) |
-| Slack | interactive (Approve/Edit/Discard, inbound routes, DB writes) | **notification only** — outbound, one-way |
+| Slack | interactive (Approve/Edit/Discard, inbound routes, DB writes) | outbound notifications + **one signature-verified feedback callback**; no state changes |
 | SME approval | Slack buttons → Flask → direct DB write | **Dashboard UI → KB REST API** → single-writer transaction |
 
 ---
@@ -138,7 +139,8 @@ flowchart TB
     subgraph SLK["SLACK CLOUD — <b>NOTIFICATION ONLY</b> · outbound one-way · no buttons · no callbacks · no DB access"]
       direction LR
       CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage (threaded)<br/>+ <b>deep link to Dashboard</b>"]:::notify
-      DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b>"]:::notify
+      DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b><br/>+ 👍/👎 feedback buttons"]:::notify
+      FBK["<b>/slack/feedback</b> (single inbound endpoint)<br/>Slack request-signature verified<br/>records feedback ONLY — cannot create,<br/>edit, approve or delete a fix"]:::notify
       DEV["<b>DevOps channel</b><br/>infra-class errors · 'unable to analyze'<br/>silent-failure alerts"]:::notify
     end
 
@@ -170,6 +172,8 @@ flowchart TB
     STAPI -->|"<b>JOIN metadata + statistics</b>"| STA
     STAPI --> MTA
 
+    DM ==>|"👍/👎 click"| FBK
+    FBK ==>|"record feedback<br/>(no state change)"| STA
     CH -.->|"deep link"| SME
     DM -.->|"deep link"| SME
     SME ==>|"<b>approve · edit · deprecate</b> — ALL KB writes"| UIB
@@ -185,6 +189,7 @@ flowchart TB
     style ST3 fill:#fff7e6,stroke:#d79b00,stroke-width:3px
     style SLK fill:#f8cecc,stroke:#b85450,stroke-width:3px,stroke-dasharray:8 4
 ```
+
 
 ---
 
@@ -256,13 +261,16 @@ sequenceDiagram
         OR->>SQ: analyze_decisions(source, similarity, latency, cost, fingerprint)
     end
 
-    Note over SL: Slack is OUTBOUND ONLY — no buttons, no callbacks, no DB access
+    Note over SL: Slack: outbound notifications + ONE inbound callback (feedback only)
+    SL->>OR: 👍/👎 feedback callback (Slack signature verified)
+    OR->>SQ: feedback_events(fix_id, verdict) — no state change permitted
     SL-->>UI: SME clicks deep link
     UI->>SQ: approve / edit / deprecate (KB REST API → fixes + fix_revisions)
     UI->>CH: vector upsert / delete
     UI->>RD: cache invalidate
     UI->>SQ: KPI view = JOIN pipeline_events + analyze_decisions<br/>"of N failed, M received a solution"
 ```
+
 
 ---
 
@@ -285,14 +293,17 @@ flowchart LR
         O1 --> O2 --> O3
     end
 
-    subgraph NEW["MVP-2 — notification in Slack, approval in the UI"]
+    subgraph NEW["MVP-2 — notification + feedback in Slack, approval in the UI"]
         direction LR
         N0(["<b>DevOps SME</b>"]):::human
-        N1["<b>Slack notification</b><br/>'fix pending review'<br/>+ deep link"]:::notify
+        N1["<b>Slack notification</b><br/>'fix pending review'<br/>+ deep link + 👍/👎"]:::notify
+        NF["<b>/slack/feedback</b><br/>signature-verified<br/>records feedback only"]:::svc
         N2["<b>Dashboard UI</b><br/>Needs-Attention queue"]:::ui
         N3["<b>KB REST API</b><br/>PUT edit · DELETE deprecate<br/>POST approve"]:::svc
         N4[("<b>bfa_kb.db</b> fixes + fix_revisions<br/><b>Chroma</b> vector<br/><b>Redis</b> cache")]:::store
-        N1 -.->|"click"| N0
+        N1 -.->|"click deep link"| N0
+        N1 ==>|"👍/👎 only"| NF
+        NF ==>|"feedback counter"| N4
         N0 ==>|"review"| N2
         N2 ==>|"approve / edit / deprecate"| N3
         N3 ==>|"single writer, one process<br/>atomic across all stores"| N4
@@ -302,6 +313,7 @@ flowchart LR
     style OLD fill:#fafafa,stroke:#bbb,stroke-width:2px,stroke-dasharray:8 4
     style NEW fill:#eef7ee,stroke:#2d6a2d,stroke-width:3px
 ```
+
 
 Slack notifies with a deep link; the SME reviews and acts in the
 Dashboard's Needs-Attention queue. Because the write path is inside
@@ -381,12 +393,21 @@ unable), per product and per stage.
 | The extracted, redacted payload MUST be persisted before analysis is dispatched (crash-safe checkpoint) |
 | The Dashboard/KB API is the sole KB write path and MUST authenticate and authorize SME actions |
 
-**Open decisions:**
+**Decisions taken:**
 
-1. **Feedback buttons (BFA-AGENT-1120)** — thumbs up/down needs an
-   inbound Slack callback, which contradicts notification-only. Move to
-   the UI, keep one narrow Slack callback for feedback only, or drop
-   from MVP-2?
-2. **`/api/analyze` external exposure** — if external CI agents still
-   call it directly, the JWT requirement survives; if it becomes
-   internal-only, JWT and `jwt_dmz_issuer.py` are fully retired.
+1. **Feedback** — Slack keeps 👍/👎 via **one narrow inbound callback**
+   (`/slack/feedback`), verified by Slack request signature and
+   permitted to record feedback only. Approve, edit, and discard are
+   not accepted through Slack.
+2. **External access / JWT** — no external application may submit work,
+   and **no interface uses JWT**. Inbound access is limited to CI
+   webhooks (shared-secret HMAC), the Slack feedback callback (Slack
+   signature), and internally reachable dashboard/API routes. The token
+   endpoint, token manager, and all JWT configuration are removed.
+3. **Domain-context collection** — governed by the same identifier,
+   distance-metric, and embedding-model rules as the fix collection.
+
+**Still open:** the dashboard authentication mechanism. With JWT
+excluded, an authenticated actor identity is still required for the
+revision history — corporate SSO, an application session store, or
+reverse-proxy-supplied identity.

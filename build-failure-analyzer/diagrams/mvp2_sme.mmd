@@ -14,14 +14,17 @@ flowchart LR
         O1 --> O2 --> O3
     end
 
-    subgraph NEW["MVP-2 — notification in Slack, approval in the UI"]
+    subgraph NEW["MVP-2 — notification + feedback in Slack, approval in the UI"]
         direction LR
         N0(["<b>DevOps SME</b>"]):::human
-        N1["<b>Slack notification</b><br/>'fix pending review'<br/>+ deep link"]:::notify
+        N1["<b>Slack notification</b><br/>'fix pending review'<br/>+ deep link + 👍/👎"]:::notify
+        NF["<b>/slack/feedback</b><br/>signature-verified<br/>records feedback only"]:::svc
         N2["<b>Dashboard UI</b><br/>Needs-Attention queue"]:::ui
         N3["<b>KB REST API</b><br/>PUT edit · DELETE deprecate<br/>POST approve"]:::svc
         N4[("<b>bfa_kb.db</b> fixes + fix_revisions<br/><b>Chroma</b> vector<br/><b>Redis</b> cache")]:::store
-        N1 -.->|"click"| N0
+        N1 -.->|"click deep link"| N0
+        N1 ==>|"👍/👎 only"| NF
+        NF ==>|"feedback counter"| N4
         N0 ==>|"review"| N2
         N2 ==>|"approve / edit / deprecate"| N3
         N3 ==>|"single writer, one process<br/>atomic across all stores"| N4

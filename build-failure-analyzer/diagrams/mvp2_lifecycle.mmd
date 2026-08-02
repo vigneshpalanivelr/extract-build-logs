@@ -63,7 +63,9 @@ sequenceDiagram
         OR->>SQ: analyze_decisions(source, similarity, latency, cost, fingerprint)
     end
 
-    Note over SL: Slack is OUTBOUND ONLY — no buttons, no callbacks, no DB access
+    Note over SL: Slack: outbound notifications + ONE inbound callback (feedback only)
+    SL->>OR: 👍/👎 feedback callback (Slack signature verified)
+    OR->>SQ: feedback_events(fix_id, verdict) — no state change permitted
     SL-->>UI: SME clicks deep link
     UI->>SQ: approve / edit / deprecate (KB REST API → fixes + fix_revisions)
     UI->>CH: vector upsert / delete
