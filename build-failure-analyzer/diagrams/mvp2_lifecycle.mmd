@@ -1,0 +1,71 @@
+sequenceDiagram
+    autonumber
+    participant CI as GitLab / Jenkins
+    box rgb(213,232,212) UNIFIED BFA SERVICE — one process, one port
+    participant WH as Ingest
+    participant EX as Extraction
+    participant OR as Orchestrator A1-A4
+    end
+    participant RD as Redis
+    participant CH as Chroma
+    participant SQ as SQLite bfa.db
+    participant LLM as AWS Bedrock
+    participant SL as Slack Cloud
+    participant UI as Dashboard / SME
+
+    rect rgb(235,245,255)
+    Note over CI,SQ: EVERY pipeline event arrives — success AND failed (KPI needs both)
+    CI->>WH: webhook (HMAC signed)
+    WH-->>CI: HTTP 202 Accepted
+    end
+
+    alt pipeline status = SUCCESS
+        WH->>SQ: pipeline_events(status=success, user, commit, per-stage E.time, total)
+        Note over WH,SQ: stats only — no extraction, no vector, no LLM
+    else pipeline status = FAILED
+        WH->>SQ: pipeline_events(status=failed, ...)
+        WH->>EX: dispatch (asyncio background task)
+        EX->>CI: fetch job logs (REST)
+        CI-->>EX: raw console log
+        EX->>EX: match patterns (config) → split error / context
+        EX->>EX: redact secrets before anything leaves memory
+        EX->>SQ: checkpoint redacted payload (CI will not re-deliver)
+
+        rect rgb(238,247,238)
+        Note over EX,OR: IN-PROCESS PYTHON CALL — no HTTP, no JWT, no api_poster
+        EX->>OR: analyze(ErrorRegion list)
+        end
+
+        OR->>OR: A1 normalize → fingerprint (no LLM) + dedupe across stages
+        OR->>RD: lookup sme:fix / ai:fix by fingerprint
+        alt cache HIT
+            RD-->>OR: stored fix (no vector, no LLM)
+        else cache MISS
+            OR->>CH: cosine search ≥ 0.90
+            CH-->>OR: candidate ids + scores
+            OR->>SQ: fetch candidate metadata (fixes)
+            alt candidate in 0.90–0.95 or 2+ candidates
+                OR->>LLM: A2 deviation verdict
+                LLM-->>OR: exact / adjusted / partial / no_match
+            end
+            alt 0 candidates, or A2 = partial / no_match
+                OR->>LLM: A3 synthesize fresh fix
+                LLM-->>OR: fix_text + confidence
+            end
+            OR->>SQ: upsert fixes + fix_revisions
+            OR->>CH: upsert vector (same sha256 id)
+            OR->>RD: cache fix (TTL)
+        end
+
+        OR->>OR: A4 guardrail → infra/code routing → team routing → stage grouping
+        OR->>SL: channel message per failed stage + deep link
+        OR->>SL: developer DM (fix + provenance) + deep link
+        OR->>SQ: analyze_decisions(source, similarity, latency, cost, fingerprint)
+    end
+
+    Note over SL: Slack is OUTBOUND ONLY — no buttons, no callbacks, no DB access
+    SL-->>UI: SME clicks deep link
+    UI->>SQ: approve / edit / deprecate (KB REST API → fixes + fix_revisions)
+    UI->>CH: vector upsert / delete
+    UI->>RD: cache invalidate
+    UI->>SQ: KPI view = JOIN pipeline_events + analyze_decisions<br/>"of N failed, M received a solution"

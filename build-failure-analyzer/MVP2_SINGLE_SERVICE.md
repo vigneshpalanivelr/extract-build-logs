@@ -2,12 +2,16 @@
 
 Decision record + diagrams for merging `extract-build-logs` and
 `build-failure-analyzer` into **one service**, with Slack reduced to
-**notification-only**.
+**notification-only** and all SME actions moved to the Dashboard UI.
 
 Companion to `HYBRID_PROPOSAL.md` (scope) and `LLD.md` (design detail).
 Where this document and the LLD disagree on service topology, **this
-document wins** — the LLD predates the merge decision and is updated
-in the next revision.
+document wins** — the LLD predates the merge decision and is updated in
+the next revision.
+
+Rendered SVGs live in `diagrams/` (`mvp2_detailed.svg`,
+`mvp2_lifecycle.svg`, `mvp2_sme.svg`); the `.mmd` sources beside them
+are the editable originals.
 
 ---
 
@@ -19,91 +23,167 @@ in the next revision.
 | Extractor → Analyzer | HTTP `POST /api/analyze` + JWT | **In-process Python call** |
 | Ports | 8000, 8000, 5001 | one configurable port |
 | Chroma writers | 2 processes, same directory (corruption hazard) | **1 writer** |
-| Slack | interactive (Approve/Edit/Discard buttons, inbound routes, DB writes) | **notification only** — outbound, one-way |
+| Pipeline events consumed | failed only | **success AND failed** (KPI needs both) |
+| Stores | Redis + Chroma (+ scattered metadata) | **3**: Redis · Chroma · SQLite (metadata + statistics, linked) |
+| Slack | interactive (Approve/Edit/Discard, inbound routes, DB writes) | **notification only** — outbound, one-way |
 | SME approval | Slack buttons → Flask → direct DB write | **Dashboard UI → KB REST API** → single-writer transaction |
-
-Everything the HTTP hop provided — auth, retry, dead-letter, payload
-schema — either disappears (auth) or moves inside the process
-(checkpointing, typed interface).
 
 ---
 
-## 2. Single-service architecture
+## 2. Detailed single-service architecture
+
+Ingest accepts **every** pipeline event and routes on status: success
+events record statistics only (no extraction, no vector search, no
+LLM); failed events run the full extraction → analysis → notification
+pipeline. Both write `pipeline_events`, which is what makes the KPI
+"of N failed pipelines, M received a solution" computable.
 
 ```mermaid
-flowchart LR
+flowchart TB
     classDef src fill:#ffffff,stroke:#333,stroke-width:2px
-    classDef lane fill:#d5e8d4,stroke:#2d6a2d,stroke-width:2px
+    classDef ing fill:#d5e8d4,stroke:#2d6a2d,stroke-width:2px
+    classDef agent fill:#b8dcb4,stroke:#1e5c1e,stroke-width:2px
     classDef ui fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
     classDef store fill:#ffe6cc,stroke:#d79b00,stroke-width:2px
-    classDef ext fill:#f5f5f5,stroke:#666,stroke-width:2px,stroke-dasharray:5 3
+    classDef tbl fill:#fff4e0,stroke:#d79b00,stroke-width:1px
+    classDef outside fill:#f5f5f5,stroke:#666,stroke-width:2px,stroke-dasharray:5 3
     classDef human fill:#fff2cc,stroke:#d6b656,stroke-width:2px
     classDef notify fill:#f8cecc,stroke:#b85450,stroke-width:2px
+    classDef dec fill:#fff2cc,stroke:#d6b656,stroke-width:2px
 
-    GL(["GitLab"]):::src
-    JK(["Jenkins"]):::src
+    subgraph CI["CI SOURCES"]
+      direction LR
+      GL(["<b>GitLab</b>"]):::src
+      JK(["<b>Jenkins</b>"]):::src
+    end
 
     subgraph CORP["CORP NETWORK"]
       direction TB
 
-      subgraph SVC["UNIFIED BFA SERVICE&nbsp;&nbsp;·&nbsp;&nbsp;one process&nbsp;·&nbsp;one port&nbsp;·&nbsp;one repo"]
+      subgraph SVC["UNIFIED BFA SERVICE&nbsp;&nbsp;—&nbsp;&nbsp;one process · one port · one repo"]
         direction TB
-        L1["<b>1 · INGEST</b><br/>/webhook/gitlab&nbsp;·&nbsp;/webhook/jenkins<br/>HMAC verify → <b>HTTP 202 Accepted</b>"]:::lane
-        L2["<b>2 · EXTRACTION</b><br/>Log Fetcher → Error Extractor → Redactor<br/>patterns from config (code/infra)<br/>per-region split&nbsp;·&nbsp;secrets masked"]:::lane
-        L3["<b>3 · ANALYSIS</b> — asyncio background task<br/>A1 normalize→fingerprint (no LLM)<br/>cache + cosine lookup ≥0.90<br/>A2 deviation · A3 synthesis · A4 reporter"]:::lane
-        L4["<b>4 · MANAGEMENT PLANE</b><br/>Dashboard UI&nbsp;·&nbsp;KB REST API (full CRUD)<br/>Stats&nbsp;·&nbsp;Watchdog&nbsp;·&nbsp;/health"]:::ui
-        L1 --> L2
-        L2 ==>|"<b>in-process Python call</b><br/>ErrorRegion list<br/><b>NO HTTP · NO JWT · no api_poster</b>"| L3
+
+        subgraph L1["1 · INGEST&nbsp;&nbsp;(all pipeline events: success AND failed)"]
+          direction LR
+          WH["<b>Webhook endpoints</b><br/>/webhook/gitlab · /webhook/jenkins<br/>HMAC verify (X-Gitlab-Token)<br/><b>→ HTTP 202 Accepted</b>"]:::ing
+          ROUTE{"<b>pipeline<br/>status?</b>"}:::dec
+          SUC["<b>2a · SUCCESS PATH</b><br/>stats only — no extraction, no LLM<br/>user · commit · branch · product<br/>per-stage E.time + status · total time"]:::ing
+          WH --> ROUTE
+          ROUTE -->|"<b>SUCCESS</b>"| SUC
+        end
+
+        subgraph L2["2b · FAILED PATH — EXTRACTION (in-process)"]
+          direction LR
+          F1["<b>Log Fetcher</b><br/>pulls job logs back from<br/>GitLab REST / Jenkins Blue Ocean"]:::ing
+          F2["<b>Error Extractor</b><br/>patterns from config (code/infra)<br/>per-region split:<br/>error_lines + context_lines"]:::ing
+          F3["<b>Redactor</b><br/>tokens · passwords · JWT<br/>AWS keys · cred URLs<br/><i>before any store or send</i>"]:::ing
+          F4["<b>Checkpoint</b><br/>persist redacted payload<br/><i>CI will not re-deliver</i>"]:::ing
+          F1 --> F2 --> F3 --> F4
+        end
+
+        HAND{{"<b>IN-PROCESS PYTHON CALL</b> — analyze(ErrorRegion list) — <b>NO HTTP · NO JWT · no api_poster</b>"}}:::dec
+
+        subgraph L3["3 · ANALYSIS — asyncio background task"]
+          direction LR
+          A1["<b>A1 SUMMARISER</b><br/>(no LLM)<br/>normalize → fingerprint<br/>strip Line-N, timestamps,<br/>SHA/UUID → sha256(fp)"]:::agent
+          DED["<b>Dedup</b><br/>by fingerprint<br/>N stages → 1 analysis"]:::agent
+          C1{"<b>Redis</b><br/>hit?"}:::dec
+          V1["<b>Vector lookup</b><br/>Chroma cosine ≥0.90<br/>top-k 10 + SQLite meta"]:::agent
+          C2{"<b>candidates?</b>"}:::dec
+          A2["<b>A2 DEVIATION</b> (LLM)<br/>exact_match /<br/>applicable_with_adjustments /<br/>partial / no_match<br/>+ confidence · 7d cache"]:::agent
+          A3["<b>A3 SYNTHESIZER</b> (LLM)<br/>fresh fix, strict JSON<br/>fail → 'unable to analyze'<br/>+ DevOps alert"]:::agent
+          A4["<b>A4 REPORTER</b> (no LLM)<br/>1 dangerous-fix guardrail<br/>2 infra vs code routing<br/>3 team routing (routing.json)<br/>4 one msg per stage + thread<br/>5 recurrence counter + provenance"]:::agent
+          A1 --> DED --> C1
+          C1 -->|MISS| V1 --> C2
+          C2 -->|"1 cand 0.90-0.95<br/>or 2+ cands"| A2
+          C2 -->|"0 cands"| A3
+          A2 -->|"partial / no_match / fail"| A3
+          A2 -->|"exact / adjusted"| A4
+          A3 --> A4
+          C1 -->|"<b>HIT</b> — no LLM"| A4
+          C2 -->|"1 cand ≥0.95"| A4
+        end
+
+        subgraph L4["4 · MANAGEMENT PLANE"]
+          direction LR
+          UIK["<b>KPI DASHBOARD</b><br/>success vs failed pipelines<br/><b>% of failed that got a solution</b><br/>source split: cache/vector/A2/A3/unable<br/>per-product · per-stage · cost · latency"]:::ui
+          UIB["<b>KB DASHBOARD</b><br/>Resolved · Needs-Attention · Stats<br/><b>approve · edit · deprecate</b>"]:::ui
+          KBAPI["<b>KB REST API</b> (CRUD, SQL)<br/>POST add · GET search/detail<br/>PUT edit (rev++) · DELETE deprecate"]:::ing
+          STAPI["<b>Stats API</b><br/>/api/stats/pipelines<br/>/api/stats/summary"]:::ing
+          WD["<b>Watchdog</b> · /health<br/>webhooks&gt;0 &amp; analyses=0<br/>→ alert"]:::ing
+          UIB --> KBAPI
+          UIK --> STAPI
+        end
+
+        ROUTE -->|"<b>FAILED</b>"| F1
+        F4 --> HAND --> A1
       end
 
-      subgraph STORE["LOCAL STORES — single writer, single machine"]
-        direction TB
-        REDIS[("<b>Redis</b><br/>fingerprint-keyed cache · TTLs")]:::store
-        CHROMA[("<b>Chroma</b><br/>vectors only · cosine · sha256 ids")]:::store
-        KB[("<b>SQLite bfa_kb.db</b><br/>fixes + fix_revisions<br/><i>system of record</i>")]:::store
-        STS[("<b>SQLite bfa_stats.db</b><br/>pipeline + decision stats")]:::store
+      subgraph ST3["STORES — 3 stores · single writer · one machine"]
+        direction LR
+        RED[("<b>1 · REDIS</b> — cache, all TTLed<br/>sme:fix:&lt;fp&gt; 30d · ai:fix:&lt;fp&gt; 24h<br/>agent:deviation 7d · agent:synth 7d<br/>msg:canonical · error_map:&lt;fp&gt;")]:::store
+        CHR[("<b>2 · CHROMA</b> — vectors only<br/>id = fix-sha256(fingerprint)<br/>embedding(fingerprint) · cosine space<br/>meta: embedding_model + embedding_dim")]:::store
+        MTA["<b>3 · SQLITE bfa.db — METADATA</b><br/>(system of record)<br/><b>fixes</b>: id · fingerprint · fix_text · repo · branch<br/>product_team · error_pattern · error_class<br/>source · status · approver · hits · jira<br/><b>fix_revisions</b>: who · when · old/new text"]:::tbl
+        STA["<b>3 · SQLITE bfa.db — STATISTICS</b><br/><b>pipeline_events</b>: status (success/failed) · user<br/>commit · branch · product · per-stage E.time · total<br/><b>analyze_decisions</b>: fingerprint · source · similarity<br/>latency · cost · zero_match<br/><b>feedback_events</b>: fix_id · verdict"]:::tbl
+        MTA <==>|"<b>LINKED (same DB file)</b><br/>fixes.id = analyze_decisions.fix_id<br/>fixes.fingerprint = analyze_decisions.fingerprint<br/>pipeline_events.pipeline_id = analyze_decisions.pipeline_id<br/><i>→ 'of N failed pipelines, M received a solution'</i>"| STA
       end
 
-      OLL["<b>Ollama</b><br/>granite-embedding"]:::ext
-      DLQ[/"<b>dead_letter/</b><br/>+ replay utility"/]:::store
+      OLL["<b>Ollama</b><br/>granite-embedding (local)"]:::outside
+      DLQ[/"<b>dead_letter/</b> + replay_failed.py"/]:::store
+      MAIL(["<b>Email to developer</b>"]):::src
     end
 
-    SME(["<b>DevOps SME</b><br/>human-in-the-loop"]):::human
-    BED["<b>AWS Bedrock — Claude</b><br/>chat.sandvine.com/apis"]:::ext
-    CIAPI["<b>GitLab / Jenkins REST API</b><br/>job log retrieval"]:::ext
+    BED["<b>AWS Bedrock — Claude</b><br/>chat.sandvine.com/apis"]:::outside
 
-    subgraph SLACK["SLACK CLOUD&nbsp;&nbsp;—&nbsp;&nbsp;<b>NOTIFICATION ONLY</b> (outbound, one-way)"]
-      direction TB
-      CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage<br/>+ deep link to Dashboard"]:::notify
-      DM["<b>Developer DM</b><br/>fix + provenance<br/>+ deep link to Dashboard"]:::notify
+    subgraph SLK["SLACK CLOUD — <b>NOTIFICATION ONLY</b> · outbound one-way · no buttons · no callbacks · no DB access"]
+      direction LR
+      CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage (threaded)<br/>+ <b>deep link to Dashboard</b>"]:::notify
+      DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b>"]:::notify
+      DEV["<b>DevOps channel</b><br/>infra-class errors · 'unable to analyze'<br/>silent-failure alerts"]:::notify
     end
 
-    GL -->|"failed pipeline"| L1
-    JK -->|"failed pipeline"| L1
+    SME(["<b>DevOps SME</b> — human-in-the-loop"]):::human
 
-    L2 -.->|"pull job logs"| CIAPI
-    L3 -.->|"embed"| OLL
-    L3 -->|"LLM (A2/A3)"| BED
-    L3 --> REDIS
-    L3 --> CHROMA
-    L3 --> KB
-    L3 --> STS
-    L3 -.->|"undelivered result"| DLQ
-    L4 --> KB
-    L4 --> CHROMA
-    L4 --> REDIS
-    L4 --> STS
+    GL ==>|"ALL events: success + failed"| WH
+    JK ==>|"ALL events: success + failed"| WH
 
-    L3 ==>|"notify"| CH
-    L3 ==>|"notify"| DM
-    CH -.->|"click link"| SME
-    DM -.->|"click link"| SME
-    SME ==>|"<b>approve · edit · deprecate</b><br/>all KB writes happen here"| L4
+    SUC ==>|"record"| STA
+    A1 -.->|"embed"| OLL
+    C1 -->|"lookup"| RED
+    V1 -->|"search"| CHR
+    V1 -->|"metadata"| MTA
+    A2 -->|"judge"| BED
+    A3 -->|"generate"| BED
+    A4 -->|"upsert fix + revision"| MTA
+    A4 -->|"upsert vector"| CHR
+    A4 -->|"cache"| RED
+    A4 ==>|"record decision"| STA
+    A4 -.->|"undelivered"| DLQ
+    A4 --> MAIL
+    A4 ==>|"notify"| CH
+    A4 ==>|"notify"| DM
+    A4 ==>|"notify"| DEV
 
+    KBAPI -->|"read / write"| MTA
+    KBAPI -->|"vector upsert / delete"| CHR
+    KBAPI -->|"invalidate"| RED
+    STAPI -->|"<b>JOIN metadata + statistics</b>"| STA
+    STAPI --> MTA
+
+    CH -.->|"deep link"| SME
+    DM -.->|"deep link"| SME
+    SME ==>|"<b>approve · edit · deprecate</b> — ALL KB writes"| UIB
+    SME -->|"monitor"| UIK
+
+    style CI fill:#ffffff,stroke:#333,stroke-width:2px
     style CORP fill:#e1d5e7,stroke:#9673a6,stroke-width:3px
     style SVC fill:#d5e8d4,stroke:#2d6a2d,stroke-width:3px
-    style STORE fill:#fff7e6,stroke:#d79b00,stroke-width:2px
-    style SLACK fill:#f8cecc,stroke:#b85450,stroke-width:3px,stroke-dasharray:8 4
+    style L1 fill:#eef7ee,stroke:#82b366,stroke-width:2px
+    style L2 fill:#eef7ee,stroke:#82b366,stroke-width:2px
+    style L3 fill:#eef7ee,stroke:#82b366,stroke-width:2px
+    style L4 fill:#eaf1fb,stroke:#6c8ebf,stroke-width:2px
+    style ST3 fill:#fff7e6,stroke:#d79b00,stroke-width:3px
+    style SLK fill:#f8cecc,stroke:#b85450,stroke-width:3px,stroke-dasharray:8 4
 ```
 
 ---
@@ -114,53 +194,74 @@ flowchart LR
 sequenceDiagram
     autonumber
     participant CI as GitLab / Jenkins
-    box rgb(213,232,212) UNIFIED BFA SERVICE — one process
+    box rgb(213,232,212) UNIFIED BFA SERVICE — one process, one port
     participant WH as Ingest
     participant EX as Extraction
-    participant OR as Orchestrator (A1-A4)
+    participant OR as Orchestrator A1-A4
     end
-    participant ST as Redis / Chroma / SQLite
-    participant LLM as Bedrock (Claude)
+    participant RD as Redis
+    participant CH as Chroma
+    participant SQ as SQLite bfa.db
+    participant LLM as AWS Bedrock
     participant SL as Slack Cloud
+    participant UI as Dashboard / SME
 
-    CI->>WH: webhook: pipeline failed (HMAC signed)
-    WH-->>CI: HTTP 202 Accepted (immediate)
-    Note over WH,EX: everything below runs in an asyncio background task
-    WH->>EX: dispatch(pipeline_event)
-    EX->>CI: fetch job logs (REST)
-    CI-->>EX: raw console log
-    EX->>EX: match patterns (config) → split error / context
-    EX->>EX: redact secrets (tokens, passwords, cred URLs)
-    EX->>ST: persist extracted payload (crash-safe checkpoint)
-
-    rect rgb(238,247,238)
-    Note over EX,OR: IN-PROCESS PYTHON CALL — no HTTP, no JWT, no api_poster
-    EX->>OR: analyze(ErrorRegion list)
+    rect rgb(235,245,255)
+    Note over CI,SQ: EVERY pipeline event arrives — success AND failed (KPI needs both)
+    CI->>WH: webhook (HMAC signed)
+    WH-->>CI: HTTP 202 Accepted
     end
 
-    OR->>OR: A1 normalize → fingerprint (no LLM)
-    OR->>OR: dedupe by fingerprint across stages
-    OR->>ST: Redis lookup by fingerprint
-    alt cache hit
-        ST-->>OR: stored fix
-    else miss
-        OR->>ST: Chroma cosine search (>= 0.90)
-        alt candidate 0.90-0.95
-            OR->>LLM: A2 deviation verdict
-            LLM-->>OR: exact / adjusted / partial / no_match
+    alt pipeline status = SUCCESS
+        WH->>SQ: pipeline_events(status=success, user, commit, per-stage E.time, total)
+        Note over WH,SQ: stats only — no extraction, no vector, no LLM
+    else pipeline status = FAILED
+        WH->>SQ: pipeline_events(status=failed, ...)
+        WH->>EX: dispatch (asyncio background task)
+        EX->>CI: fetch job logs (REST)
+        CI-->>EX: raw console log
+        EX->>EX: match patterns (config) → split error / context
+        EX->>EX: redact secrets before anything leaves memory
+        EX->>SQ: checkpoint redacted payload (CI will not re-deliver)
+
+        rect rgb(238,247,238)
+        Note over EX,OR: IN-PROCESS PYTHON CALL — no HTTP, no JWT, no api_poster
+        EX->>OR: analyze(ErrorRegion list)
         end
-        alt no candidate or A2 says partial/no_match
-            OR->>LLM: A3 synthesize fresh fix
-            LLM-->>OR: fix_text + confidence
+
+        OR->>OR: A1 normalize → fingerprint (no LLM) + dedupe across stages
+        OR->>RD: lookup sme:fix / ai:fix by fingerprint
+        alt cache HIT
+            RD-->>OR: stored fix (no vector, no LLM)
+        else cache MISS
+            OR->>CH: cosine search ≥ 0.90
+            CH-->>OR: candidate ids + scores
+            OR->>SQ: fetch candidate metadata (fixes)
+            alt candidate in 0.90–0.95 or 2+ candidates
+                OR->>LLM: A2 deviation verdict
+                LLM-->>OR: exact / adjusted / partial / no_match
+            end
+            alt 0 candidates, or A2 = partial / no_match
+                OR->>LLM: A3 synthesize fresh fix
+                LLM-->>OR: fix_text + confidence
+            end
+            OR->>SQ: upsert fixes + fix_revisions
+            OR->>CH: upsert vector (same sha256 id)
+            OR->>RD: cache fix (TTL)
         end
-        OR->>ST: upsert fix (SQLite first, then Chroma) + cache
+
+        OR->>OR: A4 guardrail → infra/code routing → team routing → stage grouping
+        OR->>SL: channel message per failed stage + deep link
+        OR->>SL: developer DM (fix + provenance) + deep link
+        OR->>SQ: analyze_decisions(source, similarity, latency, cost, fingerprint)
     end
 
-    OR->>OR: A4 guardrail → infra/code routing → stage grouping
-    OR->>SL: post to team channel (one msg per stage) + link to Dashboard
-    OR->>SL: DM developer (fix + provenance) + link to Dashboard
-    OR->>ST: record decision telemetry (source, similarity, latency, cost)
-    Note over SL: Slack is OUTBOUND ONLY — no buttons, no callbacks
+    Note over SL: Slack is OUTBOUND ONLY — no buttons, no callbacks, no DB access
+    SL-->>UI: SME clicks deep link
+    UI->>SQ: approve / edit / deprecate (KB REST API → fixes + fix_revisions)
+    UI->>CH: vector upsert / delete
+    UI->>RD: cache invalidate
+    UI->>SQ: KPI view = JOIN pipeline_events + analyze_decisions<br/>"of N failed, M received a solution"
 ```
 
 ---
@@ -209,7 +310,40 @@ atomic across SQLite, Chroma, and Redis.
 
 ---
 
-## 5. Requirement impact (working list for the next revision)
+## 5. The three stores
+
+| # | Store | Holds | Notes |
+|---|---|---|---|
+| 1 | **Redis** | `sme:fix:<fp>` 30 d · `ai:fix:<fp>` 24 h · `agent:deviation` 7 d · `agent:synthesizer` 7 d · `msg:canonical:<fp>` · `error_map:<fp>` | cache only; every key carries an explicit TTL; all keys fingerprint-derived |
+| 2 | **Chroma** | `id = fix-sha256(fingerprint)` · `embedding(fingerprint)` · cosine space · collection metadata `embedding_model` + `embedding_dim` | **vectors only** — no business metadata |
+| 3 | **SQLite `bfa.db`** | **metadata**: `fixes`, `fix_revisions` · **statistics**: `pipeline_events`, `analyze_decisions`, `feedback_events` | one file, both halves, **joined** |
+
+The metadata and statistics halves are linked inside the same database
+file:
+
+```
+fixes.id                    = analyze_decisions.fix_id
+fixes.fingerprint           = analyze_decisions.fingerprint
+pipeline_events.pipeline_id = analyze_decisions.pipeline_id
+```
+
+That join is what the KPI dashboard reads: total success vs failed,
+**percentage of failed pipelines that received a solution**, and the
+breakdown by source (cache / vector / A2-adjusted / A3-synthesized /
+unable), per product and per stage.
+
+---
+
+## 6. Two guarantees the merge removes, and how they are restored
+
+| Lost | Why | Restored by |
+|---|---|---|
+| Retry + dead-letter between the two services | the HTTP boundary is gone | **Checkpoint**: the redacted payload is persisted after extraction, before analysis is dispatched — a crash cannot lose an event, because CI will not re-deliver the webhook |
+| Failed-pipeline visibility if analysis dies | analysis and ingest are now the same process | `pipeline_events` is written on the failed path **before** extraction starts, so the KPI denominator is always complete |
+
+---
+
+## 7. Requirement impact (working list for the next revision)
 
 **Delete** — obsoleted by the merge + notification-only Slack:
 
@@ -238,17 +372,21 @@ atomic across SQLite, Chroma, and Redis.
 | New requirement |
 |---|
 | All webhook, API, dashboard, and operational routes served by one FastAPI app on one configurable port |
+| The system MUST ingest **success and failed** pipeline events; success events record statistics only |
+| The KPI dashboard MUST report success vs failed counts and the percentage of failed pipelines that received a solution, by source, product, and stage |
+| SQLite MUST hold metadata and statistics in one database, joined on `fix_id` / `fingerprint` / `pipeline_id` |
 | The system MUST NOT expose Slack event/action endpoints; Slack integration is outbound-only |
 | All fix state transitions (approve/edit/deprecate) go through the KB REST API / Dashboard, recording actor + timestamp in `fix_revisions` |
 | Every Slack notification MUST carry a deep link to the corresponding Dashboard record |
-| The extracted, redacted payload MUST be persisted before analysis is dispatched (crash-safe checkpoint — CI will not re-deliver) |
+| The extracted, redacted payload MUST be persisted before analysis is dispatched (crash-safe checkpoint) |
 | The Dashboard/KB API is the sole KB write path and MUST authenticate and authorize SME actions |
 
 **Open decisions:**
 
 1. **Feedback buttons (BFA-AGENT-1120)** — thumbs up/down needs an
-   inbound Slack callback. Move to the UI, keep one narrow Slack
-   callback for feedback only, or drop from MVP-2?
+   inbound Slack callback, which contradicts notification-only. Move to
+   the UI, keep one narrow Slack callback for feedback only, or drop
+   from MVP-2?
 2. **`/api/analyze` external exposure** — if external CI agents still
    call it directly, the JWT requirement survives; if it becomes
    internal-only, JWT and `jwt_dmz_issuer.py` are fully retired.
