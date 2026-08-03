@@ -14,17 +14,17 @@ flowchart LR
         O1 --> O2 --> O3
     end
 
-    subgraph NEW["MVP-2 — notification + feedback in Slack, approval in the UI"]
+    subgraph NEW["MVP-2 — Slack may report and correct; only the service writes"]
         direction LR
         N0(["<b>DevOps SME</b>"]):::human
-        N1["<b>Slack notification</b><br/>'fix pending review'<br/>+ deep link + 👍/👎"]:::notify
-        NF["<b>/slack/feedback</b><br/>signature-verified<br/>records feedback only"]:::svc
+        N1["<b>Slack notification</b> (outside corp)<br/>+ deep link · 👍/👎 · ✏ correct"]:::notify
+        NF["<b>Slack connector</b><br/>service-opened outbound channel<br/>feedback + correction only"]:::svc
         N2["<b>Dashboard UI</b><br/>Needs-Attention queue"]:::ui
         N3["<b>KB REST API</b><br/>PUT edit · DELETE deprecate<br/>POST approve"]:::svc
         N4[("<b>bfa_kb.db</b> fixes + fix_revisions<br/><b>Chroma</b> vector<br/><b>Redis</b> cache")]:::store
         N1 -.->|"click deep link"| N0
-        N1 ==>|"👍/👎 only"| NF
-        NF ==>|"feedback counter"| N4
+        N1 ==>|"feedback / correction"| NF
+        NF ==>|"same KB API, same audit"| N3
         N0 ==>|"review"| N2
         N2 ==>|"approve / edit / deprecate"| N3
         N3 ==>|"single writer, one process<br/>atomic across all stores"| N4

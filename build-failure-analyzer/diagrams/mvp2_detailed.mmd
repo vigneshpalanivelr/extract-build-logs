@@ -74,6 +74,8 @@ flowchart TB
           UIK --> STAPI
         end
 
+        CONN["<b>Slack connector</b><br/>opens the connection <b>outbound</b> to Slack —<br/>no inbound firewall path required<br/>authenticates channel · auto-reconnect<br/>writes only via the KB API, in-process"]:::ing
+
         ROUTE -->|"<b>FAILED</b>"| F1
         F4 --> HAND --> A1
       end
@@ -94,11 +96,11 @@ flowchart TB
 
     BED["<b>AWS Bedrock — Claude</b><br/>chat.sandvine.com/apis"]:::outside
 
-    subgraph SLK["SLACK CLOUD — <b>NOTIFICATION ONLY</b> · outbound one-way · no buttons · no callbacks · no DB access"]
+    subgraph SLK["SLACK CLOUD&nbsp;&nbsp;—&nbsp;&nbsp;<b>outside the corporate network</b><br/>notifications outbound&nbsp;·&nbsp;interaction events arrive on the service-opened channel<br/><b>permitted from Slack: feedback + solution correction only</b>&nbsp;·&nbsp;no approve / deprecate / delete&nbsp;·&nbsp;no direct DB access"]
       direction LR
       CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage (threaded)<br/>+ <b>deep link to Dashboard</b>"]:::notify
       DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b><br/>+ 👍/👎 feedback buttons"]:::notify
-      FBK["<b>/slack/feedback</b> (single inbound endpoint)<br/>Slack request-signature verified<br/>records feedback ONLY — cannot create,<br/>edit, approve or delete a fix"]:::notify
+      FBK["<b>Interaction events</b><br/>👍 / 👎 feedback&nbsp;·&nbsp;✏ correct solution<br/><i>Slack accepts NO approve / deprecate / delete</i>"]:::notify
       DEV["<b>DevOps channel</b><br/>infra-class errors · 'unable to analyze'<br/>silent-failure alerts"]:::notify
     end
 
@@ -120,7 +122,7 @@ flowchart TB
     A4 ==>|"record decision"| STA
     A4 -.->|"undelivered"| DLQ
     A4 --> MAIL
-    A4 ==>|"notify"| CH
+    A4 ==>|"notify (outbound HTTPS)"| CH
     A4 ==>|"notify"| DM
     A4 ==>|"notify"| DEV
 
@@ -130,8 +132,11 @@ flowchart TB
     STAPI -->|"<b>JOIN metadata + statistics</b>"| STA
     STAPI --> MTA
 
-    DM ==>|"👍/👎 click"| FBK
-    FBK ==>|"record feedback<br/>(no state change)"| STA
+    DM ==>|"click"| FBK
+    FBK ==>|"events travel down the<br/>service-opened connection"| CONN
+    CONN ==>|"feedback"| STA
+    CONN ==>|"correction → fixes + fix_revisions"| MTA
+    CONN -.->|"invalidate cached fix"| RED
     CH -.->|"deep link"| SME
     DM -.->|"deep link"| SME
     SME ==>|"<b>approve · edit · deprecate</b> — ALL KB writes"| UIB

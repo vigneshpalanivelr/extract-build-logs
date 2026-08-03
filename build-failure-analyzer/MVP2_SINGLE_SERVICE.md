@@ -116,6 +116,8 @@ flowchart TB
           UIK --> STAPI
         end
 
+        CONN["<b>Slack connector</b><br/>opens the connection <b>outbound</b> to Slack —<br/>no inbound firewall path required<br/>authenticates channel · auto-reconnect<br/>writes only via the KB API, in-process"]:::ing
+
         ROUTE -->|"<b>FAILED</b>"| F1
         F4 --> HAND --> A1
       end
@@ -136,11 +138,11 @@ flowchart TB
 
     BED["<b>AWS Bedrock — Claude</b><br/>chat.sandvine.com/apis"]:::outside
 
-    subgraph SLK["SLACK CLOUD — <b>NOTIFICATION ONLY</b> · outbound one-way · no buttons · no callbacks · no DB access"]
+    subgraph SLK["SLACK CLOUD&nbsp;&nbsp;—&nbsp;&nbsp;<b>outside the corporate network</b><br/>notifications outbound&nbsp;·&nbsp;interaction events arrive on the service-opened channel<br/><b>permitted from Slack: feedback + solution correction only</b>&nbsp;·&nbsp;no approve / deprecate / delete&nbsp;·&nbsp;no direct DB access"]
       direction LR
       CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage (threaded)<br/>+ <b>deep link to Dashboard</b>"]:::notify
       DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b><br/>+ 👍/👎 feedback buttons"]:::notify
-      FBK["<b>/slack/feedback</b> (single inbound endpoint)<br/>Slack request-signature verified<br/>records feedback ONLY — cannot create,<br/>edit, approve or delete a fix"]:::notify
+      FBK["<b>Interaction events</b><br/>👍 / 👎 feedback&nbsp;·&nbsp;✏ correct solution<br/><i>Slack accepts NO approve / deprecate / delete</i>"]:::notify
       DEV["<b>DevOps channel</b><br/>infra-class errors · 'unable to analyze'<br/>silent-failure alerts"]:::notify
     end
 
@@ -162,7 +164,7 @@ flowchart TB
     A4 ==>|"record decision"| STA
     A4 -.->|"undelivered"| DLQ
     A4 --> MAIL
-    A4 ==>|"notify"| CH
+    A4 ==>|"notify (outbound HTTPS)"| CH
     A4 ==>|"notify"| DM
     A4 ==>|"notify"| DEV
 
@@ -172,8 +174,11 @@ flowchart TB
     STAPI -->|"<b>JOIN metadata + statistics</b>"| STA
     STAPI --> MTA
 
-    DM ==>|"👍/👎 click"| FBK
-    FBK ==>|"record feedback<br/>(no state change)"| STA
+    DM ==>|"click"| FBK
+    FBK ==>|"events travel down the<br/>service-opened connection"| CONN
+    CONN ==>|"feedback"| STA
+    CONN ==>|"correction → fixes + fix_revisions"| MTA
+    CONN -.->|"invalidate cached fix"| RED
     CH -.->|"deep link"| SME
     DM -.->|"deep link"| SME
     SME ==>|"<b>approve · edit · deprecate</b> — ALL KB writes"| UIB
@@ -189,6 +194,7 @@ flowchart TB
     style ST3 fill:#fff7e6,stroke:#d79b00,stroke-width:3px
     style SLK fill:#f8cecc,stroke:#b85450,stroke-width:3px,stroke-dasharray:8 4
 ```
+
 
 
 ---
@@ -261,15 +267,21 @@ sequenceDiagram
         OR->>SQ: analyze_decisions(source, similarity, latency, cost, fingerprint)
     end
 
-    Note over SL: Slack: outbound notifications + ONE inbound callback (feedback only)
-    SL->>OR: 👍/👎 feedback callback (Slack signature verified)
-    OR->>SQ: feedback_events(fix_id, verdict) — no state change permitted
+    Note over SL,UI: Slack is outside the corporate network. The service opens the<br/>interaction channel outbound, so no inbound firewall path is needed.
+    OR->>SL: open interaction channel (outbound, authenticated)
+    SL->>OR: 👍/👎 feedback
+    OR->>SQ: feedback_events(fix_id, verdict)
+    SL->>OR: corrected solution text (SME only)
+    OR->>SQ: fixes.fix_text + fix_revisions (actor recorded)
+    OR->>RD: invalidate cached fix
+    Note over OR,CH: correction does NOT touch the vector — the embedding<br/>derives from the error fingerprint, not the solution text
     SL-->>UI: SME clicks deep link
     UI->>SQ: approve / edit / deprecate (KB REST API → fixes + fix_revisions)
     UI->>CH: vector upsert / delete
     UI->>RD: cache invalidate
     UI->>SQ: KPI view = JOIN pipeline_events + analyze_decisions<br/>"of N failed, M received a solution"
 ```
+
 
 
 ---
@@ -293,17 +305,17 @@ flowchart LR
         O1 --> O2 --> O3
     end
 
-    subgraph NEW["MVP-2 — notification + feedback in Slack, approval in the UI"]
+    subgraph NEW["MVP-2 — Slack may report and correct; only the service writes"]
         direction LR
         N0(["<b>DevOps SME</b>"]):::human
-        N1["<b>Slack notification</b><br/>'fix pending review'<br/>+ deep link + 👍/👎"]:::notify
-        NF["<b>/slack/feedback</b><br/>signature-verified<br/>records feedback only"]:::svc
+        N1["<b>Slack notification</b> (outside corp)<br/>+ deep link · 👍/👎 · ✏ correct"]:::notify
+        NF["<b>Slack connector</b><br/>service-opened outbound channel<br/>feedback + correction only"]:::svc
         N2["<b>Dashboard UI</b><br/>Needs-Attention queue"]:::ui
         N3["<b>KB REST API</b><br/>PUT edit · DELETE deprecate<br/>POST approve"]:::svc
         N4[("<b>bfa_kb.db</b> fixes + fix_revisions<br/><b>Chroma</b> vector<br/><b>Redis</b> cache")]:::store
         N1 -.->|"click deep link"| N0
-        N1 ==>|"👍/👎 only"| NF
-        NF ==>|"feedback counter"| N4
+        N1 ==>|"feedback / correction"| NF
+        NF ==>|"same KB API, same audit"| N3
         N0 ==>|"review"| N2
         N2 ==>|"approve / edit / deprecate"| N3
         N3 ==>|"single writer, one process<br/>atomic across all stores"| N4
@@ -313,6 +325,7 @@ flowchart LR
     style OLD fill:#fafafa,stroke:#bbb,stroke-width:2px,stroke-dasharray:8 4
     style NEW fill:#eef7ee,stroke:#2d6a2d,stroke-width:3px
 ```
+
 
 
 Slack notifies with a deep link; the SME reviews and acts in the
@@ -395,10 +408,21 @@ unable), per product and per stage.
 
 **Decisions taken:**
 
-1. **Feedback** — Slack keeps 👍/👎 via **one narrow inbound callback**
-   (`/slack/feedback`), verified by Slack request signature and
-   permitted to record feedback only. Approve, edit, and discard are
-   not accepted through Slack.
+1. **Slack is outside the corporate network**, so the service **opens
+   the interaction channel outbound** — no inbound firewall path is
+   required. (A signature-verified request URL remains permissible
+   where corporate policy demands it.) Slack may **record feedback and
+   submit a solution correction**; it may not approve, deprecate, or
+   delete. Slack never writes to a store — it submits an action and
+   the single service process performs the write, so the single-writer
+   rule that fixed P6 is untouched.
+
+   Correcting a solution does **not** touch the vector store: the
+   embedding derives from the error fingerprint, not the solution
+   text. A correction is a SQLite write (`fixes` + `fix_revisions`)
+   plus a cache invalidation. Corrections raised from Slack and from
+   the dashboard converge on the same API, authorization check, and
+   revision history.
 2. **External access / JWT** — no external application may submit work,
    and **no interface uses JWT**. Inbound access is limited to CI
    webhooks (shared-secret HMAC), the Slack feedback callback (Slack
