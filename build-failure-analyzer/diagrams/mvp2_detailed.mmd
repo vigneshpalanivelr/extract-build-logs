@@ -46,10 +46,10 @@ flowchart TB
           direction LR
           A1["<b>A1 SUMMARISER</b><br/>(no LLM)<br/>normalize → fingerprint<br/>strip Line-N, timestamps,<br/>SHA/UUID → sha256(fp)"]:::agent
           DED["<b>Dedup</b><br/>by fingerprint<br/>N stages → 1 analysis"]:::agent
-          C1{"<b>Redis</b><br/>hit?"}:::dec
+          C1{"<b>Fix cache</b><br/>fix:&lt;fp&gt;<br/>sme or ai<br/>hit?"}:::dec
           V1["<b>Vector lookup</b><br/>Chroma cosine ≥0.90<br/>top-k 10 + SQLite meta"]:::agent
           C2{"<b>candidates?</b>"}:::dec
-          A2["<b>A2 DEVIATION</b> (LLM)<br/>exact_match /<br/>applicable_with_adjustments /<br/>partial / no_match<br/>+ confidence · 7d cache"]:::agent
+          A2["<b>A2 DEVIATION</b> (LLM)<br/>exact_match /<br/>applicable_with_adjustments /<br/>partial / no_match<br/>+ confidence · 30d verdict cache"]:::agent
           A3["<b>A3 SYNTHESIZER</b> (LLM)<br/>fresh fix, strict JSON<br/>fail → 'unable to analyze'<br/>+ DevOps alert"]:::agent
           A4["<b>A4 REPORTER</b> (no LLM)<br/>1 dangerous-fix guardrail<br/>2 infra vs code routing<br/>3 team routing (routing.json)<br/>4 one msg per stage + thread<br/>5 recurrence counter + provenance"]:::agent
           A1 --> DED --> C1
@@ -82,7 +82,7 @@ flowchart TB
 
       subgraph ST3["STORES — 3 stores · single writer · one machine"]
         direction LR
-        RED[("<b>1 · REDIS</b> — cache, all TTLed<br/>sme:fix:&lt;fp&gt; 30d · ai:fix:&lt;fp&gt; 24h<br/>agent:deviation 7d · agent:synth 7d<br/>msg:canonical · error_map:&lt;fp&gt;")]:::store
+        RED[("<b>1 · REDIS</b> — cache, all TTLed<br/><b>fix:&lt;fp&gt;</b> 30d — merged sme + ai<br/><b>verdict:&lt;kb_version&gt;:&lt;fp&gt;:&lt;ctx&gt;</b> 30d<br/>kb_version counter · run_dedup · thread_map")]:::store
         CHR[("<b>2 · CHROMA</b> — vectors only<br/>id = fix-sha256(fingerprint)<br/>embedding(fingerprint) · cosine space<br/>meta: embedding_model + embedding_dim")]:::store
         MTA["<b>3 · SQLITE bfa.db — METADATA</b><br/>(system of record)<br/><b>fixes</b>: id · fingerprint · fix_text · repo · branch<br/>product_team · error_pattern · error_class<br/>source · status · approver · hits · jira<br/><b>fix_revisions</b>: who · when · old/new text"]:::tbl
         STA["<b>3 · SQLITE bfa.db — STATISTICS</b><br/><b>pipeline_events</b>: status (success/failed) · user<br/>commit · branch · product · per-stage E.time · total<br/><b>analyze_decisions</b>: fingerprint · source · similarity<br/>latency · cost · zero_match<br/><b>feedback_events</b>: fix_id · verdict"]:::tbl

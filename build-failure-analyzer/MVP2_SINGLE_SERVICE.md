@@ -5,10 +5,10 @@ Decision record + diagrams for merging `extract-build-logs` and
 **notifications plus a single feedback callback**, and all SME state
 changes moved to the Dashboard UI.
 
-Companion to `HYBRID_PROPOSAL.md` (scope) and `LLD.md` (design detail).
-Where this document and the LLD disagree on service topology, **this
-document wins** — the LLD predates the merge decision and is updated in
-the next revision.
+Companion to `HYBRID_PROPOSAL.md` (scope). The full design detail now
+lives in **`BFA_MVP2_SYSTEM_DESIGN.md`**, which absorbed the standalone
+`LLD.md`; this file records the decision and its diagrams, and the
+system design document is authoritative for implementation detail.
 
 Rendered SVGs live in `diagrams/` (`mvp2_detailed.svg`,
 `mvp2_lifecycle.svg`, `mvp2_sme.svg`); the `.mmd` sources beside them
