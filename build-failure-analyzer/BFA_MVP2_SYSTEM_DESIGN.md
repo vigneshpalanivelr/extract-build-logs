@@ -21,7 +21,7 @@
    - 4.1 SQLite `bfa_kb.db` · 4.2 SQLite `bfa_stats.db` · 4.3 Chroma · 4.4 Redis · 4.5 Relationships
    - **4A. Database Access by Flow Phase** · **4B. Per-Store Access Matrix**
 5. [API Specifications](#5-api-specifications)
-6. [Security Design](#6-security-design) — **6.1 Webhook Authentication (shared-secret token)**
+6. [Security Design](#6-security-design) — **6.1 Webhook Ingestion (no authentication — network isolation)**
 7. [Resilience and Operations](#7-resilience-and-operations)
 8. [Logging and Observability](#8-logging-and-observability)
 9. [Test Architecture](#9-test-architecture) — including the Replay Harness
@@ -57,8 +57,6 @@ revision to remove jargon.
 
 | Term | Plain meaning | Renamed from |
 |---|---|---|
-| **Shared secret** | A password both GitLab/Jenkins and BFA know. The sender puts it in a header; BFA compares it with its own copy and rejects the request if they differ. See §6.1. | — |
-| **Signature valid / invalid** | Shorthand for "the token in the header matched / did not match". GitLab sends the plain secret in `X-Gitlab-Token`, not a cryptographic signature, so "**token matched**" is the accurate phrase and is used from here on. | "signature valid" |
 | **Generate a `request_id`** | Create one new UUID for this webhook event, before anything else happens, and attach it to every log line, database row, and file that this event produces. | "mint" |
 | **Filter events** | Decide whether this webhook is worth processing at all — is it a *finished* pipeline, did it *fail*, is the project in scope, has it already been handled. Non-qualifying events stop here. | — |
 | **Build the envelope** | Create one `AnalysisEnvelope` object (§1.6) holding everything known about this error, and pass that single object down the chain, so no later step has to re-derive context. | — |
@@ -81,7 +79,7 @@ exists in some form, and the agent layer does not exist at all.
 
 | Node | Component | What it does, in plain terms | Exists today? | Evidence / gap |
 |---|---|---|---|---|
-| N1 | Webhook Listener | Checks the shared secret, creates one `request_id` for the event, and drops events that are not finished, failed, in-scope pipelines | **Partial** | `validate_webhook_secret` (`webhook_listener.py:255`), constant-time compare (`:276`), Jenkins token (`:798`). A UUID is created (`:522`, `:772`) but is **8 characters and never written to the database** |
+| N1 | Webhook Listener | Creates one `request_id` for the event and drops events that are not finished, failed, in-scope pipelines | **Partial** | A UUID is created (`webhook_listener.py:522`, `:772`) but is **8 characters and never written to the database**. Secret validation exists in code today (`:255`, `:276`, `:798`) but is **removed in MVP-2** — see §6.1 |
 | N2 | Pipeline Extractor | Parses the webhook into a usable structure and decides whether to continue | **Yes** | `should_process_pipeline` (`pipeline_extractor.py:207`) |
 | N3 | Log Fetcher | Downloads the job logs from GitLab or Jenkins | **Yes** | `fetch_job_log` / `fetch_job_log_tail` / `fetch_pipeline_jobs` (`log_fetcher.py:59, 111, 253`) |
 | N4 | Secret Redactor *(low priority)* | Masks tokens and passwords before the text is stored or sent | **No** | No `redactor.py`. `logging_config.py:37` masks the service's own **log output** only — the analysed text is never filtered |
@@ -118,8 +116,7 @@ written when the measurement actually exists.
 
 | # | Step | Condition | Action | Stats written | Exists today? | Next |
 |---|---|---|---|---|---|---|
-| 1 | Webhook received | token matched | create `request_id`; reply **202 Accepted** | — | Partial — UUID exists but is not persisted | 2 |
-| 1a | Webhook received | **token did not match** | reject the request; record the rejection; fetch nothing | rejection counter | Yes — `webhook_listener.py:276` | end |
+| 1 | Webhook received | — | create `request_id`; reply **202 Accepted**. No authentication check — the endpoint is reachable only from the corporate network (§6.1) | — | Partial — UUID exists but is not persisted | 2 |
 | 2 | Status routing | pipeline **succeeded** | record the event only — no log download, no embedding, no LLM | **`pipeline_events` INSERT** | No — only failures are processed today | end |
 | 3 | Status routing | pipeline **failed** | record the event, then start the background task | **`pipeline_events` INSERT** | Partial — failures processed, but not recorded as stats rows | 4 |
 | 4 | Fetch logs | — | download the job logs | — | Yes | 5 |
@@ -288,7 +285,7 @@ flowchart TD
 
 | Boundary | Direction | Authentication | Notes |
 |---|---|---|---|
-| GitLab / Jenkins → BFA | inbound | **shared-secret token**, constant-time compared (see §6.1) | only untrusted inbound content |
+| GitLab / Jenkins → BFA | inbound | **none** — network isolation only (§6.1) | reachable only from the corporate network |
 | BFA → GitLab / Jenkins API | outbound | CI token | log retrieval |
 | BFA → Ollama, Chroma | local | none — loopback | single writer for Chroma |
 | BFA → AWS Bedrock | outbound | egress path | called by **A2 and A3** |
@@ -299,131 +296,124 @@ flowchart TD
 
 ### 1.6 Analysis Envelope
 
-The Analysis Envelope is the single context struct created by Agent A1 (N6) and carried through every downstream node. It solves the context-loss problem: without it, each node only receives the subset of fields passed in the immediate function call, and context accumulated at N6 is silently dropped. Every node from N7 through N12 reads from or writes to this envelope.
+One object, created at A1, passed down the chain by reference. It exists because without it
+each function receives only what its immediate caller chose to pass, so context built early
+is silently lost later.
+
+**The rule: each field is written by exactly one node, then read-only.** That is what makes
+the flow debuggable — if a value is wrong, only one node could have written it.
+
+| # | Field | Type | What it holds | Written by | Read by |
+|---|---|---|---|---|---|
+| 1 | `request_id` | `str` | The one identifier for this webhook event — a UUID created before any other work. Appears on every log line, database row, and dead-letter file. | **N1** | everything downstream; it is also the `pipeline_events` primary key |
+| 2 | `pipeline_info` | `dict` | Everything the webhook told us: repo, project id, branch, commit, pipeline id, `job_names`, triggering user and email, stage list. | **N2** | A1 (classification, product, normalisation), A3 (prompt), A4 (routing and the DM) |
+| 3 | `error_text_clean` | `str` | The error text after normalisation — timestamps, repo and branch names, paths, and versions removed. **This is what gets embedded.** | **N6 · A1** | A2 (embedding), A3 (prompt) |
+| 4 | `fingerprint` | `str` | SHA-256 of `error_text_clean` — the error's identity. | **N6 · A1** | N7 dedup, N8 and N9 cache keys, Chroma row id, A4 |
+| 5 | `context_block` | `ContextBlock` | Three labels: `product_team`, `stage_type`, `error_category`. | **N6 · A1** | A2 (context scoring), A3 (prompt), A4 (routing), all telemetry |
+| 6 | `is_infra` | `bool` | True when the category is `infrastructure`. Decides whether the developer is contacted at all. | **N6 · A1** | A4 |
+| 7 | `fix_text` | `str \| None` | The remediation to deliver. Empty until something supplies it. | **N8**, **N9**, **A2**, or **A3** — whichever resolves first | A4 |
+| 8 | `fix_source` | `str` | Where `fix_text` came from: `sme_cache`, `ai_cache`, `match_cache`, `vector_db`, `llm_generated`, or `no_match`. The single most useful field in the KPI page. | same node that set `fix_text` | A4, telemetry |
+| 9 | `approved_by` | `str \| None` | The SME who approved this fix, when the answer came from an approved one. Drives the provenance line in the DM. | **N8** (from the cache value) | A4 |
+| 10 | `match_result` | `str \| None` | A2's judgement: `exact_match`, `applicable_with_adjustments`, `partial`, or `no_match`. | **N9** or **A2** | threshold gate, A4, telemetry |
+| 11 | `ranked_candidates` | `list \| None` | The scored candidate list from the vector search. **Cleared by A3** so that stale candidates cannot reach the disambiguation check on the LLM path. | **N9** or **A2**; cleared by **A3** | disambiguation check |
+| 12 | `top_candidate` | `dict \| None` | The highest-scoring candidate, kept separately for convenience. | **N9** or **A2** | threshold gate, A4 |
+| 13 | `slack_message_ts` | `str \| None` | Timestamp of the message A4 posted, so later stages of the same run reply in that thread. | **A4** | dedup thread replies |
+| 14 | `scenario_id` | `str \| None` | Replay only — the corpus scenario being run, so debug output can be filtered per scenario. `None` in production. | replay harness | logging |
 
 ```python
 @dataclass
-class AnalysisEnvelope:
-    # ── Set by N1 (Webhook Listener) — immutable for the event lifecycle ─────
-    request_id: str              # per-event UUID; appears on every log line
-                                 # for full trace reconstruction (BFA-LOG-1010)
-
-    # ── Set by N2 (Pipeline Extractor) ──────────────────────────────────────
-    pipeline_info: dict          # project_id, pipeline_id, ref, sha, repo,
-                                 # branch, commit_sha, triggered_by,
-                                 # triggered_by_email, stages,
-                                 # job_names: List[str]  ← job name list for
-                                 # A1 stage_type inference (one per failed job)
-
-    # ── Set by N6 (Agent A1) — immutable after this point ───────────────────
-    fingerprint: str             # SHA-256 of cleaned error text
-    error_text_clean: str        # timestamps/paths/trace IDs stripped
-    context_block: ContextBlock  # {product_team, stage_type, error_category}
-    is_infra: bool               # error_category == "infrastructure"
-    # NOTE: no separate request_id. `request_id` (above) IS the
-    # pipeline_events primary key — generated at N1 before any I/O, so it can
-    # never be None, and it correlates logs, stats, dead-letter and replay.
-
-    # ── Set by N8/N9/N9/N10/N11 (cache or agent) ──────────────────────────
-    fix_text: str | None         # None until a cache hit or A2/A3 fills it
-    fix_source: str              # sme_cache|ai_cache|match_cache|
-                                 # vector_db|llm_generated|no_match
-    match_result: str | None          # exact_match|applicable_with_adjustments|
-                                 # partial|no_match|None (before cache/A2)
-    approved_by: str | None      # Slack display name — set when fix_source is
-                                 # sme_cache (read from Redis sme:fix value)
-
-    # ── Set by N10 (A2) — None if no vector search was run ──────────────────
-    ranked_candidates: list | None   # [{fix_id, fix_text, combined_score,
-                                     #   vsim, context_score, context_labels}]
-                                     # CLEARED by A3 to prevent stale candidates
-                                     # from reaching N12c disambiguation gate
-    top_candidate: dict | None
-
-    # ── Set by N12 (A4) after delivery ──────────────────────────────────────
-    slack_message_ts: str | None # Slack message timestamp; written to Redis
-                                 # run_dedup after first delivery; used by
-                                 # THREADREPLY to post to correct thread
-
-    # ── Set by replay.py --mode test only; None in production ───────────────
-    scenario_id: str | None      # JSONL corpus scenario id (e.g. "r001")
-                                 # added to every log extra= during replay
-                                 # so debug file is greppable per scenario
-
-@dataclass
 class ContextBlock:
-    product_team: str    # set directly from pipeline_info.repo by A1;
-                         # ALL downstream references use product_team
-    stage_type: str      # build|test|package|deploy
-    error_category: str  # code|infrastructure|dependency|configuration
+    product_team: str      # from the repository namespace (§10.1.2)
+    stage_type: str        # build | test | package | deploy
+    error_category: str    # code | infrastructure | dependency | configuration
 ```
 
-**Field population order:**
-
-| Field | Value set | Populated by | Node |
-|---|---|---|---|
-| `request_id` | UUID generated once | Webhook Listener | N1 |
-| `pipeline_info` | webhook payload + `job_names` list | Pipeline Extractor | N2 |
-| `fingerprint`, `error_text_clean`, `context_block`, `is_infra` | computed | Agent A1 | N6 |
-| `fix_text`, `fix_source` (`sme_cache`\|`ai_cache` per stored `source`), `approved_by` | Redis GET `fix:<fp>` | Fix Cache Check | N8 |
-| `fix_text`, `fix_source="match_cache"`, `match_result`, `ranked_candidates`, `top_candidate` | Redis GET `match:<kb_version>:<fp>:<ctx_hash>` | Match Result Cache Check | N9 |
-| `fix_text`, `fix_source="vector_db"`, `match_result`, `ranked_candidates`, `top_candidate` | Chroma query + scoring | Agent A2 | N10 |
-| `ranked_candidates` | set to `None` (clears stale A2 candidates) | Agent A3 | N11 |
-| `fix_text`, `fix_source="llm_generated"` | LLM response | Agent A3 | N11 |
-| `slack_message_ts` | Slack API post result | Agent A4 | N12 |
-| `scenario_id` | JSONL corpus scenario id (None in production) | `replay.py --mode test` | Before pipeline runs |
-
----
+**Reading the table as a timeline.** Fields 1–2 exist before analysis starts. Fields 3–6 are
+filled by A1 and never change. Fields 7–12 are filled by whichever node resolves the
+request — and only one of them does, which is why a request costs one lookup path, not
+several. Field 13 is written after delivery. Field 14 is only ever set during a replay.
 
 ### 1.7 Agent State Graph
 
-The envelope and the state graph are different things and are easily conflated:
+The envelope (§1.6) is the **data**. This is the **control flow** — which node runs next,
+and why. Every row below is one possible move; the notes explain what actually happens and
+why the move exists.
 
-- the **Analysis Envelope** (§1.6) is the *data* — one struct created at A1, passed by
-  reference, each field written once by the node that owns it;
-- the **state graph** below is the *control flow* — which node runs next, and why.
-
-| From | Condition | To | Notes |
+| From | Condition | Goes to | What is happening, and why |
 |---|---|---|---|
-| A1 | always | Dedup (N7) | A1 cannot fail the event; on error it falls back to raw lines |
-| Dedup | fingerprint in flight for this run | **terminal** — thread reply | no second DM |
-| Dedup | not in flight | Fix cache (N8) | |
-| Fix cache | hit | A4 | no embedding, no vector query, no LLM |
-| Fix cache | miss | Match result cache (N9) | |
-| Match result cache | hit, match_result ≠ `no_match` | A4 | skips embed + query, reuses candidates |
-| Match result cache | hit, match_result = `no_match` | A3 | already known not to match |
-| Match result cache | miss | A2 (N10) | |
-| A2 | `combined_score ≥ 0.90` and match_result ≠ `no_match` | A4 | adopt candidate `fix_text` |
-| A2 | below threshold, or `no_match` | A3 (N11) | |
-| A2 | Chroma or Ollama unavailable | A3 | degraded path; health alert raised |
-| A2 | top-2 within `CONTEXT_DISAMBIG_BAND` | A4 → disambiguation hold | |
-| A3 | success | A4 | |
-| A3 | LLM failure after retries | **terminal** — "unable to analyze" + DevOps alert + dead-letter | never a silent drop |
-| A4 | disambiguation pending | **terminal until SME choice** | `disambig_pending:<fp>` holds the envelope |
-| A4 | delivered | **terminal** — phase-2 write | `pipeline_events` UPDATE + `delivery_records` INSERT |
+| **A1** | always | Dedup | A1 has no failure exit. It only classifies and normalises text, which cannot fail in a way worth stopping for — if normalisation misbehaves it falls back to the raw lines and carries on. Everything downstream depends on the fingerprint existing, so A1 must always produce one. |
+| **Dedup** | this error is already being analysed for this pipeline run | **stop** — reply in the existing thread | One broken dependency usually fails build, test, and package. Without this, that is three analyses, three LLM calls, and three messages for one problem. The second and third arrivals post a reply under the first message instead. |
+| **Dedup** | not already in progress | Fix cache | The normal path. |
+| **Fix cache** | hit | **A4** | We have solved this exact error before. Nothing else needs to run — no embedding, no vector search, no LLM. This is the cheapest outcome and, once the knowledge base is warm, the most common one. |
+| **Fix cache** | miss | Match result cache | No stored answer, so ask whether we have at least already *searched* for one. |
+| **Match cache** | hit, and it was not `no_match` | **A4** | We searched before and found something usable. The candidate list is restored from the cache, so the embedding call and vector query are skipped — but the routing decision still runs, because context may have changed. |
+| **Match cache** | hit, and it was `no_match` | **A3** | We searched before and found nothing. There is no point searching again, so go straight to generating a fresh fix. |
+| **Match cache** | miss | **A2** | Never searched for this error in this context. Do the full search. |
+| **A2** | `combined_score ≥ 0.90` **and** `match_result ≠ no_match` | **A4** | Both the numbers and A2's judgement agree that a stored fix applies. Serve it. Both halves are required — see §1.2. |
+| **A2** | score below threshold, or `no_match` | **A3** | Either nothing was similar enough, or something looked similar but A2 judged it inapplicable. Generate instead. |
+| **A2** | Chroma or the embedding service is unavailable | **A3** | A dependency outage must not stop the request. Search is skipped, the result is treated as `no_match`, a health alert is raised, and the LLM answers. Quality drops; availability does not. |
+| **A2** | top two candidates score almost identically | **A4** → held | The system cannot tell which of two fixes applies, so it shows both to an SME and pauses rather than guessing. *(Candidate for removal — see §13.19.)* |
+| **A3** | LLM returned a fix | **A4** | Normal generation path. |
+| **A3** | LLM failed after retries | **stop** — "unable to analyze" | The developer is told plainly that no answer could be produced, DevOps is alerted, and the event is written to the dead-letter directory so it can be replayed later. It is never silently dropped. |
+| **A4** | waiting for an SME to choose between two candidates | **stop** until chosen | Delivery is parked in `disambig_pending`; approving one candidate resumes it. |
+| **A4** | delivered | **stop** — completion write | The pipeline row is completed and a delivery record is written. This is the normal end of the flow. |
 
-**Properties that hold by construction**
+#### Five properties that hold by design
 
-| Property | Why it matters |
-|---|---|
-| The graph is a **DAG** — no edge returns to an earlier node | no loops, no repeated LLM spend on one event |
-| Every path ends at A4 or an explicit terminal | an event cannot be silently lost |
-| **A2 and A3 never both produce the answer** | A3 runs only when A2 declined; cost is bounded |
-| Every degradation edge points **forward** | a dependency outage downgrades quality, never availability |
-| A1 and A4 have no failure edge | they are deterministic and must always run |
-
----
+| Property | Plain meaning | Why it matters |
+|---|---|---|
+| **The flow only ever moves forward** | No step can send the work back to an earlier step. Follow any path and you always end up further along, never in a loop. | A single error can never be analysed twice, so it can never cost the LLM twice, and the system cannot get stuck circling between two steps. |
+| **Every path ends somewhere definite** | Each route finishes either at A4 (delivered) or at a named stop — thread reply, unable-to-analyze, or held for review. | No event can quietly vanish. If nothing was delivered, one of the named stops explains why. |
+| **A2 and A3 never both answer** | A3 runs only when A2 declined. They are alternatives, not a sequence. | The cost per error is bounded: at most one LLM generation call, never two. |
+| **Every fallback moves forward too** | When a dependency is down, the flow skips ahead to a simpler path — never backwards to retry. | An outage lowers answer quality but never takes the service down or causes a retry storm. |
+| **A1 and A4 cannot fail the request** | They are deterministic bookkeeping steps with fallbacks built in. | Something always creates the fingerprint, and something always tells the developer what happened. |
 
 ## 2. Configuration Files
 
 One JSON file is validated at startup. The service refuses to start if it is missing or malformed (BFA-ARCH-1110). Two env vars control Slack notification targets: `DEVOPS_SLACK_CHANNEL` and `SME_SLACK_CHANNEL` (validated at startup — service refuses to start if absent).
 
+### 2.1 `.env` — environment configuration
+
+The service reads its runtime settings from environment variables. A subset is
+**mandatory**: if any of these is missing or unparseable, the service **refuses to start**
+and prints which variable is at fault, rather than starting and failing later on the first
+webhook (BFA-ARCH-1110).
+
+A representative subset — not the full list:
+
+| Variable | Example | Why the service cannot start without it |
+|---|---|---|
+| `GITLAB_URL` | `https://gitlab.internal` | job logs cannot be fetched |
+| `GITLAB_TOKEN` | `glpat-…` | the log API rejects unauthenticated reads |
+| `JENKINS_URL` | `https://jenkins.internal` | required only if Jenkins ingestion is enabled |
+| `CHROMA_HOST` / `CHROMA_PORT` | `localhost` / `8000` | no vector search without it |
+| `OLLAMA_URL` | `http://localhost:11434` | no embeddings, so no retrieval |
+| `LLM_ENDPOINT` | `https://chat.sandvine.com/apis` | A3 cannot generate fixes |
+| `REDIS_HOST` / `REDIS_PORT` | `localhost` / `6379` | caching is unavailable |
+| `KB_DB_PATH` / `STATS_DB_PATH` | `./data/bfa_kb.db` | nowhere to write the system of record |
+| `SLACK_BOT_TOKEN` | `xoxb-…` | results cannot be delivered |
+| `DEVOPS_SLACK_CHANNEL` | `#ci-devops` | infrastructure errors have nowhere to go |
+| `ERROR_PATTERNS_CONFIG` | `config/error_patterns.json` | no error detection at all |
+| `ROUTING_CONFIG` | `config/routing.json` | team routing cannot resolve |
+
+Optional variables carry defaults and do not block startup — for example
+`VECTOR_TOP_K` (10), `SIMILARITY_THRESHOLD` (0.90), `VECTOR_WEIGHT` (0.70),
+`CONTEXT_WEIGHT` (0.30), `LOG_LEVEL` (`INFO`).
+
+**Rules.** Secrets appear only in the environment, never in source or in the repository. A
+`.env.example` lists every variable with a safe placeholder value, and startup validation is
+driven from that same list so the two cannot drift apart.
+
+---
+
 ### `error_patterns.json`
 
-**Single source of truth for the classification vocabulary.** The file declares the allowed
-`categories` and `sub_categories` up front, and every pattern must use a value from those
-lists. Startup validation (§1.5, BFA-ARCH-1110) rejects any pattern referencing an
-undeclared value, so the vocabulary cannot drift as patterns are added.
+**This file is the only place the category names are defined.** It lists the allowed
+`categories` and `sub_categories` at the top, and every pattern must use one of those
+listed values. If someone adds a pattern with a category that is not in the list, the
+service refuses to start and names the offending pattern — so the set of category names
+stays fixed and consistent instead of growing informally with typos and near-duplicates
+like `infra`, `infrastructure`, and `Infrastructure` all meaning the same thing.
 
 This replaces the hardcoded `ERROR_PATTERNS` list in `log_error_extractor.py`, which today
 is 17 plain lowercase substrings with no structure at all.
@@ -446,18 +436,24 @@ is 17 plain lowercase substrings with no structure at all.
 }
 ```
 
-| Field | Purpose | Flows to |
+| Field | Description | Used In |
 |---|---|---|
-| `pattern` | substring or regex matched against each log line | — |
-| `category` | coarse classification; drives infrastructure routing (B-11) | `error_category` in the envelope, `fixes`, `request_telemetry`, Chroma metadata |
-| `sub_category` | finer grouping; used as a **pre-filter before vector search** to narrow candidates and improve A2 precision | `sub_category` in `fixes`, `request_telemetry`, Chroma metadata |
-| `label` | stable human-readable tag | `labels` JSON array in telemetry and the KB |
-| `enabled` | allows disabling a pattern without deleting it | — |
+| `pattern` | The text to look for in each log line. If a line contains it, this rule matched. | The extractor only — it is not stored anywhere afterwards. |
+| `category` | **The broad type of problem** — one of `code`, `infrastructure`, `dependency`, `configuration`. This is the field that decides whether the developer or the DevOps channel is told (B-11). | Stored on the fix record, on every telemetry row, and in the vector store metadata. Shown as a filter on the KPI and Knowledge Base pages. |
+| `sub_category` | **The specific tool or area** — `npm`, `docker`, `dns` and so on. A finer label than `category`, used for grouping in reports. | Stored on the fix record and on telemetry rows. Shown as a second-level filter in the dashboard. |
+| `label` | A short fixed name for this exact rule, e.g. `npm_error`. Unlike `category` it never changes meaning, so it is safe to count over time. | Collected into the `labels` list on telemetry rows; used when counting "how often did this specific rule fire". |
+| `enabled` | Set to `false` to switch a rule off without deleting it. | The extractor skips disabled rules at load time. |
 
-**Discovering the vocabulary at runtime.** `GET /api/meta/categories` returns the declared
-`categories` and `sub_categories` together with observed counts from `request_telemetry`, so
-the dashboard filter drop-downs are populated from the config rather than hand-maintained,
-and unused or over-used values are visible.
+**Reading the "Used In" column.** It answers "once this rule matches a log line, where does
+this field end up?" A value set here is copied onto the analysis envelope, then written to
+the database rows created for that error, and finally becomes a filter option in the
+dashboard. So a category chosen in this file is the same string an SME later filters by.
+
+**How to see the current list of categories without opening the file.** Call
+`GET /api/meta/categories`. It returns the category and sub-category names from this file,
+each with a count of how often it actually occurred in the last 30 days. Two practical uses:
+the dashboard's filter drop-downs are built from this response instead of a hand-typed list,
+and a name with a count of zero is dead — it is declared but nothing ever matches it.
 
 **Validation rules enforced at startup**
 
@@ -475,7 +471,7 @@ and unused or over-used values are visible.
 | Node | ID | Inputs | Processing | Outputs | Next Node | Error Handling |
 |---|---|---|---|---|---|---|
 | **Startup Validator** | N0 | `error_patterns.json`, env vars (`VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY`, `JWT_PRIVATE_KEY_PATH`, `JWT_PUBLIC_KEY_PATH` for Slack service) | Load `error_patterns.json`; assert weight constraints; assert `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY` set; validate JWT key paths for Slack service only | Pass / Fail | N1 on pass; `sys.exit(1)` on fail | Write specific error to stderr naming the exact bad field |
-| **Webhook Listener** | N1 | HTTP POST `/webhook` or `/webhook/jenkins` | Verify secret (`hmac.compare_digest` for GitLab token header; Bearer for Jenkins); check event type; check pipeline status | Validated payload dict | N2 | HTTP 403 on bad secret; HTTP 200 "ignored" on non-failed status |
+| **Webhook Listener** | N1 | HTTP POST `/webhook` or `/webhook/jenkins` | Generate `request_id`; check event type; check pipeline status. **No authentication** — network isolation only (§6.1) | `request_id` + validated payload dict | N2 | HTTP 200 "ignored" on non-failed or out-of-scope status |
 | **Pipeline Extractor** | N2 | Webhook payload dict | Call `PipelineExtractor.extract_pipeline_info()`; call `should_process_pipeline()` (project allow/block list, status filter); apply `external` stage guard | `pipeline_info` dict added to Envelope; fire background task | N3 (background) | Return `"skipped"` with log reason if filtered |
 | **Log Fetcher** | N3 | `pipeline_info` (from Envelope): `project_id`, `pipeline_id` | Call `fetch_pipeline_jobs(project_id, pipeline_id)` → list of jobs; for each failed job call `fetch_job_log_tail(project_id, job_id)`; apply `should_save_job_log()` filter; collect `job_names` list | `all_logs: List[{job_id, job_name, details, log_text}]` (one entry per failed job); add `job_names` list to `pipeline_info` in Envelope | N4 (iterates over list) | Retry up to `RETRY_ATTEMPTS` with exponential backoff; on exhaustion → dead-letter + DevOps alert |
 | **Secret Redactor** | N4 | `all_logs` list (from N3); iterates over each entry | For each entry: regex-strip `PRIVATE-TOKEN:`, `password=`, credential URLs, JWT strings, API keys from `log_text` | `all_logs_redacted: List[{job_id, job_name, details, log_text_redacted}]` — same structure, `log_text` replaced | N5 | Log warning per entry with line count redacted; never raise — redaction failure replaces `log_text` with empty string, not drop |
@@ -517,6 +513,32 @@ concurrent reads.
 
 **Retrieval rule:** A2 matches `status = 'active'` only. An unapproved fix is never served
 as though it were curated.
+
+**`fixes` — column reference.** The DDL follows; this table explains each column in words.
+
+| Column | Type | Meaning | Set by |
+|---|---|---|---|
+| `id` | INTEGER PK | Row number. Referenced by `fix_revisions` and by Chroma metadata. | database |
+| `fingerprint` | TEXT unique | The error's identity — SHA-256 of the normalised text (§10.1.1). One row per distinct error. | A1 |
+| `error_text_clean` | TEXT | The normalised error text. This is what gets embedded — **not** the fix text. | A1 |
+| `fix_text` | TEXT | The remediation shown to the developer. Changes when an SME edits it. | A3 or SME |
+| `revision` | INTEGER | Increments on every edit. Pairs with `fix_revisions` for the full history. | KB API |
+| `status` | TEXT | `pending` → `active` → `deprecated`/`discarded`. **Only `active` is ever served.** | KB API |
+| `product_team` | TEXT | Owning product, from the repository namespace (§10.1.2). Used for routing and for grouping every KPI. | A1 |
+| `stage_type` | TEXT | `build`, `test`, `package`, or `deploy` — inferred from the job name. | A1 |
+| `error_category` | TEXT | Broad problem type from `error_patterns.json`. Decides developer-vs-DevOps routing. | A1 |
+| `sub_category` | TEXT | Specific tool or area, e.g. `npm`, `docker`. Reporting only. | A1 |
+| `labels` | TEXT (JSON) | Which specific pattern rules matched. Safe to count over time. | A1 |
+| `source_ci` | TEXT | `gitlab` or `jenkins`. | N2 |
+| `source_repo` | TEXT | The repository this fix was first seen in — shown as provenance in the DM. | A1 |
+| `approved_by` | TEXT | Who approved it. Empty while `status='pending'`. | KB API |
+| `hit_count` | INTEGER | How many times this fix has been delivered. Drives the "served 12×" provenance line and pruning. | A4 |
+| `first_seen` | TEXT | When the error was **first analysed** — not when it was approved. | A1 |
+| `last_seen` | TEXT | Most recent delivery. Distinguishes live problems from stale ones. | A4 |
+| `fix_confidence` | REAL | Running average of `combined_score` across deliveries — how strongly this fix keeps matching. | A4 |
+| `sme_review_count` | INTEGER | Times sent back for review after negative feedback. A high value means a poor fix. | KB API |
+| `jira_key` | TEXT | Linked ticket, if one was raised from the dashboard. | KB API |
+| `created_at` / `updated_at` | TEXT | First write and last change. | database |
 
 ```sql
 PRAGMA journal_mode=WAL;
@@ -754,7 +776,21 @@ client.get_or_create_collection(
 )
 ```
 
-Similarity threshold: `0.90` (`combined_score`, not raw `vsim`).
+**Similarity threshold: `0.90`, applied to `combined_score` — not to raw vector similarity.**
+
+The distinction matters. `vsim` (raw vector similarity) measures only how alike the two
+error *texts* are. `combined_score` blends that with how well the *context* matches —
+product, stage, and category:
+
+```
+combined_score = 0.70 × vsim  +  0.30 × context_score
+```
+
+A candidate can look almost identical as text yet come from an unrelated product and stage,
+in which case its `combined_score` falls below 0.90 and it is not served. Thresholding on
+`vsim` alone would serve it. The full formula, the worked comparison (0.78 versus 0.98 for
+the same text in different contexts), and the tuning guidance are in **§1.2, "What
+`combined_score ≥ 0.90 and match_result ≠ no_match` means"**.
 
 **Rebuild utility:** If Chroma is corrupted or the HTTP server is replaced, `rebuild_chroma.py` reads all `active` rows from `bfa_kb.db`, re-embeds each `error_text_clean`, and upserts to the Chroma collection. `bfa_kb.db` is always authoritative.
 
@@ -762,32 +798,134 @@ Similarity threshold: `0.90` (`combined_score`, not raw `vsim`).
 
 ### 4.4 Redis Key Space
 
-Redis is a **cache only** — never a source of truth. Every key has an explicit expiry, and
-every key is derived from the fingerprint rather than from raw error text.
+Redis stores **temporary answers and working state**. Nothing here is permanent: every key
+expires, and losing all of Redis costs speed, never correctness — the system simply
+recomputes what it had cached.
 
-The five keys serve genuinely different purposes; the distinction that matters most is that
-`fix:<fp>` caches **an answer** while `match:...` caches **a computation**, which is why
-they cannot merge.
+Six keys exist. The clearest way to understand them is by what each one is *for*:
 
-| Key | What it is for | Value | TTL | Written by | Read by |
-|---|---|---|---|---|---|
-| `fix:<fingerprint>` | **Answer cache.** The error has already been solved — serve it and skip retrieval and the LLM entirely. Merged SME + AI; `source` says which. Precedence is a *write* rule: an SME approval always overwrites, an AI result writes only into an empty or `ai` slot | `{fix_text, source: sme\|ai, approved_by, fix_id}` | 30 d | A3 (`ai`), KB API (`sme`) | N8 |
-| `match:<kb_version>:<fingerprint>:<ctx_hash>` | **Computation cache** (computed once, reused). Not an answer — the *candidate list and scores* A2 produced. A hit skips the embedding call and the Chroma query but still runs the routing decision. `ctx_hash` is required because the same error in a different product or stage ranks candidates differently | `{match_result, ranked_candidates, top_candidate}` | 30 d | A2 | N9 |
-| `run_dedup:<pipeline_id>:<fingerprint>` | **In-flight suppression.** One dependency error failing build, test and package must produce one analysis and one DM, not three. Value is the first delivery's message timestamp so later stages become thread replies | `<slack_message_ts>` | 1 h | A4 | N7 |
-| `disambig_pending:<fingerprint>` | **Held delivery.** The top two candidates scored too close to choose between; delivery pauses and the envelope is parked here until an SME picks one, at which point A4 resumes | `{candidate_0, candidate_1, request_id, envelope_json}` | 24 h | A4 | KB approve handler |
-| `thread_map:<channel_id>:<message_ts>` | **Reverse lookup.** Given a Slack thread, identify which fix it concerns — needed when a correction arrives as a thread reply | `<fix_id>` | 30 d | A4 | Slack connector |
-| `kb_version` | **Invalidation counter.** A plain integer, `INCR`-ed on every approve, edit, and discard. Because it forms part of the match_result key, one increment orphans every cached match_result at once — no key scanning, no per-key deletes, and a uniform 30-day TTL becomes safe | integer | none | KB API | A2, N9 |
+#### Key 1 — `fix:<fingerprint>` · "we already solved this"
 
-**Why a uniform 30-day TTL is safe.** A match_result references candidates an SME may since have
-edited or discarded, which would normally force a short TTL. `kb_version` removes that
-coupling: any knowledge-base change makes every previously written match_result key unreachable,
-so stale entries can never be read and simply expire unused.
+**Question it answers:** has this exact error been solved before?
 
-**Loss behaviour.** Every key can be lost without correctness impact — a missing `fix:<fp>`
-costs a vector query, a missing match_result costs an embed plus query, a missing `run_dedup`
-costs a duplicate message, a missing `thread_map` costs a thread association. Only
-`disambig_pending` loss is user-visible: the held delivery must be re-triggered from the
-dashboard.
+If the answer is yes, the stored fix is returned immediately and the request skips the
+vector search *and* the LLM entirely — the cheapest possible path.
+
+| | |
+|---|---|
+| **Key** | `fix:` + the error's fingerprint, e.g. `fix:a3f9c2…` |
+| **Value** | `{fix_text, source, approved_by, fix_id}` where `source` is `sme` or `ai` |
+| **Expires** | 30 days |
+| **Written by** | A3 after generating a fix (`source=ai`); the KB API after an SME approves (`source=sme`) |
+| **Read by** | N8, on every analysed error |
+
+**Why SME and AI share one key.** They used to be two keys checked one after the other, for
+one reason only: an SME-approved fix must win over an AI-generated one. That precedence is
+now a rule applied when *writing* — an SME approval always overwrites, while an AI result is
+only written if the slot is empty or already holds an AI answer. One lookup instead of two,
+and the rule lives in one place.
+
+#### Key 2 — `match:<kb_version>:<fingerprint>:<ctx_hash>` · "we already worked this out"
+
+**Question it answers:** we did not have a stored fix — but have we already *searched* for
+one for this error, in this context, and reached a conclusion?
+
+Note the difference from Key 1: this does **not** hold an answer to give the developer. It
+holds the *result of a search* — the candidate list and their scores. A hit skips the
+embedding call and the vector query, but the routing decision still runs.
+
+| | |
+|---|---|
+| **Key** | `match:` + KB version + fingerprint + context hash |
+| **Value** | `{match_result, ranked_candidates, top_candidate}` |
+| **Expires** | 30 days |
+| **Written by** | A2, after scoring candidates |
+| **Read by** | N9 |
+
+**Why the context hash is in the key.** The same error in a different product or stage ranks
+candidates differently, so the search result is only reusable for the same context.
+`ctx_hash` is a short hash of product + stage + category.
+
+**Why the KB version is in the key.** A stored search result names candidates that an SME
+may since have edited or discarded — reusing it would serve out-of-date conclusions. Rather
+than hunting down and deleting affected keys, a counter called `kb_version` is bumped by one
+on every approve, edit, and discard. Because that counter forms part of the key, **every
+previously written search result instantly becomes unreachable** and expires quietly on its
+own. One increment replaces all invalidation logic.
+
+#### Key 3 — `run_dedup:<pipeline_id>:<fingerprint>` · "already handling this right now"
+
+**Question it answers:** is this same error already being analysed for this same pipeline
+run?
+
+A single broken dependency typically fails the build, test, and package stages of one
+pipeline. Without this key that is three analyses, three LLM calls, and three messages for
+one problem. With it, the first occurrence is analysed and the rest are posted as replies in
+the same message thread.
+
+| | |
+|---|---|
+| **Key** | `run_dedup:` + pipeline run id + fingerprint |
+| **Value** | the Slack timestamp of the first message, so later stages know which thread to reply to |
+| **Expires** | 1 hour — long enough for one pipeline, short enough not to suppress a genuine recurrence tomorrow |
+| **Written by** | A4, after the first delivery |
+| **Read by** | N7 |
+
+#### Key 4 — `disambig_pending:<fingerprint>` · "waiting for a human to choose"
+
+**Question it answers:** two stored fixes scored almost identically — which one should be
+sent?
+
+The system cannot tell them apart, so it pauses, shows both to an SME, and parks the
+in-progress work here until someone picks one.
+
+| | |
+|---|---|
+| **Key** | `disambig_pending:` + fingerprint |
+| **Value** | both candidates plus the paused analysis envelope |
+| **Expires** | 24 hours |
+| **Written by** | A4, when the top two are too close to separate |
+| **Read by** | the KB approve handler, which resumes delivery |
+
+This is the only key whose loss is user-visible: the paused delivery must be restarted from
+the dashboard. *(See the simplification list in §13.19 — this feature is a candidate for
+removal.)*
+
+#### Key 5 — `thread_map:<channel_id>:<message_ts>` · "which fix is this thread about"
+
+**Question it answers:** someone replied in a Slack thread — which fix were they talking
+about?
+
+| | |
+|---|---|
+| **Key** | `thread_map:` + channel + message timestamp |
+| **Value** | the fix id |
+| **Expires** | 30 days |
+| **Written by** | A4 when it posts |
+| **Read by** | the Slack connector when a correction arrives |
+
+#### Key 6 — `kb_version` · the invalidation counter
+
+Not a cache entry — a single integer, shared by everything. Increased by one whenever the
+knowledge base changes. Its only job is to appear inside Key 2 so that all stored search
+results are retired at once. It never expires.
+
+---
+
+#### Summary
+
+| Key | Plain purpose | Expires | Cost if lost |
+|---|---|---|---|
+| `fix:<fp>` | the answer we already have | 30 d | one vector search |
+| `match:<kb_ver>:<fp>:<ctx>` | the search we already ran | 30 d | one embedding + one query |
+| `run_dedup:<run>:<fp>` | already working on it | 1 h | a duplicate message |
+| `disambig_pending:<fp>` | waiting for a human choice | 24 h | delivery must be restarted |
+| `thread_map:<ch>:<ts>` | which fix a thread refers to | 30 d | a correction cannot be matched to its fix |
+| `kb_version` | retires stale search results | never | stale results could be reused |
+
+The distinction worth remembering: **Key 1 caches an answer; Key 2 caches a search.** That
+is why they cannot be merged into one entry.
+
 
 ### 4.5 Schema Relationships
 
@@ -1195,41 +1333,34 @@ When `SMTP_USER` and `SMTP_PASSWORD` are set, use STARTTLS authenticated SMTP. W
 
 All outgoing HTTP calls default to HTTPS. Configurable via `OUTGOING_PROTOCOL` env var; only permit plain HTTP when explicitly set (for trusted-network, non-internet-exposed deployments).
 
-### 6.1 Webhook Authentication — shared-secret token
+### 6.1 Webhook Ingestion — no authentication in MVP-2
 
-A **shared secret** is a token both sides hold. The sender presents it; the receiver
-compares it with its own copy and rejects the request if they differ — before any log is
-fetched or any analysis begins.
+**Decision: the webhook endpoints do not authenticate callers.** BFA, GitLab, and Jenkins
+all sit inside the corporate network; the endpoint is not published externally and is not
+reachable from the internet. Adding a shared-secret check would mean maintaining a secret in
+three places (GitLab, Jenkins, and the service environment), handling its rotation, and
+debugging the failure mode where a rotation is applied to one side only — for an internal
+tool whose worst case is a spurious analysis of a fake pipeline.
 
-| Provider | What is sent | How it is verified |
-|---|---|---|
-| **GitLab** | `X-Gitlab-Token` header carrying the **plain secret** | `hmac.compare_digest(header, configured_secret)` — a **constant-time string comparison**, not an HMAC over the payload |
-| **Jenkins** | `Authorization: Bearer <token>` | same constant-time comparison |
-| *(GitHub, for contrast)* | `X-Hub-Signature-256` — HMAC-SHA256 **of the request body**, keyed by the secret | recompute over the body and compare |
+**What protects the endpoint instead**
 
-**Why constant-time comparison.** An ordinary `==` returns as soon as it finds a differing
-byte, so response time leaks how many leading bytes were correct, allowing a secret to be
-recovered one byte at a time. `hmac.compare_digest` always takes the same time regardless
-of where the mismatch falls. The `hmac` module is used **only** for that comparison — the
-GitLab scheme does not involve computing an HMAC.
+| Control | Effect |
+|---|---|
+| Network placement | the service listens on a corporate-network interface only; nothing external can reach it |
+| Event filtering (N2) | a payload that is not a finished, failed, in-scope pipeline is discarded before any log is fetched |
+| Idempotency | replaying the same pipeline event produces the same fingerprint, hits the cache, and re-delivers nothing new |
+| Rate bound (BFA-ARCH-1170) | a flood of forged events is bounded by the concurrency limit, not by authentication |
 
-**What this does and does not prove.** A shared-secret token proves the caller knows the
-secret. A true HMAC signature additionally proves the request body was not modified in
-transit. Over TLS to an internal endpoint the token is sufficient; if payload integrity ever
-becomes a requirement, GitLab would need to be replaced by a provider that signs the body,
-or an intermediary would have to add a signature.
+**Residual risk, accepted.** Anyone already inside the corporate network can post a
+fabricated webhook and cause BFA to fetch a log and post a Slack message. The blast radius
+is noise, not data loss or disclosure. Recorded in §13.18.
 
-**Rotation.** The secret lives in the environment, never in source. Rotating it means
-updating the webhook configuration in GitLab or Jenkins and the service environment
-together; a mismatch fails closed — events are rejected and recorded, never processed
-unauthenticated.
-
-### Webhook Secret Validation
-
-GitLab: `hmac.compare_digest(hmac.new(secret.encode(), body, sha256).hexdigest(), X-Gitlab-Token header)` — constant-time comparison, no timing oracle.  
-Jenkins: Bearer token comparison via `hmac.compare_digest`.
-
----
+**If this changes.** Should the endpoint ever be exposed beyond the corporate network,
+authentication becomes mandatory and the appropriate mechanism is the one the provider
+supports — a shared-secret token for GitLab and Jenkins, verified with a constant-time
+comparison. The current code already contains that check
+(`webhook_listener.py:255`, `:276`, `:798`), so re-enabling it is a configuration change
+rather than new development.
 
 ## 7. Resilience and Operations
 
@@ -2555,7 +2686,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | Step | Node | ID | Inputs (exact fields) | Processing summary | Outputs (exact fields) | Consumed by |
 |---|---|---|---|---|---|---|
 | 0 | Startup Validator | N0 | `error_patterns.json`, env vars (`VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY`, `JWT_PRIVATE_KEY_PATH`, `JWT_PUBLIC_KEY_PATH` for Slack service) | Load `error_patterns.json`; assert weight constraints; assert `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY` set; validate JWT key paths | Pass → service starts; Fail → `sys.exit(1)` + stderr | N1 (service accepts traffic only on pass) |
-| 1 | Webhook Listener | N1 | HTTP POST body, `X-Gitlab-Token` / `Authorization` header | HMAC/Bearer verify; check event type + status; generate `request_id` (UUID) | `request_id: str`, validated `payload: dict` | N2 |
+| 1 | Webhook Listener | N1 | HTTP POST body | Generate `request_id` (UUID); check event type + status. No auth check (§6.1) | `request_id: str`, validated `payload: dict` | N2 |
 | 2 | Pipeline Extractor | N2 | `request_id`, `payload` | `extract_pipeline_info(payload)`; `should_process_pipeline()`; external-stage guard | `AnalysisEnvelope(request_id=..., pipeline_info={project_id, pipeline_id, ref, sha, repo, branch, commit_sha, triggered_by, triggered_by_email, stages, job_names=[]})` | N3 (as background task) |
 | 3 | Log Fetcher | N3 | `pipeline_info.project_id`, `pipeline_info.pipeline_id` | `fetch_pipeline_jobs(project_id, pipeline_id)`; `fetch_job_log_tail(project_id, job_id)` per failed job; populate `job_names` | `all_logs: List[{job_id, job_name, details, log_text}]`; updates `pipeline_info.job_names` | N4 |
 | 4 | Secret Redactor | N4 | `all_logs` list | Per-entry regex strip (PRIVATE-TOKEN, password=, URLs, JWTs) | `all_logs_redacted: List[{job_id, job_name, details, log_text_redacted}]` | N5 |
@@ -3170,13 +3301,16 @@ structure. If it does not, nothing else in the payload identifies a product and 
 mapping becomes unavoidable — the single case where a maintained file would be required.
 Verify against real `path_with_namespace` values before implementation.
 
-### 13.16 Webhook authentication terminology corrected
+### 13.16 Webhook authentication removed (was: terminology corrected)
 
 Earlier revisions described inbound webhook authentication as "shared-secret HMAC". That is
-inaccurate for the providers in use: GitLab sends the **plain secret** in `X-Gitlab-Token`
-and Jenkins sends a Bearer token; both are verified with a constant-time string comparison.
-No HMAC is computed over the request body. §6.1 now states the mechanism precisely,
-including what a token proves and what it does not.
+inaccurate for the providers in use — GitLab sends the **plain secret**, not a signature.
+That correction has since been overtaken: **webhook authentication is removed from MVP-2
+entirely.** BFA, GitLab, and Jenkins all sit inside the corporate network, so maintaining a
+secret in three places and handling its rotation buys little against a worst case of a
+spurious analysis. §6.1 records the controls that replace it and the accepted residual risk.
+The check remains in the existing code, so re-enabling it is configuration rather than
+development if the endpoint is ever exposed.
 
 ### 13.17 Terminology simplified, and current-state columns added
 
@@ -3213,3 +3347,51 @@ completed at delivery.
 normalisation, the `combined_score` formula with a worked comparison showing how context
 breaks ties that text similarity alone cannot, and a tuning table for `top-K` with a
 recommended range of 3–20 around a default of 10.
+
+### 13.18 Webhook authentication removed — internal application
+
+BFA, GitLab, and Jenkins all sit inside the corporate network. Maintaining a shared secret
+in three places, rotating it, and debugging half-applied rotations is real ongoing cost
+against a worst case of one spurious analysis. Removed for MVP-2; §6.1 records the controls
+that remain and the accepted residual risk. The check still exists in the current code, so
+re-enabling it later is configuration, not development.
+
+---
+
+### 13.19 Simplification review — what else may be over-built for an internal tool
+
+Prompted by the same reasoning that removed webhook authentication. Each item below is
+weighed by *what it costs to build and operate* against *what it protects an internal tool
+from*. Nothing here has been removed yet — this is the decision list.
+
+#### Recommended for removal
+
+| # | Feature | What it costs | What it buys | Recommendation |
+|---|---|---|---|---|
+| 1 | **Disambiguation hold** (N12c, `disambig_pending`) | A paused-delivery state machine, a Redis key holding a serialised envelope, a resume path in the approve handler, an extra SME workflow, and one of the four thresholds | Avoids serving the wrong one of two near-identical fixes | **Remove.** Serve the top candidate. If it is wrong, feedback and correction already exist to fix it — a far cheaper loop than a hold-and-resume state machine. Removes a whole delivery state, one Redis key, one threshold, and one SME workflow. |
+| 2 | **Match Result Cache** (N9, `match:…`) | A second cache tier, the context-hash formula that must match exactly in two places, and the `kb_version` counter that exists solely to invalidate it | Saves one embedding call plus one vector query — roughly 50 ms | **Remove for MVP-2.** It only helps errors that repeatedly fail to match anything, which is a narrow case. Add it later if telemetry shows that churn. Removes a cache tier, a hash formula, and the `kb_version` mechanism entirely. |
+| 3 | **`sub_category` pre-filtering before vector search** | Extra metadata to populate and keep consistent in two stores, plus filter logic | Narrows candidates before search | **Remove the pre-filter, keep the column.** With a knowledge base of a few hundred rows, filtering before a top-10 search saves nothing measurable. The column is still worth having for reporting. |
+| 4 | **Domain RAG collection** (`domain_rag`, 72 pairs) | A second Chroma collection, an indexing step, and a query on every A3 call | Adds a hint to the LLM prompt | **Replace with static text.** With only 72 entries, include the relevant guidance directly in the prompt from `infra_overview.md`. Removes a collection, an index job, and a query per generation. |
+| 5 | **Prometheus metrics** (§8.4) | An exposition endpoint, a scrape target, and a metrics vocabulary to maintain | Time-series monitoring | **Defer** unless Prometheus is already running and someone will build dashboards on it. The KPI page plus the silent-failure alert covers the operational need. |
+| 6 | **Weekly pruning job** (D-3) | A job, an archive format, an operator review step | Keeps the knowledge base tidy | **Defer.** A KB with a few hundred rows after a year does not need pruning. Revisit when it passes a few thousand. |
+| 7 | **Weight-constraint validation** (`VECTOR_WEIGHT ≤ 0.80`, `CONTEXT_WEIGHT ≥ 0.20`, sum exactly 1.0) | Startup validation logic and a rule to explain | Prevents a nonsensical weighting | **Simplify** to "both weights must sum to 1.0". The bounds encode a tuning opinion the replay harness should settle with evidence. |
+
+#### Keep — cost is low or the risk is real
+
+| Feature | Why it stays |
+|---|---|
+| Secret redaction | Already low priority, but this is the one security item I would not drop. A credential in a build log outlives the internal boundary: it lands in the knowledge base, in Redis, and in Slack history, and Slack is outside the corporate network. |
+| Extraction checkpoint | Cheap to build; without it a crash loses an event that CI will never re-deliver. |
+| Dead-letter and replay | Genuine operational value, and the replay harness reuses the same machinery for measurement. |
+| Two-phase `pipeline_events` write | Required for the KPI denominator to be complete when analysis fails. |
+| `fix:<fp>` cache | The single biggest cost saver in the design. |
+| Context scoring in `combined_score` | The worked example in §1.2 shows it changing the outcome; text similarity alone is not sufficient. |
+| Stage grouping and in-run dedup | Directly address the reported message-flood pain. |
+
+#### If all seven are accepted
+
+The design loses one cache tier, one Chroma collection, one Redis key, the `kb_version`
+mechanism, a delivery state machine, an SME workflow, two thresholds, a metrics endpoint,
+and a scheduled job — with no reduction in what a developer actually receives. The
+recommended set is items **1, 2, 3, 4 and 7**; items 5 and 6 are deferrals rather than
+removals.
