@@ -11,7 +11,8 @@
 ## Table of Contents
 
 1. [Architecture Overview](#1-architecture-overview)
-   - 1.1 Component Inventory · 1.2 Flow Step Table · 1.3 Flow Diagram
+   - **1.0 Terms Used in This Document** (glossary) · 1.1 Component Inventory (with *Exists today?*)
+   - 1.2 Flow Step Table (with *Stats written* and *Exists today?*) · 1.3 Flow Diagram
    - 1.4 Stores at a Glance · 1.5 Boundaries and Trust
    - 1.6 Analysis Envelope · **1.7 Agent State Graph**
 2. [Configuration Files](#2-configuration-files)
@@ -49,55 +50,183 @@ corporate network and is limited to outbound notification plus a narrow inbound 
 feedback and solution correction. Every write to every store is performed by this single
 process.
 
+### 1.0 Terms Used in This Document
+
+Plain definitions for the terms that appear throughout. Several were renamed in this
+revision to remove jargon.
+
+| Term | Plain meaning | Renamed from |
+|---|---|---|
+| **Shared secret** | A password both GitLab/Jenkins and BFA know. The sender puts it in a header; BFA compares it with its own copy and rejects the request if they differ. See §6.1. | — |
+| **Signature valid / invalid** | Shorthand for "the token in the header matched / did not match". GitLab sends the plain secret in `X-Gitlab-Token`, not a cryptographic signature, so "**token matched**" is the accurate phrase and is used from here on. | "signature valid" |
+| **Generate a `request_id`** | Create one new UUID for this webhook event, before anything else happens, and attach it to every log line, database row, and file that this event produces. | "mint" |
+| **Filter events** | Decide whether this webhook is worth processing at all — is it a *finished* pipeline, did it *fail*, is the project in scope, has it already been handled. Non-qualifying events stop here. | — |
+| **Build the envelope** | Create one `AnalysisEnvelope` object (§1.6) holding everything known about this error, and pass that single object down the chain, so no later step has to re-derive context. | — |
+| **Fingerprint** | A SHA-256 of the *normalised* error text — the identity of an error, stable across repositories. See §10.1.1. | — |
+| **Normalise** | Rewrite the error text so that two occurrences of the same problem produce identical text: remove repo and branch names, timestamps, paths, versions, IDs, and casing. See §10.1.1 and the worked example in §1.2. | — |
+| **In flight for this run** | The same error is *already being analysed right now* for the same pipeline run — for example a dependency error failing the build, test, and package stages. The second and third occurrences must not trigger a second analysis or a second message. | — |
+| **`match_result`** | A2's decision about a stored candidate: `exact_match`, `applicable_with_adjustments`, `partial`, or `no_match`. | "match_result" |
+| **Match Result Cache** | Remembers A2's decision so the same error in the same context does not re-run the embedding call and the vector query. | "Match Result Cache" |
+| **Cached (computed once, reused)** | The result of an expensive computation is stored under a key so the computation is not repeated. | "memoised" |
+| **`combined_score`** | One number blending text similarity and context similarity, used to decide whether a stored fix is good enough to serve. See §1.2. | — |
+| **top-K** | How many nearest candidates the vector search returns before re-ranking. Configurable — see §1.2. | — |
+
+---
+
 ### 1.1 Component Inventory
 
-| Node | Component | Responsibility | Input | Output | Stores touched |
-|---|---|---|---|---|---|
-| N1 | Webhook Listener | Verify shared secret; mint `request_id`; filter events | GitLab / Jenkins webhook | `pipeline_info` + `request_id` | — |
-| N2 | Pipeline Extractor | Parse payload; `should_process_pipeline()`; external-stage guard | webhook payload | `pipeline_info` incl. `job_names` | SQLite (W) |
-| N3 | Log Fetcher | Pull job logs from CI API | `pipeline_info` | raw console log | — |
-| N4 | Secret Redactor *(low priority)* | Mask tokens, passwords, credential URLs | raw log | redacted log | — |
-| N5 | Log Error Extractor | Pattern-match; adaptive context windows; merge overlaps | redacted log | `error_sections[]` | — |
-| N6 | **Agent A1 — Error Summarizer** | Classify, normalise, fingerprint; create Analysis Envelope | `error_sections[]`, `pipeline_info` | Analysis Envelope | SQLite (W) |
-| N7 | Dedup Check | Suppress same fingerprint already in flight for this run | `fingerprint`, `run_id` | continue / thread-reply | Redis (R) |
-| N8 | **Fix Cache** *(merged)* | One lookup for both SME-approved and AI-generated fixes | `fingerprint` | `fix_text` + `source` | Redis (R) |
-| N9 | Verdict Cache | Memoised A2 result for this fingerprint + context | `fingerprint`, `ctx_hash` | verdict + candidates | Redis (R) |
-| N10 | **Agent A2 — Deviation Analyzer** | Embed; cosine top-K; context-rank; assign verdict | `error_text_clean`, `context_block` | verdict, ranked candidates | Chroma (R), SQLite (R/W), Redis (W) |
-| N11 | **Agent A3 — Solution Synthesizer** | Domain RAG + LLM generation | envelope + RAG snippet | `fix_text`, confidence | Redis (W), SQLite (W) |
-| N12 | **Agent A4 — Reporter** | Route, format, deliver; two-phase stats write | envelope | Slack / email delivery | SQLite (W), Redis (W) |
-| — | KB REST API | Full CRUD on fixes; sole write path for state changes | HTTP (dashboard, Slack connector) | fix records | all three (R/W) |
-| — | Slack Connector | Opens outbound channel; receives feedback + corrections | Slack events | KB API calls | via KB API only |
-| — | KPI / KB Dashboard | Read views + SME actions | HTTP | rendered pages | SQLite (R) via API |
-| — | Watchdog | `/health`; silent-failure alert | timer | alerts | SQLite (R) |
+The **Exists today?** column reflects the current code at the time of writing, verified
+file-by-file. It is the honest starting position for estimation — roughly half the pipeline
+exists in some form, and the agent layer does not exist at all.
+
+| Node | Component | What it does, in plain terms | Exists today? | Evidence / gap |
+|---|---|---|---|---|
+| N1 | Webhook Listener | Checks the shared secret, creates one `request_id` for the event, and drops events that are not finished, failed, in-scope pipelines | **Partial** | `validate_webhook_secret` (`webhook_listener.py:255`), constant-time compare (`:276`), Jenkins token (`:798`). A UUID is created (`:522`, `:772`) but is **8 characters and never written to the database** |
+| N2 | Pipeline Extractor | Parses the webhook into a usable structure and decides whether to continue | **Yes** | `should_process_pipeline` (`pipeline_extractor.py:207`) |
+| N3 | Log Fetcher | Downloads the job logs from GitLab or Jenkins | **Yes** | `fetch_job_log` / `fetch_job_log_tail` / `fetch_pipeline_jobs` (`log_fetcher.py:59, 111, 253`) |
+| N4 | Secret Redactor *(low priority)* | Masks tokens and passwords before the text is stored or sent | **No** | No `redactor.py`. `logging_config.py:37` masks the service's own **log output** only — the analysed text is never filtered |
+| N5 | Log Error Extractor | Finds the error lines and grabs surrounding context | **Partial** | `extract_error_sections` (`log_error_extractor.py:90`) works, but the 17 patterns are hardcoded substrings with no category |
+| N6 | **Agent A1 — Error Summarizer** | Classifies the error, normalises the text, computes the fingerprint, builds the envelope | **No** | No normaliser, no fingerprint function, no `agents/` package |
+| N7 | Dedup Check | Suppresses the same error already being analysed in this run | **No** | Nothing exists |
+| N8 | **Fix Cache** | One lookup that answers "have we already solved this exact error?" | **Partial** | Two separate keys exist (`analyzer_service.py:73-74`) but they are keyed by a SHA-256 of **raw** text, so they effectively never hit |
+| N9 | Match Result Cache | Remembers A2's decision to avoid re-running the vector search | **No** | Nothing exists |
+| N10 | **Agent A2 — Deviation Analyzer** | Finds similar past errors and decides whether a stored fix applies | **Partial** | `lookup_existing_fix` (`vector_db.py:159`) exists, but the collection has **no `hnsw:space` setting** (so it is L2, not cosine) and there is no context scoring |
+| N11 | **Agent A3 — Solution Synthesizer** | Asks the LLM for a fresh fix when nothing stored applies | **Partial** | `resolve` (`resolver_agent.py:64`), `call_llm` (`llm_openwebui_client.py:118`). No JSON schema, no confidence, no structured failure |
+| N12 | **Agent A4 — Reporter** | Routes, formats, and delivers the answer | **Partial** | `send_error_message` (`slack_helper.py:229`), `send_dev_dm_fix` (`analyzer_service.py:1339`). No stage grouping, team routing, provenance, or guardrail |
+| — | KB REST API | Add, search, edit, deprecate fixes — the only write path | **Partial** | `add_manual_fix` (`:726`), `bulk_manual_fix` (`:764`). No list, search, edit, or deprecate |
+| — | Slack Connector | Carries notifications out and feedback/corrections back | **Partial** | Handlers exist in `analyzer_service.py` **and** duplicated in `slack_reviewer.py` — the duplication this design removes |
+| — | KPI / KB Dashboard | The pages SMEs use | **No** | No `dashboard/` directory |
+| — | Watchdog | Health endpoint and silent-failure alert | **Partial** | `health_check` (`analyzer_service.py:1259`). No silent-failure detection |
+
+**Summary:** 2 of 16 components exist as needed, 9 exist partially, 5 do not exist at all.
+The whole agent layer (A1–A4 as designed), both caches as designed, dedup, and the dashboard
+are new build.
+
+---
 
 ### 1.2 Flow — Step Table
 
-`request_id` is minted at step 1 and present on every subsequent row, log line, and stats
-record.
+`request_id` is created at step 1 and is present on every row, log line, and file produced
+afterwards.
 
-| # | Step | Condition | Action | Next |
-|---|---|---|---|---|
-| 1 | Webhook received | signature valid | mint `request_id`; return **202 Accepted** | 2 |
-| 1a | Webhook received | signature invalid | reject; record rejection | end |
-| 2 | Status routing | `status == success` | record `pipeline_events` (stats only — no fetch, no embed, no LLM) | end |
-| 3 | Status routing | `status == failed` | record `pipeline_events`; dispatch background task | 4 |
-| 4 | Fetch logs | — | pull job logs from CI API | 5 |
-| 5 | Redact | *(low priority)* | mask secrets before any store or send | 6 |
-| 6 | Extract errors | patterns matched | produce `error_sections[]` | 7 |
-| 6a | Extract errors | no pattern matched | record `zero_match`; notify DevOps with log tail | end |
-| 7 | **A1** | — | classify → normalise → fingerprint → build envelope | 8 |
-| 8 | Dedup | fingerprint in flight for this run | post as thread reply to the existing message | end |
-| 9 | **Fix cache** | hit | take `fix_text` + `source`; skip retrieval and LLM entirely | 14 |
-| 10 | Verdict cache | hit | restore verdict + candidates; skip embed and query | 12 |
-| 11 | **A2** | miss | embed → cosine top-K → context-rank → verdict | 12 |
-| 12 | Threshold | `combined_score ≥ 0.90` and verdict ≠ `no_match` | adopt candidate `fix_text` | 14 |
-| 13 | **A3** | below threshold or `no_match` | domain RAG + LLM generation | 14 |
-| 13a | **A3** | LLM failed | "unable to analyze"; alert DevOps; write dead-letter | end |
-| 14 | Forbidden-text check *(low priority)* | pattern matched | flag for SME visibility — does **not** block delivery | 15 |
-| 15 | Infrastructure routing | `error_category == infrastructure` | post to DevOps channel; developer told it is not their change | 17 |
-| 16 | Disambiguation | top-2 within `CONTEXT_DISAMBIG_BAND` | post side-by-side to SME channel; hold delivery | end |
-| 17 | **A4 delivery** | — | stage-grouped channel post + developer DM with provenance, feedback controls, dashboard deep link | 18 |
-| 18 | Two-phase write | — | update `pipeline_events`; insert `delivery_records`; set dedup key | end |
+**When statistics are written.** Statistics are **not** written before every step — that
+would mean eighteen database writes per error and would leave half-populated rows whenever a
+step failed. They are written at **four defined points**, shown in the *Stats written*
+column below. The pipeline row is created early (so a failure that never reaches analysis
+still appears in the KPI denominator) and completed at the end; analysis measurements are
+written when the measurement actually exists.
+
+| # | Step | Condition | Action | Stats written | Exists today? | Next |
+|---|---|---|---|---|---|---|
+| 1 | Webhook received | token matched | create `request_id`; reply **202 Accepted** | — | Partial — UUID exists but is not persisted | 2 |
+| 1a | Webhook received | **token did not match** | reject the request; record the rejection; fetch nothing | rejection counter | Yes — `webhook_listener.py:276` | end |
+| 2 | Status routing | pipeline **succeeded** | record the event only — no log download, no embedding, no LLM | **`pipeline_events` INSERT** | No — only failures are processed today | end |
+| 3 | Status routing | pipeline **failed** | record the event, then start the background task | **`pipeline_events` INSERT** | Partial — failures processed, but not recorded as stats rows | 4 |
+| 4 | Fetch logs | — | download the job logs | — | Yes | 5 |
+| 5 | Redact | *(low priority)* | mask secrets before anything is stored or sent | — | **No** | 6 |
+| 6 | Extract errors | patterns matched | produce `error_sections[]` (shape below) | — | Partial — patterns hardcoded | 7 |
+| 6a | Extract errors | nothing matched | record a zero-match event; notify DevOps with the log tail | zero-match row | No | end |
+| 7 | **A1** | — | classify → normalise → fingerprint → build the envelope | `pipeline_events` UPDATE (classification) | **No** | 8 |
+| 8 | Dedup | already in flight for this run | reply in the existing message thread instead of sending a new one | — | **No** | end |
+| 9 | **Fix cache** | hit | reuse the stored answer; skip the vector search and the LLM entirely | — | Partial — keys exist but never hit | 14 |
+| 10 | Match result cache | hit | reuse A2's earlier decision; skip the embedding call and the vector query | — | **No** | 12 |
+| 11 | **A2** | miss | embed → nearest-neighbour search → re-rank by context → decide | **`request_telemetry` INSERT** | Partial — wrong distance metric, no context scoring | 12 |
+| 12 | Threshold | `combined_score ≥ 0.90` **and** `match_result ≠ no_match` | use the stored fix | — | No | 14 |
+| 13 | **A3** | below threshold, or `no_match` | ask the LLM for a fresh fix | `request_telemetry` UPDATE (cost, latency) | Partial — unstructured | 14 |
+| 13a | **A3** | LLM failed | reply "unable to analyze", alert DevOps, write a dead-letter file | telemetry marked `unable` | No | end |
+| 14 | Forbidden-text check *(low priority)* | pattern matched | flag for SME visibility — **does not block delivery** | — | No | 15 |
+| 15 | Infrastructure routing | category is `infrastructure` | send to the DevOps channel; tell the developer it was not their change | — | No | 17 |
+| 16 | Disambiguation | top two candidates too close to separate | show both to an SME; hold delivery until one is chosen | — | No | end |
+| 17 | **A4 delivery** | — | one message per failed stage; developer DM with provenance, feedback buttons, dashboard link | — | Partial — flat messages only | 18 |
+| 18 | Completion | — | finish the pipeline row and record what was delivered | **`pipeline_events` UPDATE + `delivery_records` INSERT** | No | end |
+
+#### What `error_sections[]` looks like
+
+`error_sections[]` is what N5 hands to A1: one entry per detected error region, each holding
+the matched error lines plus the surrounding context that was captured with them.
+
+```python
+[
+  {
+    "error_lines":   ["npm ERR! code ERESOLVE",
+                      "npm ERR! ERESOLVE unable to resolve dependency tree",
+                      "npm ERR! Found: react@18.2.0"],
+    "context_lines": ["Resolving dependencies...",
+                      "Reading package.json",
+                      "added 214 packages in 12s"],
+    "error_pattern": "npm_error",       # which rule matched
+    "error_category": "dependency",     # from error_patterns.json
+    "sub_category":  "npm",
+    "line_range":    [842, 907]         # position in the original log
+  },
+  { ... one entry per further error region ... }
+]
+```
+
+Two regions that overlap are merged into one entry, so the same lines are never analysed
+twice. Today's code returns a **single joined string** instead of this list — that change is
+requirement A-1.
+
+#### What "normalise" means, concretely
+
+Normalising rewrites the error text so that the *same problem* always produces the *same
+text*, and therefore the same fingerprint. Three layers, described fully in §10.1.1:
+
+```
+BEFORE  2026-08-09T04:12:55Z [ERROR] Failed to execute goal on project payments-svc:
+        Could not find artifact com.acme:auth-lib:jar:2.9.4
+        at /builds/runner-02/payments-svc/pom.xml
+
+AFTER   [error] failed to execute goal on project <REPO>:
+        could not find artifact com.acme:auth-lib:jar:<VER>
+        at <PATH>/pom.xml
+```
+
+Removed: the timestamp, the repository name, the version number, the build path. Kept:
+`auth-lib` — the actual diagnosis. The same failure in a different repository normalises to
+exactly this string, which is what lets one cache entry and one knowledge-base row serve
+every product.
+
+#### What `combined_score ≥ 0.90 and match_result ≠ no_match` means
+
+This is the gate that decides whether a stored fix is served instead of calling the LLM.
+Both halves must hold.
+
+**`combined_score`** blends two measurements:
+
+```
+combined_score = VECTOR_WEIGHT × text_similarity  +  CONTEXT_WEIGHT × context_similarity
+                 (default 0.70)                        (default 0.30)
+```
+
+| Part | What it measures | Range |
+|---|---|---|
+| `text_similarity` | how close the two error texts are, as cosine similarity of their embeddings | 0.0 – 1.0 |
+| `context_similarity` | how many of the three labels — product, stage, category — match, divided by three | 0.0, 0.33, 0.67, 1.0 |
+
+So a candidate with near-identical text from a *different* product and stage scores
+`0.70 × 0.97 + 0.30 × 0.33 = 0.78` and is **not** served; the same text from the *same*
+product and stage scores `0.70 × 0.97 + 0.30 × 1.0 = 0.98` and is. Context breaks ties that
+text alone cannot.
+
+**`match_result ≠ no_match`** is A2's own judgement. A candidate can score above the
+threshold on similarity while A2 still concludes the stored fix does not apply — for example
+the same missing-artifact wording but a different artifact. Requiring both means a fix is
+served only when the numbers *and* the judgement agree; otherwise the request falls through
+to A3.
+
+**Tuning `top-K`.** `VECTOR_TOP_K` controls how many nearest candidates are retrieved before
+context re-ranking. It is configurable and intended to be tuned with the replay harness:
+
+| Value | Effect | When to use |
+|---|---|---|
+| 3–5 | fastest, fewest lookups; risks missing a candidate that context re-ranking would have promoted | small knowledge base (< 200 fixes) |
+| **10** | **default** — a good balance | starting point |
+| 15–20 | best recall; more SQLite lookups per request and more low-quality candidates to score | large knowledge base, or if replay shows recall below 90% |
+
+Raise it only if the replay harness reports recall below its gate; measure, do not guess.
+
+---
 
 ### 1.3 Flow Diagram
 
@@ -122,9 +251,9 @@ flowchart TD
     DEDUP -->|"no"| FIXC{"N8 · Fix Cache<br/>fix:&lt;fp&gt;<br/>sme or ai"}
 
     FIXC -->|"HIT"| GATES
-    FIXC -->|"MISS"| VC{"N9 · Verdict Cache<br/>verdict:&lt;kb_version&gt;:&lt;fp&gt;:&lt;ctx&gt;"}
+    FIXC -->|"MISS"| VC{"N9 · Match Result Cache<br/>match:&lt;kb_version&gt;:&lt;fp&gt;:&lt;ctx&gt;"}
     VC -->|"HIT"| THRESH
-    VC -->|"MISS"| A2["N10 · Agent A2 — Deviation Analyzer<br/>embed · cosine top-K<br/>context rank · verdict"]
+    VC -->|"MISS"| A2["N10 · Agent A2 — Deviation Analyzer<br/>embed · cosine top-K<br/>context rank · match_result"]
 
     A2 --> THRESH{"combined ≥ 0.90<br/>and not no_match?"}
     THRESH -->|"yes"| GATES
@@ -151,7 +280,7 @@ flowchart TD
 
 | Store | Role | Holds | Authority |
 |---|---|---|---|
-| **Redis** | cache only | `fix:<fp>` (merged SME + AI), `verdict:<kb_version>:<fp>:<ctx>`, `run_dedup`, `disambig_pending`, `thread_map` | never a source of truth |
+| **Redis** | cache only | `fix:<fp>` (merged SME + AI), `match:<kb_version>:<fp>:<ctx>`, `run_dedup`, `disambig_pending`, `thread_map` | never a source of truth |
 | **Chroma** | vectors only | `id = fix-<fingerprint>`, embedding of `error_text_clean`, `document = fix_text`, context labels in metadata | rebuildable from SQLite |
 | **SQLite** | system of record | `fixes`, `fix_revisions` (metadata) + `pipeline_events`, `request_telemetry`, `delivery_records`, `feedback_events`, `sme_audit_log` (statistics), joined on `request_id` / `fingerprint` / `fix_id` | **authoritative** |
 
@@ -192,14 +321,14 @@ class AnalysisEnvelope:
     context_block: ContextBlock  # {product_team, stage_type, error_category}
     is_infra: bool               # error_category == "infrastructure"
     # NOTE: no separate request_id. `request_id` (above) IS the
-    # pipeline_events primary key — minted at N1 before any I/O, so it can
+    # pipeline_events primary key — generated at N1 before any I/O, so it can
     # never be None, and it correlates logs, stats, dead-letter and replay.
 
     # ── Set by N8/N9/N9/N10/N11 (cache or agent) ──────────────────────────
     fix_text: str | None         # None until a cache hit or A2/A3 fills it
-    fix_source: str              # sme_cache|ai_cache|verdict_cache|
+    fix_source: str              # sme_cache|ai_cache|match_cache|
                                  # vector_db|llm_generated|no_match
-    verdict: str | None          # exact_match|applicable_with_adjustments|
+    match_result: str | None          # exact_match|applicable_with_adjustments|
                                  # partial|no_match|None (before cache/A2)
     approved_by: str | None      # Slack display name — set when fix_source is
                                  # sme_cache (read from Redis sme:fix value)
@@ -237,8 +366,8 @@ class ContextBlock:
 | `pipeline_info` | webhook payload + `job_names` list | Pipeline Extractor | N2 |
 | `fingerprint`, `error_text_clean`, `context_block`, `is_infra` | computed | Agent A1 | N6 |
 | `fix_text`, `fix_source` (`sme_cache`\|`ai_cache` per stored `source`), `approved_by` | Redis GET `fix:<fp>` | Fix Cache Check | N8 |
-| `fix_text`, `fix_source="verdict_cache"`, `verdict`, `ranked_candidates`, `top_candidate` | Redis GET `verdict:<kb_version>:<fp>:<ctx_hash>` | Verdict Cache Check | N9 |
-| `fix_text`, `fix_source="vector_db"`, `verdict`, `ranked_candidates`, `top_candidate` | Chroma query + scoring | Agent A2 | N10 |
+| `fix_text`, `fix_source="match_cache"`, `match_result`, `ranked_candidates`, `top_candidate` | Redis GET `match:<kb_version>:<fp>:<ctx_hash>` | Match Result Cache Check | N9 |
+| `fix_text`, `fix_source="vector_db"`, `match_result`, `ranked_candidates`, `top_candidate` | Chroma query + scoring | Agent A2 | N10 |
 | `ranked_candidates` | set to `None` (clears stale A2 candidates) | Agent A3 | N11 |
 | `fix_text`, `fix_source="llm_generated"` | LLM response | Agent A3 | N11 |
 | `slack_message_ts` | Slack API post result | Agent A4 | N12 |
@@ -260,11 +389,11 @@ The envelope and the state graph are different things and are easily conflated:
 | Dedup | fingerprint in flight for this run | **terminal** — thread reply | no second DM |
 | Dedup | not in flight | Fix cache (N8) | |
 | Fix cache | hit | A4 | no embedding, no vector query, no LLM |
-| Fix cache | miss | Verdict cache (N9) | |
-| Verdict cache | hit, verdict ≠ `no_match` | A4 | skips embed + query, reuses candidates |
-| Verdict cache | hit, verdict = `no_match` | A3 | already known not to match |
-| Verdict cache | miss | A2 (N10) | |
-| A2 | `combined_score ≥ 0.90` and verdict ≠ `no_match` | A4 | adopt candidate `fix_text` |
+| Fix cache | miss | Match result cache (N9) | |
+| Match result cache | hit, match_result ≠ `no_match` | A4 | skips embed + query, reuses candidates |
+| Match result cache | hit, match_result = `no_match` | A3 | already known not to match |
+| Match result cache | miss | A2 (N10) | |
+| A2 | `combined_score ≥ 0.90` and match_result ≠ `no_match` | A4 | adopt candidate `fix_text` |
 | A2 | below threshold, or `no_match` | A3 (N11) | |
 | A2 | Chroma or Ollama unavailable | A3 | degraded path; health alert raised |
 | A2 | top-2 within `CONTEXT_DISAMBIG_BAND` | A4 → disambiguation hold | |
@@ -351,12 +480,12 @@ and unused or over-used values are visible.
 | **Log Fetcher** | N3 | `pipeline_info` (from Envelope): `project_id`, `pipeline_id` | Call `fetch_pipeline_jobs(project_id, pipeline_id)` → list of jobs; for each failed job call `fetch_job_log_tail(project_id, job_id)`; apply `should_save_job_log()` filter; collect `job_names` list | `all_logs: List[{job_id, job_name, details, log_text}]` (one entry per failed job); add `job_names` list to `pipeline_info` in Envelope | N4 (iterates over list) | Retry up to `RETRY_ATTEMPTS` with exponential backoff; on exhaustion → dead-letter + DevOps alert |
 | **Secret Redactor** | N4 | `all_logs` list (from N3); iterates over each entry | For each entry: regex-strip `PRIVATE-TOKEN:`, `password=`, credential URLs, JWT strings, API keys from `log_text` | `all_logs_redacted: List[{job_id, job_name, details, log_text_redacted}]` — same structure, `log_text` replaced | N5 | Log warning per entry with line count redacted; never raise — redaction failure replaces `log_text` with empty string, not drop |
 | **Log Error Extractor** | N5 | `all_logs_redacted` list (from N4); iterates over each entry | For each entry: pattern-match `log_text_redacted` against `error_patterns.json`; adaptive context windows (≤50 matches: 50b/10a, ≤150: 10b/5a, >150: 5b/2a); deduplicate overlapping windows; concatenate all entries into flat list | `error_sections: List[str]` (all error windows across all jobs, flat) | N6 | Empty result for all jobs → log "no errors found" + skip to monitoring update |
-| **Agent A1 — Error Summarizer** | N6 | `error_sections: List[str]` (from N5); `pipeline_info` dict (from N2, including `job_names`) | ① `error_category` from `error_patterns.json` labels (majority across sections); ② `stage_type` from `job_names[0]` substring match (build/test/package/deploy); ③ `product_team = pipeline_info.get("repo", "unknown")` — repo name used directly, no lookup file; ④ clean concatenated error text (strip timestamps / line-numbers / paths / versions / trace IDs); ⑤ SHA-256 `fingerprint`; ⑥ INSERT partial `pipeline_events` row → get `request_id`; ⑦ assemble Analysis Envelope | Populated `AnalysisEnvelope` (`request_id`, `pipeline_info`, `fingerprint`, `error_text_clean`, `context_block`, `is_infra`, `request_id`; `fix_text`/`verdict`/`ranked_candidates` all `None`) | N7 | Pattern file missing at runtime → alert + use generic category; partial DB write failure → log + continue with `request_id=None` |
+| **Agent A1 — Error Summarizer** | N6 | `error_sections: List[str]` (from N5); `pipeline_info` dict (from N2, including `job_names`) | ① `error_category` from `error_patterns.json` labels (majority across sections); ② `stage_type` from `job_names[0]` substring match (build/test/package/deploy); ③ `product_team = pipeline_info.get("repo", "unknown")` — repo name used directly, no lookup file; ④ clean concatenated error text (strip timestamps / line-numbers / paths / versions / trace IDs); ⑤ SHA-256 `fingerprint`; ⑥ INSERT partial `pipeline_events` row → get `request_id`; ⑦ assemble Analysis Envelope | Populated `AnalysisEnvelope` (`request_id`, `pipeline_info`, `fingerprint`, `error_text_clean`, `context_block`, `is_infra`, `request_id`; `fix_text`/`match_result`/`ranked_candidates` all `None`) | N7 | Pattern file missing at runtime → alert + use generic category; partial DB write failure → log + continue with `request_id=None` |
 | **Dedup Check** | N7 | Envelope: `fingerprint`, `pipeline_info.pipeline_id` (as `pipeline_run_id`) | Redis GET `run_dedup:<pipeline_run_id>:<fingerprint>` (1h TTL); value is `slack_message_ts` of first delivery | Hit → set `envelope.slack_message_ts = cached_ts`, route to THREADREPLY; miss → continue | THREADREPLY (hit) or N8 (miss) | Redis unavailable → treat as miss; never block on cache failure |
 | **Thread Reply** | THREADREPLY | Envelope: `slack_message_ts`, `pipeline_info` (stage name), `error_text_clean` | Post thread reply to existing Slack message at `slack_message_ts`; UPDATE `bfa_stats.db.pipeline_events` SET `failed_jobs = failed_jobs+1` if `request_id` exists; INSERT `delivery_records` with `slack_message_ts` reference | Thread reply posted; `pipeline_events` row updated (partial phase-2 — no `final_status` write since event is still in-flight) | Terminal | SlackApiError → log and skip; DB update failure → log and skip |
 | **Fix Cache Check** | N8 | Envelope: `fingerprint` | Redis GET `fix:<fingerprint>` (30d TTL) → JSON `{fix_text, source, approved_by, fix_id}`. One lookup covers both SME-approved and AI-generated fixes; `source` says which | Envelope updated: `fix_text`, `fix_source` (`sme_cache` or `ai_cache` from `source`), `approved_by` when `source=sme` | N12a on hit; N9 on miss | Redis unavailable → skip to N9 |
-| **Verdict Cache Check** | N9 | Envelope: `fingerprint`, `context_block` (`product_team`, `stage_type`, `error_category`) | Compute `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name (must match formula used by N10 writer); Redis GET `verdict:<kb_version>:<fingerprint>:<ctx_hash>` (30d TTL) → JSON `{verdict, ranked_candidates, top_candidate}` | Envelope updated: `verdict`, `ranked_candidates`, `top_candidate`, `fix_source="verdict_cache"`; `fix_text` from `top_candidate.fix_text` if verdict ≠ `no_match` | N12a (match hit); N11 (no_match hit — `ranked_candidates` already in envelope); N10 (miss) | Redis unavailable → skip to N10 |
-| **Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_text_clean`, `context_block`, `fingerprint`); `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `SIMILARITY_THRESHOLD=0.90` | ① Embed `error_text_clean` via Ollama HTTP (granite-embedding); ② Chroma cosine query top-K; ③ For each: fetch context labels from `bfa_kb.db`; compute `context_score = matching_labels / 3`; compute `combined_score`; ④ Sort by `combined_score`; ⑤ Assign verdict; ⑥ Redis SET `verdict:<fp>:<ctx_hash>` 7d; ⑦ INSERT `request_telemetry` | Envelope updated with `verdict`, `ranked_candidates`, `top_candidate`, `fix_text` | N12a (match); N11 (no_match) | Chroma/Ollama unavailable → skip to N11 + fire alert |
+| **Match Result Cache Check** | N9 | Envelope: `fingerprint`, `context_block` (`product_team`, `stage_type`, `error_category`) | Compute `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name (must match formula used by N10 writer); Redis GET `match:<kb_version>:<fingerprint>:<ctx_hash>` (30d TTL) → JSON `{match_result, ranked_candidates, top_candidate}` | Envelope updated: `match_result`, `ranked_candidates`, `top_candidate`, `fix_source="match_cache"`; `fix_text` from `top_candidate.fix_text` if match_result ≠ `no_match` | N12a (match hit); N11 (no_match hit — `ranked_candidates` already in envelope); N10 (miss) | Redis unavailable → skip to N10 |
+| **Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_text_clean`, `context_block`, `fingerprint`); `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `SIMILARITY_THRESHOLD=0.90` | ① Embed `error_text_clean` via Ollama HTTP (granite-embedding); ② Chroma cosine query top-K; ③ For each: fetch context labels from `bfa_kb.db`; compute `context_score = matching_labels / 3`; compute `combined_score`; ④ Sort by `combined_score`; ⑤ Assign match_result; ⑥ Redis SET `match:<fp>:<ctx_hash>` 7d; ⑦ INSERT `request_telemetry` | Envelope updated with `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` | N12a (match); N11 (no_match) | Chroma/Ollama unavailable → skip to N11 + fire alert |
 | **Agent A3 — Solution Synthesizer** | N11 | Envelope (`error_text_clean`, `context_block`, `pipeline_info`) | ① Domain RAG: embed error text, query `domain_rag` Chroma collection, retrieve top snippet; ② Assemble LLM prompt (error text + context_block + repo + branch + infra overview + RAG snippet); ③ Call LLM (OpenWebUI); ④ Redis SET `fix:<fingerprint>` `source=ai` 30d (never overwrites an `sme` entry) | Envelope updated with `fix_text`, `fix_source="llm_generated"` | N12a | LLM fail → send "unable to analyze" + email + Slack to DevOps + write dead-letter; never silently discard |
 | **Forbidden Text Gate** | N12a | Envelope (`fix_text`) | Check `fix_text` against `FORBIDDEN_TEXT_PATTERNS` env var list | Pass or match | N12b (pass); A4 SME warning route (match) | Config missing → log warning, treat as empty list (never block delivery) |
 | **Infrastructure Gate** | N12b | Envelope (`is_infra`) | Check `is_infra` flag | Pass or infrastructure | N12c (pass); A4 DevOps route (infra) | — |
@@ -466,7 +595,7 @@ and should not be conflated:
 `request_telemetry` is the table that makes the KPI page and any tuning possible. Without
 it, questions like "what fraction of answers came from cache", "is the 0.90 threshold
 right", "what is this costing per pipeline", and "how often does A2 decline" are all
-unanswerable. It records the decision path (`fix_source`, `verdict`, `cache_tier_hit`), the
+unanswerable. It records the decision path (`fix_source`, `match_result`, `cache_tier_hit`), the
 scoring detail (`vector_similarity`, `context_score`, `combined_score`,
 `a2_candidate_count`), the cost and latency (`llm_cost_estimate`, `request_latency_ms`,
 `domain_rag_used`), and the classification labels used for grouping.
@@ -508,14 +637,14 @@ CREATE INDEX IF NOT EXISTS idx_pe_created_at  ON pipeline_events(created_at);
 
 CREATE TABLE IF NOT EXISTS request_telemetry (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    request_id   TEXT    REFERENCES pipeline_events(request_id),   -- UUID, minted at N1
+    request_id   TEXT    REFERENCES pipeline_events(request_id),   -- UUID, generated at N1
     fingerprint         TEXT,
     step_name           TEXT,
     -- ── Analysis outcome ────────────────────────────────────────────────────
     fix_source          TEXT    CHECK(fix_source IN (
-                            'sme_cache','ai_cache','verdict_cache',
+                            'sme_cache','ai_cache','match_cache',
                             'vector_db','llm_generated','no_match')),
-    verdict             TEXT    CHECK(verdict IN (
+    match_result             TEXT    CHECK(match_result IN (
                             'exact_match','applicable_with_adjustments',
                             'partial','no_match')),
     -- ── Scoring detail ──────────────────────────────────────────────────────
@@ -523,7 +652,7 @@ CREATE TABLE IF NOT EXISTS request_telemetry (
     combined_score      REAL,
     context_score       REAL,
     a2_candidate_count  INTEGER,            -- NEW: Chroma candidates evaluated — KB coverage signal
-    cache_tier_hit      TEXT,               -- NEW: sme|ai|verdict|none — cache effectiveness
+    cache_tier_hit      TEXT,               -- NEW: sme|ai|match_result|none — cache effectiveness
     -- ── Cost / latency ──────────────────────────────────────────────────────
     llm_cost_estimate   REAL,
     request_latency_ms  INTEGER,
@@ -637,25 +766,25 @@ Redis is a **cache only** — never a source of truth. Every key has an explicit
 every key is derived from the fingerprint rather than from raw error text.
 
 The five keys serve genuinely different purposes; the distinction that matters most is that
-`fix:<fp>` caches **an answer** while `verdict:...` caches **a computation**, which is why
+`fix:<fp>` caches **an answer** while `match:...` caches **a computation**, which is why
 they cannot merge.
 
 | Key | What it is for | Value | TTL | Written by | Read by |
 |---|---|---|---|---|---|
 | `fix:<fingerprint>` | **Answer cache.** The error has already been solved — serve it and skip retrieval and the LLM entirely. Merged SME + AI; `source` says which. Precedence is a *write* rule: an SME approval always overwrites, an AI result writes only into an empty or `ai` slot | `{fix_text, source: sme\|ai, approved_by, fix_id}` | 30 d | A3 (`ai`), KB API (`sme`) | N8 |
-| `verdict:<kb_version>:<fingerprint>:<ctx_hash>` | **Computation cache.** Not an answer — the *candidate list and scores* A2 produced. A hit skips the embedding call and the Chroma query but still runs the routing decision. `ctx_hash` is required because the same error in a different product or stage ranks candidates differently | `{verdict, ranked_candidates, top_candidate}` | 30 d | A2 | N9 |
+| `match:<kb_version>:<fingerprint>:<ctx_hash>` | **Computation cache** (computed once, reused). Not an answer — the *candidate list and scores* A2 produced. A hit skips the embedding call and the Chroma query but still runs the routing decision. `ctx_hash` is required because the same error in a different product or stage ranks candidates differently | `{match_result, ranked_candidates, top_candidate}` | 30 d | A2 | N9 |
 | `run_dedup:<pipeline_id>:<fingerprint>` | **In-flight suppression.** One dependency error failing build, test and package must produce one analysis and one DM, not three. Value is the first delivery's message timestamp so later stages become thread replies | `<slack_message_ts>` | 1 h | A4 | N7 |
 | `disambig_pending:<fingerprint>` | **Held delivery.** The top two candidates scored too close to choose between; delivery pauses and the envelope is parked here until an SME picks one, at which point A4 resumes | `{candidate_0, candidate_1, request_id, envelope_json}` | 24 h | A4 | KB approve handler |
 | `thread_map:<channel_id>:<message_ts>` | **Reverse lookup.** Given a Slack thread, identify which fix it concerns — needed when a correction arrives as a thread reply | `<fix_id>` | 30 d | A4 | Slack connector |
-| `kb_version` | **Invalidation counter.** A plain integer, `INCR`-ed on every approve, edit, and discard. Because it forms part of the verdict key, one increment orphans every cached verdict at once — no key scanning, no per-key deletes, and a uniform 30-day TTL becomes safe | integer | none | KB API | A2, N9 |
+| `kb_version` | **Invalidation counter.** A plain integer, `INCR`-ed on every approve, edit, and discard. Because it forms part of the match_result key, one increment orphans every cached match_result at once — no key scanning, no per-key deletes, and a uniform 30-day TTL becomes safe | integer | none | KB API | A2, N9 |
 
-**Why a uniform 30-day TTL is safe.** A verdict references candidates an SME may since have
+**Why a uniform 30-day TTL is safe.** A match_result references candidates an SME may since have
 edited or discarded, which would normally force a short TTL. `kb_version` removes that
-coupling: any knowledge-base change makes every previously written verdict key unreachable,
+coupling: any knowledge-base change makes every previously written match_result key unreachable,
 so stale entries can never be read and simply expire unused.
 
 **Loss behaviour.** Every key can be lost without correctness impact — a missing `fix:<fp>`
-costs a vector query, a missing verdict costs an embed plus query, a missing `run_dedup`
+costs a vector query, a missing match_result costs an embed plus query, a missing `run_dedup`
 costs a duplicate message, a missing `thread_map` costs a thread association. Only
 `disambig_pending` loss is user-visible: the held delivery must be re-triggered from the
 dashboard.
@@ -680,7 +809,7 @@ Chroma fix_embeddings
 
 Redis
   fix:<fingerprint> ──────────────► fixes.fingerprint (lookup key)
-  verdict:<kb_ver>:<fp>:<ctx> ─────► (transient; backed by A2 recomputation)
+  match_result:<kb_ver>:<fp>:<ctx> ─────► (transient; backed by A2 recomputation)
   run_dedup:<run_id>:<fp> ─────────► (transient; 1h TTL)
   disambig_pending:<fp> ───────────► (transient; 24h TTL)
 ```
@@ -732,8 +861,8 @@ and the derived `fingerprint` are carried on the envelope, not persisted here.
 |---|---|---|---|---|
 | Redis `run_dedup:<pipeline_id>:<fp>` | R | `pipeline_id`, `fingerprint` | `slack_message_ts` if in flight | treat as miss; continue |
 | Redis `fix:<fp>` | R | `fingerprint` | `{fix_text, source, approved_by, fix_id}` | treat as miss; continue to N9 |
-| Redis `kb_version` | R | — | integer counter | assume `0`; verdict lookup simply misses |
-| Redis `verdict:<kb_version>:<fp>:<ctx_hash>` | R | `fingerprint`, `ctx_hash`, `kb_version` | `{verdict, ranked_candidates, top_candidate}` | treat as miss; continue to N10 |
+| Redis `kb_version` | R | — | integer counter | assume `0`; match_result lookup simply misses |
+| Redis `match:<kb_version>:<fp>:<ctx_hash>` | R | `fingerprint`, `ctx_hash`, `kb_version` | `{match_result, ranked_candidates, top_candidate}` | treat as miss; continue to N10 |
 
 A hit at `fix:<fp>` short-circuits both the vector query and the LLM.
 
@@ -741,10 +870,10 @@ A hit at `fix:<fp>` short-circuits both the vector query and the LLM.
 
 | Store | R/W | Fields in | Fields out | On failure |
 |---|---|---|---|---|
-| Chroma `fix_embeddings` | R | query vector of `error_text_clean`, `n_results = VECTOR_TOP_K`, optional `sub_category` pre-filter | `id`, `document` (`fix_text`), `metadata{fingerprint, fix_id, product_team, stage_type, error_category}`, `distance` | `VectorUnavailable` → verdict `no_match`, proceed to A3, raise health alert |
+| Chroma `fix_embeddings` | R | query vector of `error_text_clean`, `n_results = VECTOR_TOP_K` (default 10; tune within 3–20, see §1.2), optional `sub_category` pre-filter | `id`, `document` (`fix_text`), `metadata{fingerprint, fix_id, product_team, stage_type, error_category}`, `distance` | `VectorUnavailable` → match_result `no_match`, proceed to A3, raise health alert |
 | SQLite `fixes` | R | `fix_id[]` from candidate metadata | `product_team`, `stage_type`, `error_category`, `status`, `hit_count` | treat candidate labels as unmatched (context score 0) |
-| Redis `verdict:<kb_version>:<fp>:<ctx_hash>` | W | verdict payload, TTL 30d | — | log and continue |
-| SQLite `request_telemetry` | W | `request_id`, `fingerprint`, `verdict`, `vsim`, `context_score`, `combined_score`, `latency_ms` | — | log and continue |
+| Redis `match:<kb_version>:<fp>:<ctx_hash>` | W | match_result payload, TTL 30d | — | log and continue |
+| SQLite `request_telemetry` | W | `request_id`, `fingerprint`, `match_result`, `vsim`, `context_score`, `combined_score`, `latency_ms` | — | log and continue |
 
 Candidates whose `status` is not `active` are excluded before scoring.
 
@@ -786,12 +915,12 @@ whether raised from the dashboard or from the Slack connector.
 | **Deprecate / discard** | SQLite `fixes` | W | `fix_id` → `status='discarded'` | — |
 | | Chroma | W | delete `id=fix-<fp>` | — |
 | | Redis | W | delete `fix:<fp>`; **INCR `kb_version`** | — |
-| **Feedback** | SQLite `feedback_events` | W | `fix_id`, `request_id`, `actor`, `verdict` (`helpful`\|`unhelpful`) | — |
+| **Feedback** | SQLite `feedback_events` | W | `fix_id`, `request_id`, `actor`, `response` (`helpful`\|`unhelpful`) | — |
 | | SQLite `fixes` | W | `helpful_count` / `unhelpful_count` increment; at 3 unhelpful set `needs_review` | — |
 
 **Write order and authority.** SQLite first, then Chroma, then Redis. `bfa_kb.db` is
 authoritative: Chroma is rebuildable with `rebuild_chroma.py`, and Redis is self-healing on
-TTL expiry. A single `INCR kb_version` replaces per-key verdict invalidation.
+TTL expiry. A single `INCR kb_version` replaces per-key match_result invalidation.
 
 ### Phase 8 — Maintenance
 
@@ -817,10 +946,10 @@ The same accesses viewed per store, as a cross-check that nothing is orphaned.
 | `fix:<fp>` | W | 5 | `source=ai`, never overwrites an `sme` entry |
 | `fix:<fp>` | W | 7 | `source=sme` on approve/edit |
 | `fix:<fp>` | delete | 7 | on discard |
-| `kb_version` | R | 3 | part of the verdict key |
+| `kb_version` | R | 3 | part of the match_result key |
 | `kb_version` | INCR | 7 | every approve/edit/discard |
-| `verdict:<kb_version>:<fp>:<ctx>` | R | 3 | memoised A2 result |
-| `verdict:<kb_version>:<fp>:<ctx>` | W | 4 | TTL 30d |
+| `match:<kb_version>:<fp>:<ctx>` | R | 3 | A2 result, computed once and reused |
+| `match:<kb_version>:<fp>:<ctx>` | W | 4 | TTL 30d |
 | `disambig_pending:<fp>` | R/W | 6, 7 | holds delivery state |
 | `thread_map:<channel>:<ts>` | R/W | 6, 7 | maps thread to fix |
 
@@ -841,7 +970,7 @@ The same accesses viewed per store, as a cross-check that nothing is orphaned.
 |---|---|---|---|
 | `pipeline_events` | W | 1 | one row per webhook, success **and** failure, keyed by `request_id` |
 | `pipeline_events` | W | 2, 6 | phase-1 enrichment, then phase-2 completion |
-| `request_telemetry` | W | 2, 4, 5 | fingerprint, verdict, scores, latency, cost |
+| `request_telemetry` | W | 2, 4, 5 | fingerprint, match_result, scores, latency, cost |
 | `fixes` | R | 4, 6 | candidate labels; provenance for the DM |
 | `fixes` | W | 6 | `hit_count`, `last_seen` |
 | `fixes` | W | 7 | approve, edit, deprecate |
@@ -853,7 +982,7 @@ The same accesses viewed per store, as a cross-check that nothing is orphaned.
 
 **KPI derivation.** The headline figure — *of N failed pipelines, M received a solution* —
 comes from joining `pipeline_events` (phase 1, both outcomes) to `request_telemetry` and
-`delivery_records` on `request_id`. Because `request_id` is minted before any I/O, the
+`delivery_records` on `request_id`. Because `request_id` is generated before any I/O, the
 denominator is complete even when a later stage fails.
 
 ---
@@ -1187,8 +1316,8 @@ All logs are structured JSON (BFA-LOG-1000). No `print()` statements in operatio
   "request_id": "req-uuid-here",
   "pipeline_id": "p001",
   "fingerprint": "e3b0c44...",
-  "message": "A2 verdict computed",
-  "extra": { "verdict": "exact_match", "combined_score": 0.94, "candidate_count": 5, "latency_ms": 312 }
+  "message": "A2 match_result computed",
+  "extra": { "match_result": "exact_match", "combined_score": 0.94, "candidate_count": 5, "latency_ms": 312 }
 }
 ```
 
@@ -1258,9 +1387,9 @@ All logs are structured JSON (BFA-LOG-1000). No `print()` statements in operatio
 | N8 (SME Cache miss) | `bfa.analyzer` | DEBUG | SME cache miss | `request_id`, `fingerprint` | Yes |
 | N9 (AI Cache hit) | `bfa.analyzer` | DEBUG | AI cache hit | `request_id`, `fingerprint` | Yes |
 | N9 (AI Cache miss) | `bfa.analyzer` | DEBUG | AI cache miss | `request_id`, `fingerprint` | Yes |
-| N9 (Verdict hit) | `bfa.analyzer` | DEBUG | Verdict cache hit | `request_id`, `fingerprint`, `ctx_hash`, `verdict` | Yes |
-| N9 (Verdict miss) | `bfa.analyzer` | DEBUG | Verdict cache miss | `request_id`, `fingerprint`, `ctx_hash` | Yes |
-| N10 (A2 result) | `bfa.agent.a2` | INFO | A2 verdict computed | `request_id`, `fingerprint`, `verdict`, `combined_score`, `vsim`, `context_score`, `candidate_count`, `latency_ms` | Yes |
+| N9 (Match result hit) | `bfa.analyzer` | DEBUG | Match result cache hit | `request_id`, `fingerprint`, `ctx_hash`, `match_result` | Yes |
+| N9 (Match result miss) | `bfa.analyzer` | DEBUG | Match result cache miss | `request_id`, `fingerprint`, `ctx_hash` | Yes |
+| N10 (A2 result) | `bfa.agent.a2` | INFO | A2 match_result computed | `request_id`, `fingerprint`, `match_result`, `combined_score`, `vsim`, `context_score`, `candidate_count`, `latency_ms` | Yes |
 | N10 (A2 skip) | `bfa.agent.a2` | WARNING | A2 skipped — degradation ladder | `request_id`, `fingerprint`, `reason`, `degradation_ladder_step` | Yes |
 | N11 (A3 start) | `bfa.agent.a3` | INFO | LLM call started | `request_id`, `fingerprint`, `model`, `prompt_token_count` | Yes |
 | N11 (A3 result) | `bfa.agent.a3` | INFO | LLM call completed | `request_id`, `fingerprint`, `completion_token_count`, `cost_estimate_usd`, `latency_ms` | Yes |
@@ -1311,10 +1440,10 @@ All logs are structured JSON (BFA-LOG-1000). No `print()` statements in operatio
 | `bfa_llm_call_seconds` | Histogram | `model` |
 | `bfa_llm_failures_total` | Counter | `reason` |
 | `bfa_chroma_search_seconds` | Histogram | — |
-| `bfa_cache_hits_total` | Counter | `cache_type` (sme, ai, verdict) |
+| `bfa_cache_hits_total` | Counter | `cache_type` (sme, ai, match_result) |
 | `bfa_cache_misses_total` | Counter | `cache_type` |
 | `bfa_slack_messages_total` | Counter | `destination`, `status` (delivered, failed) |
-| `bfa_analysis_by_source_total` | Counter | `source` (sme_cache, ai_cache, verdict_cache, vector_db, llm_generated, no_match) |
+| `bfa_analysis_by_source_total` | Counter | `source` (sme_cache, ai_cache, match_cache, vector_db, llm_generated, no_match) |
 | `bfa_feedback_total` | Counter | `sentiment` (positive, negative) |
 | `bfa_dedup_hits_total` | Counter | — |
 | `bfa_disambig_triggered_total` | Counter | — |
@@ -1350,7 +1479,7 @@ Code audit of both services before merge. Every gap and issue is listed here so 
 | Log Error Extractor | N5 | `log_error_extractor.py` | Named logger, section count | No bucket breakdown at DEBUG; no per-pattern match detail |
 | Agent A1 | N6 | `internal_analyzer.py` | **None — completely absent** | No fingerprint logged; no classification result; no envelope creation; no request_id |
 | Dedup / Cache checks | N7–N9 | `internal_analyzer.py` | **None — completely absent** | All three cache tiers and dedup check produce zero log output; cache hit/miss invisible |
-| Agent A2 | N10 | `vector_db.py` | Named logger `vector_db` + root logger (mixed) | `"=== Best Similarity Score: X ==="` at INFO on every lookup — noisy, unparseable; mixed logger usage makes filtering impossible; no verdict logged; no `request_id` |
+| Agent A2 | N10 | `vector_db.py` | Named logger `vector_db` + root logger (mixed) | `"=== Best Similarity Score: X ==="` at INFO on every lookup — noisy, unparseable; mixed logger usage makes filtering impossible; no match_result logged; no `request_id` |
 | Agent A3 | N11 | `resolver_agent.py` | **None — completely absent** | **`print()` dumps entire LLM prompt** (full error text + 6000-char infra overview) to stdout on every LLM call — severe data exposure; no LLM success/fail log; no cache write log |
 | Gates (N12a/b/c) | N12a–c | `analyzer_service.py` | **None — completely absent** | All three gate decisions invisible in logs |
 | Agent A4 | N12 | `analyzer_service.py` | Partial — `basicConfig` | **Developer email addresses and Slack user IDs logged at INFO** — PII; no `delivery_method`; no `fix_confidence` update log |
@@ -1528,7 +1657,7 @@ Node coverage (node_entry detected / scenarios that traversed node):
   N7  (Dedup)            :   0/100  ✗  NO LOGS — sentinel missing
   N8  (SME Cache)        :   0/100  ✗  NO LOGS — sentinel missing
   N9  (AI Cache)         :   0/100  ✗  NO LOGS — sentinel missing
-  N9 (Verdict Cache)   :   0/100  ✗  NO LOGS — sentinel missing
+  N9 (Match Result Cache)   :   0/100  ✗  NO LOGS — sentinel missing
   N10 (A2)               :  72/72   ✓  (28 took cache path — correct)
   N11 (A3)               :  18/18   ✓
   N12a (Forbidden Gate)  :   5/5    ✓
@@ -1542,7 +1671,7 @@ Action: add node_entry sentinel to these nodes before next run.
 ──────────────────────────────────────────────────────────────────────
 ```
 
-The coverage report directly produces the list of nodes that need logging added. It also validates that nodes correctly skipped for cache-hit paths (e.g. N10 only shows 72/100 because 28 scenarios hit the SME/AI/Verdict cache — this is correct behaviour, not a gap).
+The coverage report directly produces the list of nodes that need logging added. It also validates that nodes correctly skipped for cache-hit paths (e.g. N10 only shows 72/100 because 28 scenarios hit the SME/AI/Match result cache — this is correct behaviour, not a gap).
 
 ---
 
@@ -1557,7 +1686,7 @@ The coverage report directly produces the list of nodes that need logging added.
 | BFA-TEST-1040 | End-to-end (docker-compose) | Simulated GitLab; record/replay mock LLM; mock Slack; real Redis; real Chroma; covers: approve → Chroma upsert → SME cache write, degradation-ladder chaos (kill Redis, Chroma, Ollama one by one), disambiguation flow, infrastructure routing, dead-letter replay, two-phase pipeline_events write |
 | BFA-TEST-1050 | Evaluation harness | Routing accuracy ≥ 95%; false-match rate 0%; recall ≥ 90%; cost/latency vs forecast; CI mode (mock LLM, every PR) + nightly mode (real LLM) |
 | BFA-TEST-1060 | Component test | Context-matched fixes score higher than non-matching for same fingerprint; swapping labels inverts ranking; 100% pass required |
-| BFA-TEST-1070 | Regression corpus | Curated tricky pairs: MVP-1 production incident, path-noise, version-bump, cross-product confusion, context-ranking inversion, verdict cache invalidation |
+| BFA-TEST-1070 | Regression corpus | Curated tricky pairs: MVP-1 production incident, path-noise, version-bump, cross-product confusion, context-ranking inversion, match result cache invalidation |
 | BFA-TEST-1080 | Regression & replay harness (`replay.py`) | See §9.1 below for full spec |
 | BFA-PP-1210 | Component test (real vectors) | Detects bugs in cosine setup, threshold calibration, ID generation, cache-key behavior — no mocks |
 
@@ -1612,7 +1741,7 @@ Successfully replayed files are removed from the dead-letter directory. Still-fa
 **Corpus format (one line per scenario):**
 
 ```jsonl
-{"id":"r001","desc":"npm install failure — dependency, build stage, A2 exact match","input":{"raw_log":"npm ERR! code ENOTFOUND\nnpm ERR! errno ENOTFOUND registry.npmjs.org","repo":"packetlogic2","branch":"main","pipeline_id":"p-test-001","job_name":"build"},"expected":{"N6":{"error_category":"dependency","stage_type":"build","product_team":"packetlogic2","is_infra":false},"path":"A2","N10":{"verdict":"exact_match","fix_id":7},"N12":{"fix_source":"vector_db"}}}
+{"id":"r001","desc":"npm install failure — dependency, build stage, A2 exact match","input":{"raw_log":"npm ERR! code ENOTFOUND\nnpm ERR! errno ENOTFOUND registry.npmjs.org","repo":"packetlogic2","branch":"main","pipeline_id":"p-test-001","job_name":"build"},"expected":{"N6":{"error_category":"dependency","stage_type":"build","product_team":"packetlogic2","is_infra":false},"path":"A2","N10":{"match_result":"exact_match","fix_id":7},"N12":{"fix_source":"vector_db"}}}
 {"id":"r002","desc":"docker pull failure — infra route to devops channel","input":{"raw_log":"docker.errors.APIError: 500 Server Error","repo":"csd-core","branch":"main","pipeline_id":"p-test-002","job_name":"package"},"expected":{"N6":{"error_category":"infrastructure","stage_type":"package","is_infra":true},"path":"A4DEVOPS","N12":{"fix_source":"sme_cache"}}}
 ```
 
@@ -1621,7 +1750,7 @@ Successfully replayed files are removed from the dead-letter directory. Still-fa
 | Value | Meaning |
 |---|---|
 | `FIX_CACHE` | Hit at N8 (merged fix cache); `source` distinguishes sme from ai |
-| `VERDICT_CACHE` | Hit at N9, delivered from verdict cache |
+| `MATCH_CACHE` | Hit at N9, delivered from match result cache |
 | `A2` | Reached N10, A2 found a match |
 | `A3` | Reached N11, LLM generated a fix |
 | `A4DEVOPS` | Infra gate triggered, routed to devops channel |
@@ -1641,7 +1770,7 @@ Successfully replayed files are removed from the dead-letter directory. Still-fa
 @dataclass
 class ReplayCapture:
     node_outputs: dict    # {"N6": {error_category, stage_type, product_team, is_infra},
-                          #  "N10": {verdict, combined_score, fix_id},
+                          #  "N10": {match_result, combined_score, fix_id},
                           #  "N12": {fix_source}, ...}
     path_taken: str       # actual path taken: SME_CACHE / A2 / A3 / A4DEVOPS / ...
     db_writes: list       # [{table, operation, fields}] — what WOULD have been written
@@ -1670,15 +1799,15 @@ Reads are never intercepted — real Redis, real Chroma. The envelope already ca
 ```
 [t] r001  PASS  N6✓ path=A2✓ N10✓ N12✓
 [t] r002  PASS  N6✓ path=A4DEVOPS✓ N12✓
-[t] r003  FAIL  N6✓ path=A2✓ N10✗  expected verdict=exact_match  actual=partial
+[t] r003  FAIL  N6✓ path=A2✓ N10✗  expected match_result=exact_match  actual=partial
           Log trace:
             DEBUG bfa.agent.a1  node_entry node=N6
             INFO  bfa.agent.a1  Envelope created fingerprint=e3b0.. error_category=dependency
             DEBUG bfa.analyzer  node_entry node=N8  (SME cache miss)
             DEBUG bfa.analyzer  node_entry node=N9  (AI cache miss)
-            DEBUG bfa.analyzer  node_entry node=N9 (verdict cache miss)
+            DEBUG bfa.analyzer  node_entry node=N9 (match result cache miss)
             DEBUG bfa.agent.a2  node_entry node=N10
-            INFO  bfa.agent.a2  A2 verdict computed verdict=partial combined_score=0.71
+            INFO  bfa.agent.a2  A2 match_result computed match_result=partial combined_score=0.71
             ← divergence here: expected exact_match, got partial
 [t] r004  FAIL  N6✗  expected error_category=dependency  actual=infrastructure
           Log trace:
@@ -1696,7 +1825,7 @@ Failed:   6   (6.0%)
 
 Failures by node:
   N6  (A1 classification)  : 2
-  N10 (A2 verdict)         : 3
+  N10 (A2 match_result)         : 3
   N12 (fix_source)         : 1
 
 Failures by path:
@@ -1770,11 +1899,11 @@ run can never be confused with production traffic and never depends on it.
 | Group | Metric | Gate |
 |---|---|---|
 | Routing | accuracy vs `expected.path`; confusion matrix of actual vs expected | ≥ 95% |
-| Routing | source distribution — fix cache, verdict cache, vector, A2-adjusted, A3, unable | report only |
-| Routing | verdict distribution — exact / adjusted / partial / no_match | report only |
+| Routing | source distribution — fix cache, match result cache, vector, A2-adjusted, A3, unable | report only |
+| Routing | match-result distribution — exact / adjusted / partial / no_match | report only |
 | **Fingerprint** | **collapse rate** — same error across different repos, branches and versions yields one fingerprint | **100%** |
 | **Fingerprint** | **collision rate** — genuinely different errors never share a fingerprint | **0%** |
-| **Cache** | hit rate per tier (`fix:<fp>`, verdict) | report only |
+| **Cache** | hit rate per tier (`fix:<fp>`, match_result) | report only |
 | **Cache** | LLM calls avoided by cache and vector hits | report only |
 | Cost | LLM call count and estimated cost per scenario and per run | within forecast |
 | Latency | per phase — extract, A1, cache, A2, A3, A4 | within targets |
@@ -1832,14 +1961,14 @@ pipeline_info: dict          # from N2 Pipeline Extractor
 
 6. **Write pipeline_events (phase 1).** INSERT into `bfa_stats.db.pipeline_events` with all known fields (pipeline_id, project_id, repo, branch, commit_sha, triggered_by, triggered_by_email, product_team, total_jobs, failed_jobs). `final_status` and `total_duration_ms` are NULL at this point — filled by A4 phase 2. The row is keyed by `request_id` (no autoincrement id is used).
 
-7. **Assemble Analysis Envelope.** Create `AnalysisEnvelope` with all fields populated from above. `fix_text`, `fix_source`, `verdict`, `ranked_candidates`, `top_candidate` all start as `None` / default values — filled by downstream nodes.
+7. **Assemble Analysis Envelope.** Create `AnalysisEnvelope` with all fields populated from above. `fix_text`, `fix_source`, `match_result`, `ranked_candidates`, `top_candidate` all start as `None` / default values — filled by downstream nodes.
 
-**Output:** `AnalysisEnvelope` (fully populated except fix_text/verdict/candidates)
+**Output:** `AnalysisEnvelope` (fully populated except fix_text/match_result/candidates)
 
 **Error handling:**
 - `error_patterns.json` pattern match fails at runtime → log alert, set `error_category = "unknown"`, continue
 - `pipeline_info.repo` missing or empty → set `product_team = "unknown"`, continue
-- `pipeline_events` INSERT fails → log error and continue; `request_id` is unaffected because it is minted at N1, so the phase-2 update and all telemetry remain correlatable
+- `pipeline_events` INSERT fails → log error and continue; `request_id` is unaffected because it is generated at N1, so the phase-2 update and all telemetry remain correlatable
 
 **Stats writes:** `bfa_stats.db.pipeline_events` (partial INSERT, phase 1)
 
@@ -1924,7 +2053,7 @@ error_text_clean ────────┬────────────
        ┌─────────────────┴──────────┐        ┌────────┴──────────┐
        │ Redis  fix:<fp>            │        │ Chroma cosine     │
        │ Chroma row id fix-<fp>     │        │ top-K ≥ 0.90      │
-       │ in-run dedup               │        │ → A2 verdict      │
+       │ in-run dedup               │        │ → A2 match_result      │
        └────────────────────────────┘        └───────────────────┘
             STAGE 1 — exact, tried first        STAGE 2 — fuzzy, on miss only
 ```
@@ -1941,7 +2070,7 @@ blob-embedding defect.
 | Same error, same repo, later run | match | — | cache hit, milliseconds |
 | Same error, **different repo** | match — this is what layer 1 buys | — | cache hit |
 | Same error, different version numbers | match — layer 2 strips versions | — | cache hit |
-| Same root cause, **different wording** | miss | match | vector hit → A2 verdict |
+| Same root cause, **different wording** | miss | match | vector hit → A2 match_result |
 | Genuinely new error | miss | miss | A3 synthesises |
 
 A fingerprint miss therefore costs a **vector query, never a wrong answer**. The vector
@@ -2008,7 +2137,7 @@ implementation.
 
 ### 10.2 Agent A2 — Deviation Analyzer
 
-**Role:** Context-ranked vector search. Computes combined score. Assigns verdict. Caches result.
+**Role:** Context-ranked vector search. Computes combined score. Assigns match_result. Caches result.
 
 **Input:** Analysis Envelope fields: `error_text_clean`, `context_block`, `fingerprint`  
 **Config inputs:** `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `SIMILARITY_THRESHOLD=0.90`, `CONTEXT_DISAMBIG_BAND`
@@ -2037,23 +2166,23 @@ implementation.
    combined_score = VECTOR_WEIGHT * vsim + CONTEXT_WEIGHT * context_score
    ```
 
-6. **Sort and assign verdict.** Sort by `combined_score` descending. Examine top candidate:
-   - `vsim ≥ 0.90` AND `combined_score` highest → `verdict = "exact_match"`
-   - Top-2 exist AND `abs(candidates[0].combined_score - candidates[1].combined_score) ≤ CONTEXT_DISAMBIG_BAND` → `verdict = "applicable_with_adjustments"` (triggers disambiguation gate)
-   - `vsim ≥ 0.70` (but < 0.90) → `verdict = "partial"`
-   - Otherwise → `verdict = "no_match"`
+6. **Sort and assign match_result.** Sort by `combined_score` descending. Examine top candidate:
+   - `vsim ≥ 0.90` AND `combined_score` highest → `match_result = "exact_match"`
+   - Top-2 exist AND `abs(candidates[0].combined_score - candidates[1].combined_score) ≤ CONTEXT_DISAMBIG_BAND` → `match_result = "applicable_with_adjustments"` (triggers disambiguation gate)
+   - `vsim ≥ 0.70` (but < 0.90) → `match_result = "partial"`
+   - Otherwise → `match_result = "no_match"`
    
    `fix_text` is taken from `top_candidate.document` (the Chroma `document` field = latest approved fix_text).
 
-7. **Cache verdict.** `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name  
-   Redis SET `verdict:<kb_version>:<fingerprint>:<ctx_hash>` = JSON `{verdict, ranked_candidates, top_candidate}`, TTL = 30 days.  
-   **This formula is the canonical one — N9 (Verdict Cache Check) must use identical separators (`:`) and truncation (`[:16]`) to produce matching keys.**
+7. **Cache match_result.** `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name  
+   Redis SET `match:<kb_version>:<fingerprint>:<ctx_hash>` = JSON `{match_result, ranked_candidates, top_candidate}`, TTL = 30 days.  
+   **This formula is the canonical one — N9 (Match Result Cache Check) must use identical separators (`:`) and truncation (`[:16]`) to produce matching keys.**
 
-8. **Write telemetry.** INSERT `bfa_stats.db.request_telemetry` with verdict, scores, latency.
+8. **Write telemetry.** INSERT `bfa_stats.db.request_telemetry` with match_result, scores, latency.
 
-**Output:** Envelope updated with `verdict`, `ranked_candidates`, `top_candidate`, `fix_text` (if verdict ≠ no_match)
+**Output:** Envelope updated with `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` (if match_result ≠ no_match)
 
-**Degradation:** If Chroma or Ollama unavailable → skip A2 entirely, set `verdict = "no_match"`, proceed to A3. Fire health alert.
+**Degradation:** If Chroma or Ollama unavailable → skip A2 entirely, set `match_result = "no_match"`, proceed to A3. Fire health alert.
 
 ---
 
@@ -2104,7 +2233,7 @@ implementation.
 3. Send email alert to DevOps (`SMTP_USER` / `SMTP_PASSWORD`)
 4. Send Slack message to `#devops-alerts`
 5. Write event to dead-letter directory: `$DEAD_LETTER_DIR/<pipeline_id>-<timestamp>.json`
-6. INSERT `request_telemetry` with `fix_source="no_match"`, `verdict="no_match"`
+6. INSERT `request_telemetry` with `fix_source="no_match"`, `match_result="no_match"`
 7. Do NOT proceed to delivery gates — stop pipeline for this event
 
 ---
@@ -2192,8 +2321,8 @@ N14: KB REST API handler
   5. Redis SET fix:<fingerprint> with source=sme
      value = {fix_text, approved_by, fix_id}
      TTL   = 30 days
-  6. INCR kb_version                        ← orphans every stale verdict
-  7. Redis DELETE kb_version INCR             ← invalidate verdict cache
+  6. INCR kb_version                        ← orphans every stale match_result
+  7. Redis DELETE kb_version INCR             ← invalidate match result cache
   8. INSERT bfa_stats.db.sme_audit_log
      (fix_id, fingerprint, slack_user_id, action='approved', fix_text_after=fix_text)
 
@@ -2209,7 +2338,7 @@ N14: KB REST API handler
            stored_envelope.ranked_candidates = None    ← CRITICAL: clear stale
                                                          candidates so Gate 3
                                                          skips disambiguation
-           stored_envelope.verdict          = "exact_match"
+           stored_envelope.match_result          = "exact_match"
         c. Redis DELETE disambig_pending:<fingerprint>  ← delete AFTER patching
         d. Trigger async A4 delivery with patched stored_envelope
            (Gate 3 sees ranked_candidates=None → skips directly to delivery)
@@ -2435,8 +2564,8 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | 7 | Dedup Check | N7 | Envelope: `fingerprint`, `pipeline_info.pipeline_id` | Redis GET `run_dedup:<pipeline_id>:<fp>` | **Hit:** `envelope.slack_message_ts = cached_ts` → THREADREPLY; **Miss:** → N8 | THREADREPLY or N8 |
 | 7a | Thread Reply | THREADREPLY | Envelope: `slack_message_ts`, `error_text_clean`, `pipeline_info.stage name` | Post thread reply to existing Slack message; UPDATE `pipeline_events.failed_jobs+1`; INSERT `delivery_records` | Thread reply posted; DB partial update | Terminal |
 | 8 | Fix Cache Check | N8 | Envelope: `fingerprint` | Redis GET `fix:<fp>` → `{fix_text, source, approved_by, fix_id}` | **Hit:** envelope: `fix_text`, `fix_source` per `source`, `approved_by` → N12a; **Miss:** → N9 | N12a (hit) or N9 (miss) |
-| 9 | Verdict Cache Check | N9 | Envelope: `fingerprint`, `context_block.{product_team, stage_type, error_category}` | `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name; Redis GET `verdict:<kb_version>:<fp>:<ctx_hash>` | **Hit (match):** envelope: `verdict`, `ranked_candidates`, `top_candidate`, `fix_source="verdict_cache"`, `fix_text` → N12a; **Hit (no_match):** → N11; **Miss:** → N10 | N12a / N11 / N10 |
-| 10 | Agent A2 | N10 | Envelope: `error_text_clean`, `context_block`, `fingerprint`; config: `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, threshold=0.90 | Ollama embed; Chroma cosine top-K; fetch context labels from `bfa_kb.db`; compute combined_score; assign verdict; Redis SET `verdict:<fp>:<ctx_hash>` 7d; INSERT `request_telemetry` | Envelope: `verdict`, `ranked_candidates`, `top_candidate`, `fix_text` (if match), `fix_source="vector_db"` | N12a (match) or N11 (no_match) |
+| 9 | Match Result Cache Check | N9 | Envelope: `fingerprint`, `context_block.{product_team, stage_type, error_category}` | `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name; Redis GET `match:<kb_version>:<fp>:<ctx_hash>` | **Hit (match):** envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_source="match_cache"`, `fix_text` → N12a; **Hit (no_match):** → N11; **Miss:** → N10 | N12a / N11 / N10 |
+| 10 | Agent A2 | N10 | Envelope: `error_text_clean`, `context_block`, `fingerprint`; config: `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, threshold=0.90 | Ollama embed; Chroma cosine top-K; fetch context labels from `bfa_kb.db`; compute combined_score; assign match_result; Redis SET `match:<fp>:<ctx_hash>` 7d; INSERT `request_telemetry` | Envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` (if match), `fix_source="vector_db"` | N12a (match) or N11 (no_match) |
 | 11 | Agent A3 | N11 | Envelope: `error_text_clean`, `context_block`, `pipeline_info` | Domain RAG lookup; build LLM prompt; call LLM; Redis SET `fix:<fp>` `source=ai` 30d; **clear `ranked_candidates=None`** | Envelope: `fix_text`, `fix_source="llm_generated"`, `ranked_candidates=None` | N12a (success) or dead-letter (LLM fail) |
 | 11f | LLM Failure | DEADLETTER | Envelope + failure reason | Send "unable to analyze" to team channel; email DevOps; Slack #devops-alerts; write dead-letter file; INSERT `request_telemetry(fix_source="no_match")` | Dead-letter JSON on disk | Terminal (replay via `replay_failed.py`) |
 
@@ -2453,7 +2582,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 
 | Step | Action | Trigger | Inputs | Writes (in order) | Outputs | Next |
 |---|---|---|---|---|---|---|
-| A | Approve | `POST /api/kb/approve` (Slack service or dashboard) | `fingerprint`, `error_text_clean`, `fix_text`, `approved_by`, `context`, `request_id` | ① `bfa_kb.db.fixes` INSERT/UPDATE + `fix_revisions` INSERT; ② Chroma upsert; ③ Redis SET `fix:<fp>` `source=sme`; ④ INCR `kb_version` (orphans every stale verdict); ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Check `disambig_pending` → if exists: patch envelope, DELETE key, trigger A4 delivery |
+| A | Approve | `POST /api/kb/approve` (Slack service or dashboard) | `fingerprint`, `error_text_clean`, `fix_text`, `approved_by`, `context`, `request_id` | ① `bfa_kb.db.fixes` INSERT/UPDATE + `fix_revisions` INSERT; ② Chroma upsert; ③ Redis SET `fix:<fp>` `source=sme`; ④ INCR `kb_version` (orphans every stale match_result); ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Check `disambig_pending` → if exists: patch envelope, DELETE key, trigger A4 delivery |
 | B | Edit | `PATCH /api/kb/{id}` (Slack service or dashboard) | `fix_id`, `fix_text`, `edited_by` | ① `bfa_kb.db.fixes` UPDATE + `fix_revisions` INSERT; ② Chroma upsert (updated document); ③ Redis SET `fix:<fp>` `source=sme` (reset TTL); ④ INCR `kb_version` ; ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Terminal |
 | C | Discard | `DELETE /api/kb/{id}/discard` (Slack service or dashboard) | `fix_id` | ① `bfa_kb.db.fixes` UPDATE `status='discarded'` + `fix_revisions` INSERT; ② Chroma DELETE `id="fix-{fp}"`; ③ Redis DELETE `fix:<fp>`; ④ INCR `kb_version`; ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok"}` | Terminal |
 | D | Feedback | `POST /api/kb/{id}/feedback` (Slack button → N18 → internal call, or dashboard) | `fix_id`, `sentiment`, `slack_user_id`, `slack_display_name` | ① `bfa_stats.db.sme_audit_log` INSERT; ② COUNT negative feedback for `fix_id` | `{status:"ok", negative_count, routed_to_sme: bool}` | if `routed_to_sme`: post to SME review channel |
@@ -2477,8 +2606,8 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | Redis | `fix:<fp>` SET `source=sme` (30d) | N14 (KB API) — approve, edit | On approve or edit |
 | Redis | `fix:<fp>` DELETE | N14 (KB API) — discard | On discard |
 | Redis | `fix:<fp>` SET `source=ai` (30d) | N11 (A3) | After the LLM generates a fix, only if no SME entry exists |
-| Redis | `kb_version` INCR | N14 (KB API) — approve, edit, discard | Orphans every cached verdict in one operation |
-| Redis | `verdict:<fp>:<ctx_hash>` SET (7d) | N10 (A2) | After vector search |
+| Redis | `kb_version` INCR | N14 (KB API) — approve, edit, discard | Orphans every cached match_result in one operation |
+| Redis | `match:<fp>:<ctx_hash>` SET (7d) | N10 (A2) | After vector search |
 | Redis | `kb_version` INCR DELETE | N14 (KB API) — approve, edit, discard | On any KB mutation |
 | Redis | `run_dedup:<pipeline_id>:<fp>` SET (1h) | N12 (A4) | After first delivery |
 | Redis | `disambig_pending:<fp>` SET (24h) | N12c Gate 3 | On disambiguation hold |
@@ -2492,7 +2621,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | Redis | `fix:<fp>` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 | Redis | `kb_version` INCR DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 
-### 12.5 Verdict Cache Key Formula (canonical)
+### 12.5 Match Result Cache Key Formula (canonical)
 
 Both the **writer** (N10, A2 §10.2 step 7) and the **reader** (N9) must use this exact formula:
 
@@ -2502,10 +2631,10 @@ ctx_hash = hashlib.sha256(
     .encode()
 ).hexdigest()[:16]
 
-redis_key = f"verdict:{fingerprint}:{ctx_hash}"
+redis_key = f"match_result:{fingerprint}:{ctx_hash}"
 ```
 
-Any deviation in separators, casing, or truncation length causes the writer and reader to produce different keys, making the verdict cache permanently non-functional.
+Any deviation in separators, casing, or truncation length causes the writer and reader to produce different keys, making the match result cache permanently non-functional.
 
 ---
 
@@ -2591,7 +2720,7 @@ Stats collection's job is: given a completed analysis event, record everything n
 
 | Store | Table | Fields relevant to pattern-based queries |
 |---|---|---|
-| `bfa_stats.db` | `request_telemetry` | `fingerprint`, `error_category`, `step_name`, `fix_source`, `verdict`, `product_team`, `stage_type`, `request_id` |
+| `bfa_stats.db` | `request_telemetry` | `fingerprint`, `error_category`, `step_name`, `fix_source`, `match_result`, `product_team`, `stage_type`, `request_id` |
 | `bfa_stats.db` | `pipeline_events` | `pipeline_id`, `repo`, `branch`, `product_team`, `triggered_by`, `failed_jobs` |
 | `bfa_stats.db` | `delivery_records` | `jira_key`, `slack_message_ts`, `fix_source`, `times_sent_before` |
 | `bfa_kb.db` | `fixes` | `fix_text`, `hit_count`, `last_seen`, `jira_key`, `label` |
@@ -2732,8 +2861,8 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 35 | `bfa_stats.db` | `pipeline_events` | `total_duration_ms` | INTEGER | Existing | A4 | Wall-clock pipeline duration | KPI |
 | 36 | `bfa_stats.db` | `pipeline_events` | `final_status` | TEXT | Existing | A4 | `failed/recovered` | KPI |
 | 37 | `bfa_stats.db` | `pipeline_events` | `source_ci` | TEXT | **New** | A1 | `gitlab` or `jenkins` — enables KPI segmentation by CI system | KPI |
-| 38 | `bfa_stats.db` | `request_telemetry` | `fix_source` | TEXT | Existing | A2/A4 | `sme_cache/ai_cache/verdict_cache/vector_db/llm_generated/no_match` | KPI |
-| 39 | `bfa_stats.db` | `request_telemetry` | `verdict` | TEXT | Existing | A2 | `exact_match/applicable_with_adjustments/partial/no_match` | KPI |
+| 38 | `bfa_stats.db` | `request_telemetry` | `fix_source` | TEXT | Existing | A2/A4 | `sme_cache/ai_cache/match_cache/vector_db/llm_generated/no_match` | KPI |
+| 39 | `bfa_stats.db` | `request_telemetry` | `match_result` | TEXT | Existing | A2 | `exact_match/applicable_with_adjustments/partial/no_match` | KPI |
 | 40 | `bfa_stats.db` | `request_telemetry` | `vector_similarity` | REAL | Existing | A2 | Top vsim score | KPI |
 | 41 | `bfa_stats.db` | `request_telemetry` | `combined_score` | REAL | Existing | A2 | Top combined score | KPI |
 | 42 | `bfa_stats.db` | `request_telemetry` | `context_score` | REAL | Existing | A2 | Context label match ratio | KPI |
@@ -2745,7 +2874,7 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 48 | `bfa_stats.db` | `request_telemetry` | `labels` | TEXT (JSON array) | **New** | A1 | Error labels — enables filter/group by label on KPI dashboard | KPI |
 | 49 | `bfa_stats.db` | `request_telemetry` | `sub_category` | TEXT | **New** | A1 | Finer error grouping for KPI | KPI |
 | 50 | `bfa_stats.db` | `request_telemetry` | `source_ci` | TEXT | **New** | A1 | `gitlab` or `jenkins` | KPI |
-| 51 | `bfa_stats.db` | `request_telemetry` | `cache_tier_hit` | TEXT | **New** | N8/N9/N9 | Which tier fired: `sme/ai/verdict/none` — cache effectiveness metric | KPI |
+| 51 | `bfa_stats.db` | `request_telemetry` | `cache_tier_hit` | TEXT | **New** | N8/N9/N9 | Which tier fired: `sme/ai/match_result/none` — cache effectiveness metric | KPI |
 | 52 | `bfa_stats.db` | `request_telemetry` | `a2_candidate_count` | INTEGER | **New** | A2 | Chroma candidates evaluated — KB coverage signal | KPI |
 | 53 | `bfa_stats.db` | `request_telemetry` | `domain_rag_used` | INTEGER | **New** | A3 | 1 if domain RAG snippet included in LLM prompt | KPI |
 | 54 | `bfa_stats.db` | `sme_audit_log` | `action` | TEXT | Existing | KB API | `approved/edited/discarded/feedback_positive/feedback_negative` | KB |
@@ -2952,33 +3081,33 @@ guard and measured continuously by the collapse and collision gates in §9.1.
 
 ### 13.9 One identifier — `request_id`
 
-**Decision.** The UUID minted at webhook receipt is the `pipeline_events` primary key.
+**Decision.** The UUID generated at webhook receipt is the `pipeline_events` primary key.
 `pipeline_event_id` is removed.
 
 **Why.** A per-request UUID already existed but was used only for log correlation and never
 persisted, while `pipeline_events` was keyed by an autoincrement id that was `None` whenever
 the insert failed — losing correlation exactly when something had already gone wrong. One
-identifier, minted before any I/O, cannot be `None` and correlates logs, statistics,
+identifier, generated before any I/O, cannot be `None` and correlates logs, statistics,
 dead-letter entries, and replay output. Per-error rows are keyed by
 `(request_id, fingerprint)`.
 
 ### 13.10 Two caches, not three
 
 **Decision.** Merge the SME and AI caches into `fix:<fp>` carrying a `source` field; keep
-the verdict cache separate and add `kb_version` to its key. Uniform 30-day TTL.
+the match result cache separate and add `kb_version` to its key. Uniform 30-day TTL.
 
 **Why merge.** The two fix caches had the same key shape and the same payload shape; only
 *precedence* separated them. Precedence is now a write rule — an SME approval always
 overwrites, an AI result writes only into an empty or `ai` slot — which replaces two reads
 with one and puts the rule in a single place.
 
-**Why the verdict cache stays separate.** Different key (context matters), different payload
-(candidates, not a servable fix), different purpose (a memoised computation rather than an
+**Why the match result cache stays separate.** Different key (context matters), different payload
+(candidates, not a servable fix), different purpose (a stored computation that would otherwise be repeated rather than an
 answer).
 
-**Why `kb_version`.** A verdict references candidates an SME may since have edited or
+**Why `kb_version`.** A match_result references candidates an SME may since have edited or
 discarded, which made a long TTL unsafe. Incrementing a counter on every approve, edit, or
-discard orphans every stale verdict in one operation — so per-key invalidation disappears
+discard orphans every stale match_result in one operation — so per-key invalidation disappears
 and a uniform 30-day TTL becomes safe.
 
 ### 13.11 Scope decisions recorded
@@ -3048,3 +3177,39 @@ inaccurate for the providers in use: GitLab sends the **plain secret** in `X-Git
 and Jenkins sends a Bearer token; both are verified with a constant-time string comparison.
 No HMAC is computed over the request body. §6.1 now states the mechanism precisely,
 including what a token proves and what it does not.
+
+### 13.17 Terminology simplified, and current-state columns added
+
+**Renames.** Review found several terms obscuring simple ideas. All occurrences were
+changed throughout the document:
+
+| Was | Now | Reason |
+|---|---|---|
+| `verdict` | `match_result` | "verdict" reads as a legal judgement; the field simply records whether a stored fix matched. `feedback_events.verdict` was separately renamed `response`, since it meant something different — helpful or unhelpful — and sharing the name was confusing |
+| Verdict Cache | **Match Result Cache** | follows the field rename |
+| Redis `verdict:...` | `match:<kb_version>:<fp>:<ctx>` | follows the field rename |
+| "mint" a `request_id` | "**generate**" a `request_id` | plain word for the same act |
+| "memoised" | "**computed once, reused**" | states the behaviour instead of naming the technique |
+| "signature valid / invalid" | "**token matched / did not match**" | accurate: GitLab sends the plain secret, not a signature (§6.1) |
+
+A glossary now opens the document as §1.0, so terms are defined before first use.
+
+**Current-state columns.** §1.1 and §1.2 gained an **Exists today?** column, populated by
+reading the code rather than by estimation, with file and line evidence for each entry. The
+honest position: **2 of 16 components exist as needed, 9 exist partially, and 5 do not exist
+at all.** The whole agent layer, both caches as designed, dedup, and the dashboard are new
+build. Several "partial" entries are more misleading than helpful without their note — the
+fix caches exist but are keyed by raw text so they effectively never hit, and the vector
+collection exists but has no `hnsw:space` setting, so it is L2 rather than cosine.
+
+**Statistics timing clarified.** Review asked whether statistics are written before every
+step. They are not, and doing so would mean eighteen writes per error and half-populated
+rows on failure. §1.2 now carries a **Stats written** column showing the four defined points:
+the pipeline row is created at ingest — so a failure that never reaches analysis still counts
+in the KPI denominator — enriched after classification, appended during analysis, and
+completed at delivery.
+
+**Explanations added on request:** the shape of `error_sections[]`, a before/after example of
+normalisation, the `combined_score` formula with a worked comparison showing how context
+breaks ties that text similarity alone cannot, and a tuning table for `top-K` with a
+recommended range of 3–20 around a default of 10.
