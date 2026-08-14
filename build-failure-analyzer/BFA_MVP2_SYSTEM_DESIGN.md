@@ -20,19 +20,23 @@
 4. [Data Schemas](#4-data-schemas)
    - 4.1 SQLite `bfa_kb.db` · 4.2 SQLite `bfa_stats.db` · 4.3 Chroma · 4.4 Redis · 4.5 Relationships
    - **4A. Database Access by Flow Phase** · **4B. Per-Store Access Matrix**
-   - **4C. [Error Embedding and Retrieval](#4c-error-embedding-and-retrieval)** — three representations ·
-     write path · hierarchical tokens · the signature ladder · the five-stage cascade ·
-     fuse/filter/rerank · the A2 candidate set · routing · degradation
+   - **4C. [Error Embedding and Retrieval](#4c-error-embedding-and-retrieval)** — the whole
+     search design in one place, in five parts:
+     **4C.1** concepts and vocabulary (normalisation · fingerprint · signature · scope) ·
+     **4C.2** where fixes are stored and indexed ·
+     **4C.3** how an error gets answered, end to end ·
+     **4C.4** rollout — what to measure first, the first weeks, what to build when ·
+     **4C.5** settings
 5. [API Specifications](#5-api-specifications)
 6. [Security Design](#6-security-design) — **6.1 Webhook Ingestion (no authentication — network isolation)**
 7. [Resilience and Operations](#7-resilience-and-operations)
 8. [Logging and Observability](#8-logging-and-observability)
    - 8.1 Log Format · 8.2 Per-Node Fields · 8.3 Health Check · 8.4 Metrics tab
-   - **8.5 [Retrieval Telemetry](#85-retrieval-telemetry--what-is-performing-well-and-what-to-optimise-next)** —
-     what is performing well, and what to optimise next
+   - **8.5 Measuring the search** — the cold-start indicators, per-lane recall, the outcome-mix
+     drift KPI, and an observation → action table
    - 8.6 Current State Analysis · 8.7 Improvement Plan
 9. [Test Architecture](#9-test-architecture)
-   - 9.1 Replay Harness · **9.2 Retrieval Benchmark** — the only place a lane may be added, removed, or reweighted
+   - 9.1 Replay Harness · **9.2 Retrieval Benchmark** — five arms; arm 3 vs arm 5 is the only decision it exists to make
 10. [Agent Detail Specifications](#10-agent-detail-specifications)
     - 10.1 A1 Error Summarizer · **10.1.1 Normalisation, fingerprinting and retrieval — the reasoning behind §4C**
     - **10.1.2 Why `product_team` comes from the namespace**
@@ -45,8 +49,15 @@
 > **Revision note.** This document is the single canonical design. It supersedes
 > `LLD.md` (§13.12) and incorporates: the single-service merge, Slack as an outbound
 > notification channel plus a narrow feedback/correction channel, ingestion of successful
-> pipelines for KPI reporting, `request_id` as the one identifier, two caches instead of
-> three, and repo/branch normalisation in the fingerprint.
+> pipelines for KPI reporting, and `request_id` as the one identifier.
+>
+> **Latest revision (§13.25, §13.26).** The search design is consolidated into §4C and
+> reduced to what an empty knowledge base can actually use: **one** cache rather than two,
+> two search lanes rather than three, resolution scope so that a fingerprint match is not
+> treated as a licence to reuse, and `times_seen` ordering so reviewer effort goes where it
+> compounds. The Match Result Cache, `kb_version`, the disambiguation hold, and the domain
+> RAG collection are removed. Semantic search is deferred to an optional phase 3, decided on
+> the §9.2 benchmark rather than assumed.
 
 ---
 
@@ -71,10 +82,9 @@ revision to remove jargon.
 | **Fingerprint** | A SHA-256 of the *normalised* error text — the identity of an error, stable across repositories. See §10.1.1. | — |
 | **Normalise** | Rewrite the error text so that two occurrences of the same problem produce identical text: remove repo and branch names, timestamps, paths, versions, IDs, and casing. See §10.1.1 and the worked example in §1.2. | — |
 | **In flight for this run** | The same error is *already being analysed right now* for the same pipeline run — for example a dependency error failing the build, test, and package stages. The second and third occurrences must not trigger a second analysis or a second message. | — |
-| **`match_result`** | A2's decision about a stored candidate: `exact_match`, `applicable_with_adjustments`, `partial`, or `no_match`. | "match_result" |
-| **Match Result Cache** | Remembers A2's decision so the same error in the same context does not re-run the embedding call and the vector query. | "Match Result Cache" |
+| **`outcome`** | A2's decision about the candidate set: `REUSED` (one applies as-is), `ADAPTED` (one is nearly right, delivered with a diff), or `NO_MATCH` (none apply → A3). `GENERATED` is recorded when A3 answered. One field, not a probability (§4C.3.1). | — |
 | **Cached (computed once, reused)** | The result of an expensive computation is stored under a key so the computation is not repeated. | "memoised" |
-| **`combined_score`** | One number blending **error-text similarity** (keyword + vector search, fused) with **context-line similarity**. Metadata is not part of it — it filters beforehand and breaks ties afterwards. See §1.2. | — |
+| **`fusion_score`** | The result of merging the two search lanes **on rank**. It is **not** a percentage and **not** a similarity — it means *"the lanes collectively ranked this one highly"*. Its only use is an admission floor keeping weak candidates out of A2's prompt. See §4C.3.4 | — |
 | **top-K** | How many candidates the fused keyword + vector search returns before re-ranking. Configurable — see §1.2. | — |
 
 ---
@@ -95,7 +105,6 @@ exists in some form, and the agent layer does not exist at all.
 | N6 | **Agent A1 — Error Summarizer** | Classifies the error, normalises the text, computes the fingerprint, builds the envelope | **No** | No normaliser, no fingerprint function, no `agents/` package |
 | N7 | Dedup Check | Suppresses the same error already being analysed in this run | **No** | Nothing exists |
 | N8 | **Fix Cache** | One lookup that answers "have we already solved this exact error?" | **Partial** | Two separate keys exist (`analyzer_service.py:73-74`) but they are keyed by a SHA-256 of **raw** text, so they effectively never hit |
-| N9 | Match Result Cache | Remembers A2's decision to avoid re-running the vector search | **No** | Nothing exists |
 | N10 | **Agent A2 — Deviation Analyzer** | Finds similar past errors and decides whether a stored fix applies | **Partial** | `lookup_existing_fix` (`vector_db.py:159`) exists, but the collection has **no `hnsw:space` setting** (so it is L2, not cosine) and there is no context scoring |
 | N11 | **Agent A3 — Solution Synthesizer** | Asks the LLM for a fresh fix when nothing stored applies | **Partial** | `resolve` (`resolver_agent.py:64`), `call_llm` (`llm_openwebui_client.py:118`). No JSON schema, no confidence, no structured failure |
 | N12 | **Agent A4 — Reporter** | Routes, formats, and delivers the answer | **Partial** | `send_error_message` (`slack_helper.py:229`), `send_dev_dm_fix` (`analyzer_service.py:1339`). No stage grouping, team routing, provenance, or guardrail |
@@ -136,12 +145,11 @@ written when the measurement actually exists.
 | 9 | **Fix cache** | hit | reuse the stored answer; skip the vector search and the LLM entirely | — | Partial — keys exist but never hit | 14 |
 | 10 | Match result cache | hit | reuse A2's earlier decision; skip the embedding call and the vector query | — | **No** | 12 |
 | 11 | **A2** | miss | embed → nearest-neighbour search → re-rank by context → decide | **`request_telemetry` INSERT** | Partial — wrong distance metric, no context scoring | 12 |
-| 12 | Threshold | `combined_score ≥ 0.90` **and** `match_result ≠ no_match` | use the stored fix | — | No | 14 |
+| 12 | A2 judgement | `outcome` ∈ `REUSED` / `ADAPTED` | use the stored fix, adapted if needed | — | No | 14 |
 | 13 | **A3** | below threshold, or `no_match` | ask the LLM for a fresh fix | `request_telemetry` UPDATE (cost, latency) | Partial — unstructured | 14 |
 | 13a | **A3** | LLM failed | reply "unable to analyze", alert DevOps, write a dead-letter file | telemetry marked `unable` | No | end |
 | 14 | Forbidden-text check *(low priority)* | pattern matched | flag for SME visibility — **does not block delivery** | — | No | 15 |
 | 15 | Infrastructure routing | category is `infrastructure` | send to the DevOps channel; tell the developer it was not their change | — | No | 17 |
-| 16 | Disambiguation | top two candidates too close to separate | show both to an SME; hold delivery until one is chosen | — | No | end |
 | 17 | **A4 delivery** | — | one message per failed stage; developer DM with provenance, feedback buttons, dashboard link | — | Partial — flat messages only | 18 |
 | 18 | Completion | — | finish the pipeline row and record what was delivered | **`pipeline_events` UPDATE + `delivery_records` INSERT** | No | end |
 
@@ -192,58 +200,46 @@ Removed: the timestamp, the repository name, the version number, the build path.
 exactly this string, which is what lets one cache entry and one knowledge-base row serve
 every product.
 
-#### What `combined_score ≥ 0.90 and match_result ≠ no_match` means
+#### What `outcome ∈ REUSED / ADAPTED` means
 
-This is the gate that decides whether a stored fix is served instead of calling the LLM.
-Both halves must hold.
+This is the gate that decides whether a stored fix is served instead of calling the LLM — and
+**it is a judgement, not a number.** An earlier draft gated on a blended similarity score
+crossing 0.90. That is gone. §4C explains the full reasoning; the short version:
 
-**`combined_score`** blends two *measured similarities*. Neither term is a metadata label:
-
-```
-combined_score = ERROR_WEIGHT   × error_similarity     +  CONTEXT_WEIGHT × context_similarity
-                 (default 0.60)                            (default 0.40)
-```
-
-| Part | What it measures | How it is produced | Range |
-|---|---|---|---|
-| `error_similarity` | how close the two **error texts** are | Reciprocal Rank Fusion of two searches over `error_key` — SQLite FTS5 keyword search and Chroma cosine search (§10.1.1) | 0.0 – 1.0 |
-| `context_similarity` | how close the two **surrounding log contexts** are | cosine between the embedding of the query's `context_lines` and the stored candidate's `context_sample` | 0.0 – 1.0 |
-
-**Product, stage, and category are not in this formula.** They are used in two other ways:
-
-| Use | How |
+| Old design | Now |
 |---|---|
-| **Hard filter**, before scoring | only `status='active'` candidates, and only those whose `error_category` matches — an infrastructure fix must never answer a code error |
-| **Tie-break**, after scoring | when the top two candidates are within `TIE_BREAK_MARGIN`, prefer the one whose `product_team` and `stage_type` match |
+| `combined_score = 0.60 × error_similarity + 0.40 × context_similarity`, served if ≥ 0.90 | the search produces a **shortlist**; A2 reads it and decides |
+| context compared by cosine between two averaged bags of log lines | A2 receives the context lines and *reads* them |
+| candidates from a different `error_category` deleted before scoring | no category filter — it never protected routing, and it deleted correct fixes when a failure was classified differently today than historically |
+| a score threshold decided whether to serve | `outcome` decides: `REUSED`, `ADAPTED`, or `NO_MATCH` |
 
-**Worked comparison.** The same npm dependency error; the stored fix comes from a *different*
-product, but the surrounding context is nearly identical:
+**What survives as a number** is `fusion_score` — the result of merging the two search lanes
+on rank (§4C.3.4). Its only job is an **admission floor**: keep obviously weak candidates out
+of A2's prompt. It is not a percentage, it is not a similarity, and nothing is served on the
+strength of it alone.
 
-| | Old formula (labels in the score) | New formula |
-|---|---|---|
-| error text similarity | 0.97 | 0.97 |
-| context term | 1 of 3 labels matched → 0.33 | context lines 0.91 similar |
-| result | `0.70×0.97 + 0.30×0.33 = 0.78` → **rejected** | `0.60×0.97 + 0.40×0.91 = 0.95` → **served** |
+**Why the change.** A fix is served without an LLM reasoning about it in exactly one place:
+the answer cache, on an exact fingerprint match within the correct scope (§4C.3.3). Everywhere
+else, judgement runs. Gating on a blended score meant a fix could be served because two numbers
+crossed a line, and the one component able to notice that the artifact was *different* — A2 —
+had already been bypassed.
 
-The old formula discarded a good fix purely because it came from another team — which
-contradicted the whole point of normalising repository names out of the fingerprint. The new
-formula keeps it, and consults product only if a second candidate scores within the margin.
+**Product, stage, and category are used nowhere in ranking.** Not as a filter, not as a score
+term, not as a tie-break. A good fix from another team wins on merit, which is the whole point
+of normalising repository names out of `error_key` in the first place.
 
-**`match_result ≠ no_match`** is A2's own judgement. A candidate can clear the threshold on
-score while A2 still concludes the stored fix does not apply — for example identical
-missing-artifact wording but a *different* artifact. Requiring both means a fix is served
-only when the numbers **and** the judgement agree; otherwise the request falls through to A3.
 
-**Tuning `top-K`.** `VECTOR_TOP_K` controls how many nearest candidates are retrieved before
-context re-ranking. It is configurable and intended to be tuned with the replay harness:
+**Tuning the candidate-set size.** `CANDIDATE_K` controls how many candidates A2 is shown.
 
 | Value | Effect | When to use |
 |---|---|---|
-| 3–5 | fastest, fewest lookups; risks missing a candidate that context re-ranking would have promoted | small knowledge base (< 200 fixes) |
-| **10** | **default** — a good balance | starting point |
-| 15–20 | best recall; more SQLite lookups per request and more low-quality candidates to score | large knowledge base, or if replay shows recall below 90% |
+| 3–5 | cheapest prompt; risks the correct fix falling just outside the shortlist | small knowledge base (< 200 fixes) |
+| **10** | **default** — a starting point, not a measured value | initial deployment |
+| 15–20 | best recall, but more distractors in the prompt | large knowledge base, or if the benchmark shows recall below its gate |
 
-Raise it only if the replay harness reports recall below its gate; measure, do not guess.
+**More is not simply better.** Every extra candidate is prompt cost *and* a distractor. A2's
+accuracy is expected to rise with `CANDIDATE_K`, peak, and then fall — so there is an interior
+optimum, and §9.2 measures it by sweeping K. Measure, do not guess.
 
 ---
 
@@ -267,12 +263,12 @@ flowchart TD
 
     A1 --> DEDUP{"N7 · Dedup<br/>in flight this run?"}
     DEDUP -->|"yes"| THREAD["Thread reply<br/>no new DM"]
-    DEDUP -->|"no"| FIXC{"N8 · Fix Cache<br/>fix:&lt;fp&gt;<br/>sme or ai"}
+    DEDUP -->|"no"| FIXC{"N8 · Answer Cache<br/>fix:&lt;fp&gt;[:&lt;repo&gt;]<br/>sme 30d / ai 7d"}
 
     FIXC -->|"HIT"| GATES
-    FIXC -->|"MISS"| VC{"N9 · Match Result Cache<br/>match:&lt;kb_version&gt;:&lt;fp&gt;:&lt;ctx&gt;"}
+    FIXC -->|"MISS"| VC{"N9 · Fingerprint probe<br/>same fp, other scope?"}
     VC -->|"HIT"| THRESH
-    VC -->|"MISS"| A2["N10 · Agent A2 — Deviation Analyzer<br/>embed · cosine top-K<br/>context rank · match_result"]
+    VC -->|"MISS"| A2["N10 · Search + Agent A2<br/>signature lane · keyword lane<br/>merge on rank · A2 judges the set"]
 
     A2 --> THRESH{"combined ≥ 0.90<br/>and not no_match?"}
     THRESH -->|"yes"| GATES
@@ -280,7 +276,7 @@ flowchart TD
     A3 --> GATES
     A3 -.->|"LLM failed"| UNABLE["unable to analyze<br/>alert DevOps · dead-letter"]
 
-    GATES["N12a Forbidden-text flag (low priority, non-blocking)<br/>N12b Infrastructure routing<br/>N12c Disambiguation hold"]
+    GATES["N12a Forbidden-text flag (low priority, non-blocking)<br/>N12b Infrastructure routing"]
     GATES --> A4["N12 · Agent A4 — Reporter<br/>stage-grouped post + developer DM<br/>provenance · feedback · deep link"]
     A4 --> WRITE["pipeline_events UPDATE (phase 2)<br/>delivery_records INSERT<br/>run_dedup SET"]
 
@@ -299,7 +295,7 @@ flowchart TD
 
 | Store | Role | Holds | Authority |
 |---|---|---|---|
-| **Redis** | cache only | `fix:<fp>` (merged SME + AI), `match:<kb_version>:<fp>:<ctx>`, `run_dedup`, `disambig_pending`, `thread_map` | never a source of truth |
+| **Redis** | cache only | `fix:<fp>[:<repo>]` (merged SME + AI, scope-keyed), `run_dedup`, `thread_map` | never a source of truth |
 | **Chroma** | vectors only | `id = fix-<fingerprint>`, embedding of `error_key`, `document = fix_text`, context labels in metadata | rebuildable from SQLite |
 | **SQLite** | system of record | `fixes`, `fix_revisions` (metadata) + `pipeline_events`, `request_telemetry`, `delivery_records`, `feedback_events`, `sme_audit_log` (statistics), joined on `request_id` / `fingerprint` / `fix_id` | **authoritative** |
 
@@ -330,14 +326,14 @@ the flow debuggable — if a value is wrong, only one node could have written it
 | 1 | `request_id` | `str` | The one identifier for this webhook event — a UUID created before any other work. Appears on every log line, database row, and dead-letter file. | **N1** | everything downstream; it is also the `pipeline_events` primary key |
 | 2 | `pipeline_info` | `dict` | Everything the webhook told us: repo, project id, branch, commit, pipeline id, `job_names`, triggering user and email, stage list. | **N2** | A1 (classification, product, normalisation), A3 (prompt), A4 (routing and the DM) |
 | 3 | `error_key` | `str` | The error text after normalisation — timestamps, repo and branch names, paths, and versions removed. **This is what gets embedded.** | **N6 · A1** | A2 (embedding), A3 (prompt) |
-| 4 | `fingerprint` | `str` | SHA-256 of `error_key` — the error's identity. | **N6 · A1** | N7 dedup, N8 and N9 cache keys, Chroma row id, A4 |
+| 4 | `fingerprint` | `str` | SHA-256 of `error_key` — the error's identity. Exact-or-nothing; never a similarity (§4C.1.3). | **N6 · A1** | N7 dedup, N8 cache key, N9 scope probe, A4 |
 | 5 | `context_block` | `ContextBlock` | Three labels: `product_team`, `stage_type`, `error_category`. | **N6 · A1** | A2 (context scoring), A3 (prompt), A4 (routing), all telemetry |
 | 6 | `is_infra` | `bool` | True when the category is `infrastructure`. Decides whether the developer is contacted at all. | **N6 · A1** | A4 |
 | 7 | `fix_text` | `str \| None` | The remediation to deliver. Empty until something supplies it. | **N8**, **N9**, **A2**, or **A3** — whichever resolves first | A4 |
-| 8 | `fix_source` | `str` | Where `fix_text` came from: `sme_cache`, `ai_cache`, `match_cache`, `vector_db`, `llm_generated`, or `no_match`. The single most useful field in the KPI page. | same node that set `fix_text` | A4, telemetry |
+| 8 | `fix_source` | `str` | Where `fix_text` came from: `sme_cache`, `ai_cache`, `search`, `llm_generated`, or `no_match`. The single most useful field in the KPI page. | same node that set `fix_text` | A4, telemetry |
 | 9 | `approved_by` | `str \| None` | The SME who approved this fix, when the answer came from an approved one. Drives the provenance line in the DM. | **N8** (from the cache value) | A4 |
-| 10 | `match_result` | `str \| None` | A2's judgement: `exact_match`, `applicable_with_adjustments`, `partial`, or `no_match`. | **N9** or **A2** | threshold gate, A4, telemetry |
-| 11 | `ranked_candidates` | `list \| None` | The scored candidate list from the vector search. **Cleared by A3** so that stale candidates cannot reach the disambiguation check on the LLM path. | **N9** or **A2**; cleared by **A3** | disambiguation check |
+| 10 | `outcome` | `str \| None` | A2's judgement: `REUSED`, `ADAPTED`, or `NO_MATCH`. Categorical, never a probability (§4C.3.1). | **A2** (or `GENERATED`, by A3) | routing, A4, telemetry |
+| 11 | `ranked_candidates` | `list \| None` | The shortlist handed to A2 (§4C.3.4) — a *set* of suggestions, never a winner. Each entry keeps its per-lane positions for debugging. | **N9**/**N10** search; cleared by **A3** | A2, telemetry |
 | 12 | `top_candidate` | `dict \| None` | The highest-scoring candidate, kept separately for convenience. | **N9** or **A2** | threshold gate, A4 |
 | 13 | `slack_message_ts` | `str \| None` | Timestamp of the message A4 posted, so later stages of the same run reply in that thread. | **A4** | dedup thread replies |
 | 14 | `scenario_id` | `str \| None` | Replay only — the corpus scenario being run, so debug output can be filtered per scenario. `None` in production. | replay harness | logging |
@@ -371,13 +367,12 @@ why the move exists.
 | **Match cache** | hit, and it was not `no_match` | **A4** | We searched before and found something usable. The candidate list is restored from the cache, so the embedding call and vector query are skipped — but the routing decision still runs, because context may have changed. |
 | **Match cache** | hit, and it was `no_match` | **A3** | We searched before and found nothing. There is no point searching again, so go straight to generating a fresh fix. |
 | **Match cache** | miss | **A2** | Never searched for this error in this context. Do the full search. |
-| **A2** | `combined_score ≥ 0.90` **and** `match_result ≠ no_match` | **A4** | Both the numbers and A2's judgement agree that a stored fix applies. Serve it. Both halves are required — see §1.2. |
+| **A2** | `outcome` ∈ `REUSED` / `ADAPTED` | **A4** | A2 read the candidate set and judged that one applies. Serve it — adapted, with a diff, if the fix needed a change (§4C.3.1). |
 | **A2** | score below threshold, or `no_match` | **A3** | Either nothing was similar enough, or something looked similar but A2 judged it inapplicable. Generate instead. |
 | **A2** | Chroma or the embedding service is unavailable | **A3** | A dependency outage must not stop the request. Search is skipped, the result is treated as `no_match`, a health alert is raised, and the LLM answers. Quality drops; availability does not. |
 | **A2** | top two candidates score almost identically | **A4** → held | The system cannot tell which of two fixes applies, so it shows both to an SME and pauses rather than guessing. *(Candidate for removal — see §13.19.)* |
 | **A3** | LLM returned a fix | **A4** | Normal generation path. |
 | **A3** | LLM failed after retries | **stop** — "unable to analyze" | The developer is told plainly that no answer could be produced, DevOps is alerted, and the event is written to the dead-letter directory so it can be replayed later. It is never silently dropped. |
-| **A4** | waiting for an SME to choose between two candidates | **stop** until chosen | Delivery is parked in `disambig_pending`; approving one candidate resumes it. |
 | **A4** | delivered | **stop** — completion write | The pipeline row is completed and a delivery record is written. This is the normal end of the flow. |
 
 #### Five properties that hold by design
@@ -419,10 +414,10 @@ A representative subset — not the full list:
 | `ROUTING_CONFIG` | `config/routing.json` | team routing cannot resolve |
 
 Optional variables carry defaults and do not block startup — for example
-`VECTOR_TOP_K` (10), `SIMILARITY_THRESHOLD` (0.90), `ERROR_WEIGHT` (0.60),
-`CONTEXT_WEIGHT` (0.40), `RRF_K` (60 — the Reciprocal Rank Fusion constant),
-`SIG_WEIGHT` (1.5 — how much the signature lane counts inside the fusion, §4C.6),
-`TIE_BREAK_MARGIN` (0.02), `LOG_LEVEL` (`INFO`).
+`CANDIDATE_K` (10 — how many candidates A2 sees), `MIN_FUSION_SCORE` (**no default — establish
+by measurement, §4C.3.4**), `SIG_WEIGHT` (2.0) and `LEXICAL_WEIGHT` (1.0 — how much each search
+lane counts when merging), `RRF_K` (60 — the rank-fusion constant), `AI_FIX_TTL` (7 d),
+`SME_FIX_TTL` (30 d), `LOG_LEVEL` (`INFO`). See §4C.5
 
 Two settings are **not** environment variables because they are vocabulary rather than
 tuning, and belong beside the patterns they describe in `error_patterns.json`: the
@@ -499,7 +494,7 @@ and a name with a count of zero is dead — it is declared but nothing ever matc
 
 | Node | ID | Inputs | Processing | Outputs | Next Node | Error Handling |
 |---|---|---|---|---|---|---|
-| **Startup Validator** | N0 | `error_patterns.json`, `routing.json`, mandatory env vars (§2.1) | Load and validate both config files: every `category` and `sub_category` must be declared; every regex must compile; `label` must be unique. Assert `ERROR_WEIGHT + CONTEXT_WEIGHT == 1.0`. Assert every mandatory env var is present | Pass / Fail | N1 on pass; `sys.exit(1)` on fail | Write a specific error to stderr naming the exact bad field or pattern |
+| **Startup Validator** | N0 | `error_patterns.json`, `routing.json`, mandatory env vars (§2.1) | Load and validate both config files: every `category` and `sub_category` must be declared; every regex must compile; `label` must be unique. Assert every mandatory env var is present | Pass / Fail | N1 on pass; `sys.exit(1)` on fail | Write a specific error to stderr naming the exact bad field or pattern |
 | **Webhook Listener** | N1 | HTTP POST `/webhook` or `/webhook/jenkins` | Generate `request_id`; check event type; check pipeline status. **No authentication** — network isolation only (§6.1) | `request_id` + validated payload dict | N2 | HTTP 200 "ignored" on non-failed or out-of-scope status |
 | **Pipeline Extractor** | N2 | Webhook payload dict | Call `PipelineExtractor.extract_pipeline_info()`; call `should_process_pipeline()` (project allow/block list, status filter); apply `external` stage guard | `pipeline_info` dict added to Envelope; fire background task | N3 (background) | Return `"skipped"` with log reason if filtered |
 | **Log Fetcher** | N3 | `pipeline_info` (from Envelope): `project_id`, `pipeline_id` | Call `fetch_pipeline_jobs(project_id, pipeline_id)` → list of jobs; for each failed job call `fetch_job_log_tail(project_id, job_id)`; apply `should_save_job_log()` filter; collect `job_names` list | `all_logs: List[{job_id, job_name, details, log_text}]` (one entry per failed job); add `job_names` list to `pipeline_info` in Envelope | N4 (iterates over list) | Retry up to `RETRY_ATTEMPTS` with exponential backoff; on exhaustion → dead-letter + DevOps alert |
@@ -508,15 +503,14 @@ and a name with a count of zero is dead — it is declared but nothing ever matc
 | **Agent A1 — Error Summarizer** | N6 | `error_sections: List[str]` (from N5); `pipeline_info` dict (from N2, including `job_names`) | ① `error_category` from `error_patterns.json` labels (majority across sections); ② `stage_type` from `job_names[0]` substring match (build/test/package/deploy); ③ `product_team = pipeline_info.get("repo", "unknown")` — repo name used directly, no lookup file; ④ clean concatenated error text (strip timestamps / line-numbers / paths / versions / trace IDs); ⑤ SHA-256 `fingerprint`; ⑥ INSERT partial `pipeline_events` row → get `request_id`; ⑦ assemble Analysis Envelope | Populated `AnalysisEnvelope` (`request_id`, `pipeline_info`, `fingerprint`, `error_key`, `context_block`, `is_infra`, `request_id`; `fix_text`/`match_result`/`ranked_candidates` all `None`) | N7 | Pattern file missing at runtime → alert + use generic category; partial DB write failure → log + continue with `request_id=None` |
 | **Dedup Check** | N7 | Envelope: `fingerprint`, `pipeline_info.pipeline_id` (as `pipeline_run_id`) | Redis GET `run_dedup:<pipeline_run_id>:<fingerprint>` (1h TTL); value is `slack_message_ts` of first delivery | Hit → set `envelope.slack_message_ts = cached_ts`, route to THREADREPLY; miss → continue | THREADREPLY (hit) or N8 (miss) | Redis unavailable → treat as miss; never block on cache failure |
 | **Thread Reply** | THREADREPLY | Envelope: `slack_message_ts`, `pipeline_info` (stage name), `error_key` | Post thread reply to existing Slack message at `slack_message_ts`; UPDATE `bfa_stats.db.pipeline_events` SET `failed_jobs = failed_jobs+1` if `request_id` exists; INSERT `delivery_records` with `slack_message_ts` reference | Thread reply posted; `pipeline_events` row updated (partial phase-2 — no `final_status` write since event is still in-flight) | Terminal | SlackApiError → log and skip; DB update failure → log and skip |
-| **Fix Cache Check** | N8 | Envelope: `fingerprint` | Redis GET `fix:<fingerprint>` (30d TTL) → JSON `{fix_text, source, approved_by, fix_id}`. One lookup covers both SME-approved and AI-generated fixes; `source` says which | Envelope updated: `fix_text`, `fix_source` (`sme_cache` or `ai_cache` from `source`), `approved_by` when `source=sme` | N12a on hit; N9 on miss | Redis unavailable → skip to N9 |
-| **Match Result Cache Check** | N9 | Envelope: `fingerprint`, `context_block` (`product_team`, `stage_type`, `error_category`) | Compute `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name (must match formula used by N10 writer); Redis GET `match:<kb_version>:<fingerprint>:<ctx_hash>` (30d TTL) → JSON `{match_result, ranked_candidates, top_candidate}` | Envelope updated: `match_result`, `ranked_candidates`, `top_candidate`, `fix_source="match_cache"`; `fix_text` from `top_candidate.fix_text` if match_result ≠ `no_match` | N12a (match hit); N11 (no_match hit — `ranked_candidates` already in envelope); N10 (miss) | Redis unavailable → skip to N10 |
-| **Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_key`, `context_lines`, `context_block`, `fingerprint`); `VECTOR_TOP_K`, `ERROR_WEIGHT`, `CONTEXT_WEIGHT`, `RRF_K`, `SIMILARITY_THRESHOLD=0.90` | ① Embed `error_key` via Ollama (granite-embedding); ② **Hybrid search** — SQLite FTS5 `MATCH` over `fixes_fts` **and** Chroma cosine, fused by Reciprocal Rank Fusion → `error_similarity`; ③ **Hard filter** — keep only `status='active'` and matching `error_category`; ④ **Rerank** — `context_similarity` = cosine of query `context_lines` against candidate `context_sample`; `combined_score = 0.60×error_similarity + 0.40×context_similarity`; ⑤ Assign `match_result`; tie-break on `product_team`/`stage_type` within `TIE_BREAK_MARGIN`; ⑥ Redis SET `match:<kb_version>:<fp>:<ctx_hash>` 30d; ⑦ INSERT `request_telemetry` | Envelope updated with `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` | N12a (match); N11 (no_match) | Chroma/Ollama unavailable → skip to N11 + fire alert |
+| **Answer Cache Check** | N8 | Envelope: `fingerprint`, `repo` | Redis GET `fix:<fingerprint>` then `fix:<fingerprint>:<repo>` → JSON `{fix_text, source, approved_by, fix_id, scope}`. One lookup covers both SME-approved and AI-generated fixes; `source` says which. TTL 30 d (`sme`) / 7 d (`ai`) | Envelope updated: `fix_text`, `fix_source` (`sme_cache` or `ai_cache`), `approved_by` when `source=sme` | N12a on hit; N9 on miss | Redis unavailable → skip to N9 |
+| **Fingerprint Scope Probe** | N9 | Envelope: `fingerprint`, `repo` | SELECT from `fixes` WHERE `fingerprint` matches — **any scope, any status, `pending` included**. An exact fingerprint match is the strongest evidence available; the question A2 is being asked is environmental applicability, not whether it is the same error (§4C.3.1 step 0b) | Envelope: `ranked_candidates` **seeded** with the out-of-scope fix, labelled with its `scope`, `status` and provenance | N10 (always — the probe never delivers on its own) | SQLite unavailable → fatal |
+| **Search + Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_key`, `signature`, `context_lines`, `fingerprint`, seeded `ranked_candidates`); `SIG_WEIGHT`, `LEXICAL_WEIGHT`, `RRF_K`, `MIN_FUSION_SCORE`, `CANDIDATE_K` | ① **Signature lane** — indexed lookup on `fixes.signature`; ② **Keyword lane** — FTS5 `MATCH` over `fixes_fts` (hierarchical tokens); ③ **Merge on rank** by Reciprocal Rank Fusion → `fusion_score` (§4C.3.4); ④ **Filter** — `status='active'` and `fusion_score ≥ MIN_FUSION_SCORE`, nothing else; ⑤ Take top `CANDIDATE_K` as a **set**; ⑥ A2 judges the whole set → `outcome ∈ REUSED\|ADAPTED\|NO_MATCH`; on `REUSED` from another repo, **promote `scope` to `global`**; ⑦ INSERT rejected candidates into `match_rejections`; ⑧ INSERT `request_telemetry` | Envelope updated with `outcome`, `ranked_candidates`, `top_candidate`, `fix_text`, `adapted_diff` | N12a (`REUSED`/`ADAPTED`); N11 (`NO_MATCH`) | SQLite unavailable → fatal; LLM unavailable → "unable to analyze" |
 | **Agent A3 — Solution Synthesizer** | N11 | Envelope (`error_key`, `context_block`, `pipeline_info`) | ① Domain RAG: embed error text, query `domain_rag` Chroma collection, retrieve top snippet; ② Assemble LLM prompt (error text + context_block + repo + branch + infra overview + RAG snippet); ③ Call LLM (OpenWebUI); ④ Redis SET `fix:<fingerprint>` `source=ai` 30d (never overwrites an `sme` entry) | Envelope updated with `fix_text`, `fix_source="llm_generated"` | N12a | LLM fail → send "unable to analyze" + email + Slack to DevOps + write dead-letter; never silently discard |
 | **Forbidden Text Gate** | N12a | Envelope (`fix_text`) | Check `fix_text` against `FORBIDDEN_TEXT_PATTERNS` env var list | Pass or match | N12b (pass); A4 SME warning route (match) | Config missing → log warning, treat as empty list (never block delivery) |
-| **Infrastructure Gate** | N12b | Envelope (`is_infra`) | Check `is_infra` flag | Pass or infrastructure | N12c (pass); A4 DevOps route (infra) | — |
-| **Disambiguation Gate** | N12c | Envelope: `ranked_candidates`, `fix_source` | **Guard first:** if `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → gate is clear (skip directly to N12); else if `len(ranked_candidates) ≥ 2` AND `abs(candidates[0].combined_score - candidates[1].combined_score) ≤ TIE_BREAK_MARGIN` → ambiguous; else → clear | Ambiguous or clear | A4 DISAMBIG route (ambiguous); N12 (clear) | `ranked_candidates is None` on cache/A3 path → treat as clear; never call `len()` on None |
+| **Infrastructure Gate** | N12b | Envelope (`is_infra`) | Check `is_infra` flag | Pass or infrastructure | N12 (pass); A4 DevOps route (infra) | — |
 | **Agent A4 — Reporter** | N12 | Full Envelope (`fix_text`, `fix_source`, `approved_by`, `context_block`, `pipeline_info`, `is_infra`, `fingerprint`, `request_id`) | ① READ `bfa_kb.db.fixes` WHERE `fingerprint`: get `hit_count`, `last_seen`, `jira_key`; ② Developer lookup by email (`triggered_by_email`); ③ Build DM (`fix_text` + provenance using `approved_by` or `fix_source` + `hit_count` + `last_seen` + `repo` + feedback buttons + dashboard deep link); ④ Developer not found → fallback to email via `triggered_by_email` (SMTP); ⑤ UPDATE `pipeline_events` (`final_status`, `total_duration_ms`); ⑥ INSERT `delivery_records`; ⑦ UPDATE `bfa_kb.db.fixes` SET `hit_count+1`, `last_seen=now()`; ⑧ Redis SET `run_dedup:<pipeline_id>:<fp>` = `slack_message_ts` (1h TTL); ⑨ Set `envelope.slack_message_ts` | Slack DM (or email fallback) delivered; `pipeline_events` updated; `delivery_records` inserted; `run_dedup` Redis key written | Feedback loop (async, via the Slack connector); Jira creation is a dashboard action | SlackApiError → fallback to email; developer not found → send fix via SMTP to `triggered_by_email`; `request_id` None → skip `pipeline_events` UPDATE, still INSERT `delivery_records` |
-| **KB REST API** | N14 | RS256 JWT (Slack service) or session token (dashboard) + action payload | Validate token (RS256 for Slack service; session token lookup in Redis for dashboard); route to approve/edit/discard/feedback handler. **On approve:** (1) Execute FULL write path first (SQLite INSERT/UPDATE + fix_revisions + Chroma upsert + Redis sme:fix SET + audit log INSERT); (2) THEN check `disambig_pending:<fp>` — if exists: deserialize stored `envelope_json`, overwrite `fix_text` and `fix_source="sme_cache"` from the newly approved fix, clear `ranked_candidates` to `None`, DELETE `disambig_pending:<fp>` key, **then** trigger A4 delivery with the patched envelope (Gate 3 will see `ranked_candidates=None` → treat as clear → proceed directly to delivery, no re-trigger loop). If not exists: return `{status: ok}`. | `{status: ok}` (+ async A4 delivery if disambig path) | Terminal (or async A4 DEV if disambig) | Write first, disambig check second prevents infinite loop; SQLite WAL mode; Chroma HTTP server for concurrent access |
+| **KB REST API** | N14 | RS256 JWT (Slack service) or session token (dashboard) + action payload | Validate token (RS256 for Slack service; session token lookup in Redis for dashboard); route to approve/edit/discard/feedback handler. **On approve:** SQLite INSERT/UPDATE (`status='active'`) + `fix_revisions` INSERT + **FTS5 index write** (hierarchical tokens, §4C.2.5) + Redis SET `fix:<fp>` `source=sme` + `sme_audit_log` INSERT. Single writer, one transaction boundary. | `{status: ok, fix_id, revision}` | Terminal | SQLite WAL mode |
 | **Dashboard API** | N15 | Session token + query params | Validate session token (Redis lookup); query `bfa_kb.db` and `bfa_stats.db`; support pagination, free-text search, label filtering; return Resolved / Needs-Attention / Stats views | Paginated JSON | Terminal | Invalid/expired session → HTTP 401; read-only; no lock contention |
 | **Health Check** | N16 | None | Ping Redis; query Chroma HTTP; call Ollama embed endpoint; call LLM health; check Slack token; check domain RAG Chroma | `{status, redis, chroma, ollama_embed, llm, slack, domain_rag}` | Terminal | Each check independent; partial failure → `"degraded"` |
 | **Metrics endpoint** | N17 | None | Aggregate counters from `request_telemetry` and `pipeline_events` | JSON (§8.4), rendered as a table in the dashboard Metrics tab | Terminal | Always available; never blocks the request path |
@@ -564,7 +558,7 @@ as though it were curated.
 | `hit_count` | INTEGER | How many times this fix has been delivered. Drives the "served 12×" provenance line and pruning. | A4 |
 | `first_seen` | TEXT | When the error was **first analysed** — not when it was approved. | A1 |
 | `last_seen` | TEXT | Most recent delivery. Distinguishes live problems from stale ones. | A4 |
-| `fix_confidence` | REAL | Running average of `combined_score` across deliveries — how strongly this fix keeps matching. | A4 |
+| `fix_confidence` | REAL | Running average of `fusion_score` across deliveries — how strongly this fix keeps being found. | A4 |
 | `sme_review_count` | INTEGER | Times sent back for review after negative feedback. A high value means a poor fix. | KB API |
 | `jira_key` | TEXT | Linked ticket, if one was raised from the dashboard. | KB API |
 | `created_at` / `updated_at` | TEXT | First write and last change. | database |
@@ -575,13 +569,19 @@ PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS fixes (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     fingerprint     TEXT    NOT NULL UNIQUE,
-    error_key TEXT   NOT NULL,
+    error_key       TEXT    NOT NULL,
+    signature       TEXT,               -- NEW: category|sub_category|label[|subject] (§4C.1.4)
     fix_text        TEXT    NOT NULL,
     revision        INTEGER NOT NULL DEFAULT 0,
     status          TEXT    NOT NULL DEFAULT 'pending'
                             CHECK(status IN ('pending','active','deprecated','discarded')),
                             -- pending  = AI-generated, awaiting SME review (Pending Review page)
-                            -- active   = SME-approved; ONLY this status is served by A2
+                            -- active   = SME-approved; ONLY this status is returned by search
+    scope           TEXT    NOT NULL DEFAULT 'repo'
+                            CHECK(scope IN ('repo','global')),
+                            -- NEW (§4C.1.5): where this fix is KNOWN to work.
+                            -- 'repo'   = proven in source_repo only; a cross-repo hit goes to A2
+                            -- 'global' = A2 confirmed it in a second repository; cache may serve it anywhere
     -- ── Context labels (A2 scoring + dashboard filtering) ───────────────────
     product_team    TEXT,               -- from the namespace (§10.1.2); used for filtering and tie-break only
     stage_type      TEXT,               -- build|test|package|deploy
@@ -593,10 +593,14 @@ CREATE TABLE IF NOT EXISTS fixes (
     source_repo     TEXT,
     approved_by     TEXT,               -- Slack display name
     -- ── Usage stats ─────────────────────────────────────────────────────────
-    hit_count       INTEGER NOT NULL DEFAULT 0,
+    hit_count       INTEGER NOT NULL DEFAULT 0,   -- times this fix was DELIVERED
+    times_seen      INTEGER NOT NULL DEFAULT 0,   -- NEW (§4C.2.4): times this FINGERPRINT OCCURRED,
+                                        -- whether or not a fix was delivered. Pending Review is
+                                        -- sorted by this DESC — reviewing a fix that fired 34 times
+                                        -- is worth 34x reviewing one that fired once.
     first_seen      TEXT,               -- NEW: ISO 8601 — when error first analysed (not first approved)
     last_seen       TEXT,               -- ISO 8601 — last delivery datetime
-    fix_confidence  REAL,               -- NEW: running avg combined_score across all deliveries
+    fix_confidence  REAL,               -- NEW: running avg fusion_score across all deliveries
     sme_review_count INTEGER NOT NULL DEFAULT 0,  -- NEW: times routed to SME review (3× thumbs-down)
     -- ── Links ───────────────────────────────────────────────────────────────
     jira_key        TEXT,
@@ -612,6 +616,8 @@ CREATE INDEX IF NOT EXISTS idx_fixes_error_category ON fixes(error_category);
 CREATE INDEX IF NOT EXISTS idx_fixes_sub_category   ON fixes(sub_category);
 CREATE INDEX IF NOT EXISTS idx_fixes_source_ci      ON fixes(source_ci);
 CREATE INDEX IF NOT EXISTS idx_fixes_status         ON fixes(status);
+CREATE INDEX IF NOT EXISTS idx_fixes_signature      ON fixes(signature);   -- NEW: signature lane
+CREATE INDEX IF NOT EXISTS idx_fixes_times_seen     ON fixes(times_seen);  -- NEW: review ordering
 
 CREATE TABLE IF NOT EXISTS fix_revisions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -626,25 +632,38 @@ CREATE TABLE IF NOT EXISTS fix_revisions (
 
 CREATE INDEX IF NOT EXISTS idx_fix_revisions_fix_id ON fix_revisions(fix_id);
 
--- Lexical half of hybrid retrieval (§10.1.1). FTS5 ships with SQLite, so this
--- adds keyword search with no new infrastructure.
+-- Keyword lane (§4C.2.5). FTS5 ships with SQLite, so this adds keyword search
+-- with no new infrastructure.
 CREATE VIRTUAL TABLE IF NOT EXISTS fixes_fts USING fts5(
-    error_key,                       -- conservatively normalised error text
-    content     = 'fixes',
-    content_rowid = 'id',
-    tokenize    = 'porter unicode61'
+    error_tokens,                    -- error_key AFTER hierarchical expansion (§4C.2.5):
+                                     -- each compound name indexed whole AND split into parts
+    fix_id UNINDEXED,                -- links back to fixes.id
+    tokenize    = 'unicode61'        -- stemming OFF: log text is not prose, and Porter
+                                     -- stemming risks mangling ERESOLVE / ENOENT / names
 );
--- Triggers keep the index in step with the fixes table
-CREATE TRIGGER IF NOT EXISTS fixes_ai AFTER INSERT ON fixes BEGIN
-    INSERT INTO fixes_fts(rowid, error_key) VALUES (new.id, new.error_key);
-END;
-CREATE TRIGGER IF NOT EXISTS fixes_au AFTER UPDATE ON fixes BEGIN
-    INSERT INTO fixes_fts(fixes_fts, rowid, error_key) VALUES('delete', old.id, old.error_key);
-    INSERT INTO fixes_fts(rowid, error_key) VALUES (new.id, new.error_key);
-END;
-CREATE TRIGGER IF NOT EXISTS fixes_ad AFTER DELETE ON fixes BEGIN
-    INSERT INTO fixes_fts(fixes_fts, rowid, error_key) VALUES('delete', old.id, old.error_key);
-END;
+
+-- NOTE: this is a STANDALONE FTS table, not an external-content one, and it is
+-- NOT maintained by triggers. `error_tokens` is DERIVED from error_key by the
+-- hierarchical expansion in §4C.2.5, which SQL triggers cannot perform. The
+-- application writes this index at the same moment it promotes a fix to
+-- 'active', and deletes the row on discard. It is fully rebuildable from
+-- `fixes`, so a corrupt or lost index is a reindex, never data loss.
+
+-- Negative evidence (§4C.3.4). A2 rejects candidates with a stated reason;
+-- that judgement is free, cannot be reconstructed later, and is the expensive
+-- half of any labelled corpus. Stored from day one, ACTED ON by nothing yet.
+CREATE TABLE IF NOT EXISTS match_rejections (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    query_signature TEXT,               -- signature of the INCOMING error
+    query_fingerprint TEXT,
+    fix_id          INTEGER NOT NULL REFERENCES fixes(id),
+    reason          TEXT,               -- A2's stated reason
+    request_id      TEXT,
+    created_at      TEXT    NOT NULL
+);
+-- Keyed by the PAIR, never by the candidate alone: a rejection is a fact about a
+-- pairing. A per-candidate penalty would let one bad query poison a good fix.
+CREATE INDEX IF NOT EXISTS idx_mr_pair ON match_rejections(query_signature, fix_id);
 ```
 
 ---
@@ -666,11 +685,10 @@ and should not be conflated:
 `request_telemetry` is the table that makes the KPI page and any tuning possible. Without
 it, questions like "what fraction of answers came from cache", "is the 0.90 threshold
 right", "what is this costing per pipeline", and "how often does A2 decline" are all
-unanswerable. It records the decision path (`fix_source`, `match_result`, `cache_tier_hit`), the
-scoring detail (`error_similarity`, `context_similarity`, `combined_score`), the **retrieval
-provenance** that §8.5 turns into per-lane performance (`signature_level`, `signature_rank`,
-`lexical_rank`, `dense_rank`, `fused_rank`, `candidate_count`, `a2_resolution_mode`), the
-cost and latency (`llm_cost_estimate`, `request_latency_ms`, `lane_latency_ms`), and the
+unanswerable. It records the decision path (`fix_source`, `outcome`, `cache_tier_hit`), the
+`fusion_score`, the **search provenance** that §8.5 turns into per-lane performance
+(`signature_rank`, `lexical_rank`, `fused_rank`, `candidate_count`, `scope`), the cost and
+latency (`llm_cost_estimate`, `request_latency_ms`, `lane_latency_ms`), and the
 classification labels used for grouping.
 
 All three link on `request_id`, which is why the headline KPI — *of N failed pipelines, M
@@ -715,35 +733,33 @@ CREATE TABLE IF NOT EXISTS request_telemetry (
     step_name           TEXT,
     -- ── Analysis outcome ────────────────────────────────────────────────────
     fix_source          TEXT    CHECK(fix_source IN (
-                            'sme_cache','ai_cache','match_cache',
-                            'vector_db','llm_generated','no_match')),
-    match_result             TEXT    CHECK(match_result IN (
-                            'exact_match','applicable_with_adjustments',
-                            'partial','no_match')),
+                            'sme_cache','ai_cache','search',
+                            'llm_generated','no_match')),
     -- ── Scoring detail ──────────────────────────────────────────────────────
-    error_similarity    REAL,               -- fused FTS5 + vector score (RRF)
-    context_similarity  REAL,               -- query context_lines vs stored context_sample
-    combined_score      REAL,               -- 0.60*error_similarity + 0.40*context_similarity
-    cache_tier_hit      TEXT,               -- NEW: sme|ai|match_result|none — cache effectiveness
-    -- ── Retrieval provenance (§4C, measured in §8.5) ────────────────────────
-    -- Each lane's opinion of the SELECTED candidate, including lanes that missed
-    -- it. Three integers per request; this is what makes per-lane recall and
-    -- unique-contribution computable at all.
-    signature           TEXT,               -- signature of the incoming error; NULL if no rule matched
-    signature_level     TEXT    CHECK(signature_level IN (
-                            'exact','specific','family','domain','none')
-                            OR signature_level IS NULL),
+    fusion_score        REAL,               -- merged rank score (§4C.3.4). NOT a similarity and
+                                            -- NOT a percentage: it means "the lanes collectively
+                                            -- ranked this highly". Never compare it to 0.90.
+    cache_tier_hit      TEXT,               -- NEW: sme|ai|none — answer-cache effectiveness
+    -- ── Search provenance (§4C, measured in §8.5) ───────────────────────────
+    -- Each lane's opinion of the SELECTED candidate, INCLUDING lanes that missed
+    -- it. Two integers per request; this is what makes per-lane recall and
+    -- unique-contribution computable at all. Recording only the winner cannot
+    -- produce either (§9.2.3).
+    signature           TEXT,               -- signature of the incoming error; NULL if no subject rule
     signature_rank      INTEGER,            -- rank of selected fix in signature lane; NULL = lane missed it
-    lexical_rank        INTEGER,            -- its rank in the FTS5 lane;   NULL = lane missed it
-    dense_rank          INTEGER,            -- its rank in the Chroma lane; NULL = lane missed it
-    fused_rank          INTEGER,            -- its rank after RRF — i.e. its position in what A2 saw
-    candidate_count     INTEGER,            -- size of the set handed to A2 (0 = KB hole, not a ranking problem)
-    candidate_sources   TEXT,               -- JSON {"signature":3,"lexical":8,"dense":10,"union":14}
-    lane_latency_ms     TEXT,               -- JSON {"signature":2,"lexical":5,"dense":41,"rerank":12}
+    lexical_rank        INTEGER,            -- its rank in the keyword lane;   NULL = lane missed it
+    fused_rank          INTEGER,            -- its rank after merging — its position in what A2 saw
+    candidate_count     INTEGER,            -- size of the set handed to A2 (0 = KB gap, not a ranking problem)
+    candidate_sources   TEXT,               -- JSON {"signature":3,"lexical":8,"union":9}
+    lane_latency_ms     TEXT,               -- JSON {"signature":2,"lexical":5}
+    scope               TEXT,               -- scope of the fix that answered — repo|global
     a2_selected_fix_id  INTEGER,            -- logical FK to bfa_kb.fixes.id
-    a2_resolution_mode  TEXT    CHECK(a2_resolution_mode IN ('reused','adapted','none')
-                            OR a2_resolution_mode IS NULL),
-    a2_confidence       REAL,
+    outcome             TEXT    CHECK(outcome IN ('REUSED','ADAPTED','GENERATED','NO_MATCH')
+                            OR outcome IS NULL),
+                                            -- REUSED/ADAPTED/NO_MATCH from A2; GENERATED when A3
+                                            -- answered. One derived column, so the drift KPI in
+                                            -- §8.5.4 is one query and not a three-way join.
+    a2_confidence       REAL,               -- TELEMETRY ONLY — gates nothing (§4C.3.1)
     a2_rejected_count   INTEGER,            -- candidates A2 explicitly rejected — discrimination value
     -- ── Cost / latency ──────────────────────────────────────────────────────
     llm_cost_estimate   REAL,
@@ -764,9 +780,8 @@ CREATE INDEX IF NOT EXISTS idx_rt_event_id     ON request_telemetry(request_id);
 CREATE INDEX IF NOT EXISTS idx_rt_fix_source   ON request_telemetry(fix_source);
 CREATE INDEX IF NOT EXISTS idx_rt_error_cat    ON request_telemetry(error_category);
 CREATE INDEX IF NOT EXISTS idx_rt_sub_category ON request_telemetry(sub_category);
--- Retrieval-performance queries (§8.5) group on these two
-CREATE INDEX IF NOT EXISTS idx_rt_sig_level    ON request_telemetry(signature_level);
-CREATE INDEX IF NOT EXISTS idx_rt_res_mode     ON request_telemetry(a2_resolution_mode);
+-- Search-performance queries (§8.5) group on this
+CREATE INDEX IF NOT EXISTS idx_rt_outcome      ON request_telemetry(outcome);
 
 CREATE TABLE IF NOT EXISTS sme_audit_log (
     id                      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -824,24 +839,31 @@ CREATE INDEX IF NOT EXISTS idx_pr_run_at ON pruning_runs(run_at);
 
 ---
 
-### 4.3 Chroma — `fix_embeddings` Collection
+### 4.3 Chroma — `fix_embeddings` Collection · **phase 3, not built for launch**
 
-Chroma runs in **HTTP server mode** — one server process, all clients use `chromadb.HttpClient(host, port)`. This prevents concurrent-write corruption (BFA-PP-1050) and allows the Slack service on a separate machine to reach Chroma via the KB REST API.
+> **This store is not part of phase 1 or phase 2.** Semantic search is an *optional third
+> search lane*, added only if the §9.2 benchmark shows it earns its keep — see §4C.4.3 On day
+> one there is nothing stored to retrieve, so it would cost two services (Chroma and Ollama)
+> and roughly 40 ms per miss to return nothing for months. The specification is kept here so
+> that adding it later is a deployment change rather than a redesign.
 
-| Field | Type | Status | Set by | Notes |
-|---|---|---|---|---|
-| `id` | string | Existing | KB API | `fix-<fingerprint>` — deterministic, no duplicates on re-upsert |
-| `document` | string | Existing | KB API | `fix_text` (latest approved text — returned to A2 on match) |
-| `embedding` | float[] | Existing | KB API | Ollama `granite-embedding` of `error_key` (NOT `fix_text`) |
-| `metadata.fingerprint` | string | Existing | KB API | SHA-256 — links to `bfa_kb.fixes.fingerprint` |
-| `metadata.fix_id` | integer | Existing | KB API | `bfa_kb.fixes.id` — for reverse lookup |
-| `metadata.product_team` | string | Existing | KB API | A2 context scoring — label 1 of 3 |
-| `metadata.stage_type` | string | Existing | KB API | A2 context scoring — label 2 of 3 |
-| `metadata.error_category` | string | Existing | KB API | A2 context scoring — label 3 of 3 |
-| `metadata.sub_category` | string | **New** | KB API | Pre-filter before vector search — narrows candidates to same sub-category, improves A2 precision |
-| `metadata.labels` | string (JSON) | **New** | KB API | Pre-filter by error label before vector search |
+**What adding it would involve.** One lane in the merge described in §4C.3.4, nothing more.
+Because the merge combines lanes on rank, a third lane can be switched on or off without
+altering the filters, the candidate set, A2's contract, or any other store — which is also
+what makes the benchmark decidable: run arm 3 and arm 5, and measure the difference.
 
-**Collection settings:**
+| Field | Type | Set by | Notes |
+|---|---|---|---|
+| `id` | string | KB API | `fix-<fingerprint>` — deterministic, no duplicates on re-upsert |
+| `document` | string | KB API | `fix_text` (latest approved text) |
+| `embedding` | float[] | KB API | Ollama `granite-embedding` of **`error_key`**, not `fix_text` — the index is searched by the *error*, never by the answer |
+| `metadata.fingerprint` | string | KB API | links to `bfa_kb.fixes.fingerprint` |
+| `metadata.fix_id` | integer | KB API | links to `bfa_kb.fixes.id` |
+
+Metadata beyond those two links is deliberately absent. Product, stage and category are not
+used to filter or score candidates anywhere in §4C, so storing them here would only invite
+their reintroduction.
+
 ```python
 client.get_or_create_collection(
     name="fix_embeddings",
@@ -849,27 +871,20 @@ client.get_or_create_collection(
 )
 ```
 
-**Similarity threshold: `0.90`, applied to `combined_score` — not to raw vector similarity.**
+**Concurrency.** If built, Chroma runs in **HTTP server mode** — one server process, all
+clients using `chromadb.HttpClient(host, port)` — which prevents concurrent-write corruption
+(BFA-PP-1050).
 
-The distinction matters. Raw vector distance measures only how alike the two error *texts*
-look to the embedding model. `combined_score` is broader:
+**Rebuild utility.** `rebuild_chroma.py` reads all `active` rows from `bfa_kb.db`, re-embeds
+each `error_key`, and upserts. `bfa_kb.db` is always authoritative, so a lost collection is a
+reindex, never data loss.
 
-```
-combined_score = 0.60 × error_similarity      +  0.40 × context_similarity
-                 (FTS5 + vector, fused by RRF)   (query context lines vs stored context)
-```
-
-Two consequences. First, the vector search is only **half** of `error_similarity` — keyword
-search contributes the other half, which is what catches error codes, artifact names, and
-version strings that an embedding blurs. Second, a candidate whose text looks alike but
-whose surrounding log context differs scores lower and may fall below 0.90. Thresholding on
-raw vector distance alone would miss both effects. The full formula, the worked comparison
-(0.78 under the old label-based formula versus 0.95 under this one, for the same fix from
-another product), and the tuning guidance are in **§1.2**.
-
-**Rebuild utility:** If Chroma is corrupted or the HTTP server is replaced, `rebuild_chroma.py` reads all `active` rows from `bfa_kb.db`, re-embeds each `error_key`, and upserts to the Chroma collection. `bfa_kb.db` is always authoritative.
+**No threshold applies to a raw cosine.** Nothing is served on the strength of a similarity
+number. The dense lane would contribute *ranks* to the merge (§4C.3.4), and A2 decides. See
+§1.2 for why the old `combined_score ≥ 0.90` gate was removed.
 
 ---
+
 
 ### 4.4 Redis Key Space
 
@@ -877,22 +892,34 @@ Redis stores **temporary answers and working state**. Nothing here is permanent:
 expires, and losing all of Redis costs speed, never correctness — the system simply
 recomputes what it had cached.
 
-Six keys exist. The clearest way to understand them is by what each one is *for*:
+Three keys exist. The clearest way to understand them is by what each one is *for*:
 
-#### Key 1 — `fix:<fingerprint>` · "we already solved this"
+#### Key 1 — `fix:<fingerprint>[:<repo>]` · "we already solved this, here"
 
-**Question it answers:** has this exact error been solved before?
+**Question it answers:** has this exact error been solved before, **in an environment where
+the answer is known to apply**?
 
-If the answer is yes, the stored fix is returned immediately and the request skips the
-vector search *and* the LLM entirely — the cheapest possible path.
+If the answer is yes, the stored fix is returned immediately and the request skips the search
+*and* the LLM entirely — the cheapest possible path, about 1 ms.
 
 | | |
 |---|---|
-| **Key** | `fix:` + the error's fingerprint, e.g. `fix:a3f9c2…` |
-| **Value** | `{fix_text, source, approved_by, fix_id}` where `source` is `sme` or `ai` |
-| **Expires** | 30 days |
+| **Key** | `fix:` + fingerprint, **plus the repository when the fix is `repo`-scoped** — `fix:a3f9c2…` (global) or `fix:a3f9c2…:payments-api` (repo-only) |
+| **Value** | `{fix_text, source, approved_by, fix_id, scope}` where `source` is `sme` or `ai` |
+| **Expires** | **30 days when `source=sme`, 7 days when `source=ai`** |
 | **Written by** | A3 after generating a fix (`source=ai`); the KB API after an SME approves (`source=sme`) |
 | **Read by** | N8, on every analysed error |
+
+**Why the repository can be part of the key.** A fingerprint match is not a licence to reuse
+(§4C.1.5). A fix starts `repo`-scoped, so a lookup from a *different* repository simply misses
+and falls through to A2 — no extra gate, no new failure mode, just a key that does not match.
+Once A2 confirms the fix in a second repository the scope becomes `global`, the key loses its
+suffix, and every repository thereafter gets it in ~1 ms.
+
+**Why a scope miss must not behave like "nothing known".** It falls through to the fingerprint
+probe (§4C.3.1, step 0b), which finds the existing fix regardless of scope and hands it to A2
+as a suggestion. Without that step, cold start would have the same error in twenty
+repositories producing twenty A3 calls and twenty near-identical review-queue rows.
 
 **Why SME and AI share one key.** They used to be two keys checked one after the other, for
 one reason only: an SME-approved fix must win over an AI-generated one. That precedence is
@@ -900,35 +927,11 @@ now a rule applied when *writing* — an SME approval always overwrites, while a
 only written if the slot is empty or already holds an AI answer. One lookup instead of two,
 and the rule lives in one place.
 
-#### Key 2 — `match:<kb_version>:<fingerprint>:<ctx_hash>` · "we already worked this out"
+**Why the AI entry expires four times faster.** An unreviewed AI answer is a hypothesis, and a
+wrong one should stop being served quickly. A reviewed one should not. A 👎 on an AI-sourced
+fix also evicts the key immediately (§4C.2.3).
 
-**Question it answers:** we did not have a stored fix — but have we already *searched* for
-one for this error, in this context, and reached a conclusion?
-
-Note the difference from Key 1: this does **not** hold an answer to give the developer. It
-holds the *result of a search* — the candidate list and their scores. A hit skips the
-embedding call and the vector query, but the routing decision still runs.
-
-| | |
-|---|---|
-| **Key** | `match:` + KB version + fingerprint + context hash |
-| **Value** | `{match_result, ranked_candidates, top_candidate}` |
-| **Expires** | 30 days |
-| **Written by** | A2, after scoring candidates |
-| **Read by** | N9 |
-
-**Why the context hash is in the key.** The same error in a different product or stage ranks
-candidates differently, so the search result is only reusable for the same context.
-`ctx_hash` is a short hash of product + stage + category.
-
-**Why the KB version is in the key.** A stored search result names candidates that an SME
-may since have edited or discarded — reusing it would serve out-of-date conclusions. Rather
-than hunting down and deleting affected keys, a counter called `kb_version` is bumped by one
-on every approve, edit, and discard. Because that counter forms part of the key, **every
-previously written search result instantly becomes unreachable** and expires quietly on its
-own. One increment replaces all invalidation logic.
-
-#### Key 3 — `run_dedup:<pipeline_id>:<fingerprint>` · "already handling this right now"
+#### Key 2 — `run_dedup:<pipeline_id>:<fingerprint>` · "already handling this right now"
 
 **Question it answers:** is this same error already being analysed for this same pipeline
 run?
@@ -946,27 +949,7 @@ the same message thread.
 | **Written by** | A4, after the first delivery |
 | **Read by** | N7 |
 
-#### Key 4 — `disambig_pending:<fingerprint>` · "waiting for a human to choose"
-
-**Question it answers:** two stored fixes scored almost identically — which one should be
-sent?
-
-The system cannot tell them apart, so it pauses, shows both to an SME, and parks the
-in-progress work here until someone picks one.
-
-| | |
-|---|---|
-| **Key** | `disambig_pending:` + fingerprint |
-| **Value** | both candidates plus the paused analysis envelope |
-| **Expires** | 24 hours |
-| **Written by** | A4, when the top two are too close to separate |
-| **Read by** | the KB approve handler, which resumes delivery |
-
-This is the only key whose loss is user-visible: the paused delivery must be restarted from
-the dashboard. *(See the simplification list in §13.19 — this feature is a candidate for
-removal.)*
-
-#### Key 5 — `thread_map:<channel_id>:<message_ts>` · "which fix is this thread about"
+#### Key 3 — `thread_map:<channel_id>:<message_ts>` · "which fix is this thread about"
 
 **Question it answers:** someone replied in a Slack thread — which fix were they talking
 about?
@@ -979,27 +962,25 @@ about?
 | **Written by** | A4 when it posts |
 | **Read by** | the Slack connector when a correction arrives |
 
-#### Key 6 — `kb_version` · the invalidation counter
-
-Not a cache entry — a single integer, shared by everything. Increased by one whenever the
-knowledge base changes. Its only job is to appear inside Key 2 so that all stored search
-results are retired at once. It never expires.
-
 ---
 
 #### Summary
 
 | Key | Plain purpose | Expires | Cost if lost |
 |---|---|---|---|
-| `fix:<fp>` | the answer we already have | 30 d | one vector search |
-| `match:<kb_ver>:<fp>:<ctx>` | the search we already ran | 30 d | one embedding + one query |
+| `fix:<fp>[:<repo>]` | the answer we already have, where it applies | 30 d (SME) · 7 d (AI) | one search |
 | `run_dedup:<run>:<fp>` | already working on it | 1 h | a duplicate message |
-| `disambig_pending:<fp>` | waiting for a human choice | 24 h | delivery must be restarted |
 | `thread_map:<ch>:<ts>` | which fix a thread refers to | 30 d | a correction cannot be matched to its fix |
-| `kb_version` | retires stale search results | never | stale results could be reused |
 
-The distinction worth remembering: **Key 1 caches an answer; Key 2 caches a search.** That
-is why they cannot be merged into one entry.
+**Three keys removed from an earlier draft.** A *Match Result Cache*
+(`match:<kb_version>:<fp>:<ctx>`) cached the outcome of a search, and a `kb_version` counter
+existed only to invalidate it. Both are gone: the counter incremented on **every** approval,
+so during the exact period the knowledge base is being populated the cache was invalidated
+continuously and never hit — while caching `no_match` for hundreds of fingerprints that would
+shortly have become findable. Key 1 already holds the answer under the same fingerprint. A
+`disambig_pending` key held a delivery while an SME chose between two close candidates; A2 now
+returns a ranked set with a stated reason per candidate, so there is nothing left to ask.
+See §13.25.
 
 
 ### 4.5 Schema Relationships
@@ -1022,9 +1003,7 @@ Chroma fix_embeddings
 
 Redis
   fix:<fingerprint> ──────────────► fixes.fingerprint (lookup key)
-  match_result:<kb_ver>:<fp>:<ctx> ─────► (transient; backed by A2 recomputation)
   run_dedup:<run_id>:<fp> ─────────► (transient; 1h TTL)
-  disambig_pending:<fp> ───────────► (transient; 24h TTL)
 ```
 
 **Write order on approve/edit (atomicity guarantee):**
@@ -1074,8 +1053,7 @@ and the derived `fingerprint` are carried on the envelope, not persisted here.
 |---|---|---|---|---|
 | Redis `run_dedup:<pipeline_id>:<fp>` | R | `pipeline_id`, `fingerprint` | `slack_message_ts` if in flight | treat as miss; continue |
 | Redis `fix:<fp>` | R | `fingerprint` | `{fix_text, source, approved_by, fix_id}` | treat as miss; continue to N9 |
-| Redis `kb_version` | R | — | integer counter | assume `0`; match_result lookup simply misses |
-| Redis `match:<kb_version>:<fp>:<ctx_hash>` | R | `fingerprint`, `ctx_hash`, `kb_version` | `{match_result, ranked_candidates, top_candidate}` | treat as miss; continue to N10 |
+| SQLite `fixes` (scope probe) | R | `fingerprint` | any row with this fingerprint — **any scope, any status** — seeded into `ranked_candidates` for A2 (§4C.3.1 step 0b) | SQLite down → fatal |
 
 A hit at `fix:<fp>` short-circuits both the vector query and the LLM.
 
@@ -1083,10 +1061,11 @@ A hit at `fix:<fp>` short-circuits both the vector query and the LLM.
 
 | Store | R/W | Fields in | Fields out | On failure |
 |---|---|---|---|---|
-| Chroma `fix_embeddings` | R | query vector of `error_key`, `n_results = VECTOR_TOP_K` (default 10; tune within 3–20, see §1.2), optional `sub_category` pre-filter | `id`, `document` (`fix_text`), `metadata{fingerprint, fix_id, product_team, stage_type, error_category}`, `distance` | `VectorUnavailable` → match_result `no_match`, proceed to A3, raise health alert |
+| SQLite `fixes` (signature lane) | R | exact `signature` match, `status='active'` | candidate rows with per-lane rank | SQLite down → fatal |
+| SQLite `fixes_fts` (keyword lane) | R | `MATCH` on hierarchical tokens of `error_key`, limit `CANDIDATE_K × 2` | candidate rows with BM25 rank | index missing → keyword lane empty; signature lane still runs; reindex from `fixes` |
 | SQLite `fixes` | R | `fix_id[]` from candidate metadata | `product_team`, `stage_type`, `error_category`, `status`, `hit_count` | treat candidate labels as unmatched (context score 0) |
-| Redis `match:<kb_version>:<fp>:<ctx_hash>` | W | match_result payload, TTL 30d | — | log and continue |
-| SQLite `request_telemetry` | W | `request_id`, `fingerprint`, `match_result`, `error_similarity`, `context_similarity`, `combined_score`, retrieval provenance (`signature_level`, `signature_rank`, `lexical_rank`, `dense_rank`, `fused_rank`, `candidate_count`, `a2_resolution_mode`), `latency_ms` | — | log and continue |
+| SQLite `match_rejections` | W | `query_signature`, `fix_id`, `reason` per rejected candidate | — | log and continue |
+| SQLite `request_telemetry` | W | `request_id`, `fingerprint`, `outcome`, `fusion_score`, search provenance (`signature_rank`, `lexical_rank`, `fused_rank`, `candidate_count`, `scope`), `latency_ms` | — | log and continue |
 
 Candidates whose `status` is not `active` are excluded before scoring.
 
@@ -1119,21 +1098,21 @@ whether raised from the dashboard or from the Slack connector.
 | **Approve** | SQLite `fixes` | W | `fingerprint`, `error_key`, `fix_text`, `approved_by`, context labels, `status='active'` | `fix_id`, `revision` |
 | | SQLite `fix_revisions` | W | `fix_id`, `revision`, `actor`, `action='approved'`, `old_text`, `new_text`, `at` | — |
 | | Chroma | W | upsert `id=fix-<fp>`, embedding of `error_key`, `document=fix_text`, metadata labels | — |
-| | Redis | W | `fix:<fp>` `source=sme`; **INCR `kb_version`** | — |
+| | Redis | W | `fix:<fp>` `source=sme`, TTL 30 d | — |
 | | SQLite `sme_audit_log` | W | `fix_id`, `actor`, `action`, `at` | — |
 | **Edit / correct** | SQLite `fixes` | W | `fix_id` → new `fix_text` | `revision` |
 | | SQLite `fix_revisions` | W | actor, before/after text | — |
 | | Chroma | W | refresh `document` only — **no re-embedding**, because the vector derives from `error_key`, not `fix_text` | — |
-| | Redis | W | overwrite `fix:<fp>`; **INCR `kb_version`** | — |
+| | Redis | W | overwrite `fix:<fp>`, TTL reset | — |
 | **Deprecate / discard** | SQLite `fixes` | W | `fix_id` → `status='discarded'` | — |
 | | Chroma | W | delete `id=fix-<fp>` | — |
-| | Redis | W | delete `fix:<fp>`; **INCR `kb_version`** | — |
+| | Redis | W | delete `fix:<fp>` (all scope variants) | — |
 | **Feedback** | SQLite `feedback_events` | W | `fix_id`, `request_id`, `actor`, `response` (`helpful`\|`unhelpful`) | — |
 | | SQLite `fixes` | W | `helpful_count` / `unhelpful_count` increment; at 3 unhelpful set `needs_review` | — |
 
 **Write order and authority.** SQLite first, then Chroma, then Redis. `bfa_kb.db` is
 authoritative: Chroma is rebuildable with `rebuild_chroma.py`, and Redis is self-healing on
-TTL expiry. A single `INCR kb_version` replaces per-key match_result invalidation.
+TTL expiry. Deleting `fix:<fp>` on discard is the only explicit invalidation needed.
 
 ### Phase 8 — Maintenance
 
@@ -1159,11 +1138,7 @@ The same accesses viewed per store, as a cross-check that nothing is orphaned.
 | `fix:<fp>` | W | 5 | `source=ai`, never overwrites an `sme` entry |
 | `fix:<fp>` | W | 7 | `source=sme` on approve/edit |
 | `fix:<fp>` | delete | 7 | on discard |
-| `kb_version` | R | 3 | part of the match_result key |
-| `kb_version` | INCR | 7 | every approve/edit/discard |
-| `match:<kb_version>:<fp>:<ctx>` | R | 3 | A2 result, computed once and reused |
-| `match:<kb_version>:<fp>:<ctx>` | W | 4 | TTL 30d |
-| `disambig_pending:<fp>` | R/W | 6, 7 | holds delivery state |
+| `fix:<fp>:<repo>` | R/W | 3, 4 | scope-keyed variant for `repo`-scoped fixes (§4C.1.5) |
 | `thread_map:<channel>:<ts>` | R/W | 6, 7 | maps thread to fix |
 
 ### Chroma
@@ -1202,269 +1177,641 @@ denominator is complete even when a later stage fails.
 
 ## 4C. Error Embedding and Retrieval
 
-How an error becomes searchable, how a stored fix is found, and which path each kind of
-failure takes. This section supersedes the retrieval and scoring descriptions that were
+How an error becomes searchable, how a previously stored fix is found, and which path each
+kind of failure takes. This section supersedes the retrieval and scoring descriptions
 previously scattered through §10.
 
-### 4C.1 The three representations
+| | |
+|---|---|
+| **4C.1** | Concepts and vocabulary |
+| **4C.2** | Where fixes are stored, and how they are indexed |
+| **4C.3** | How an error gets answered — the flow, end to end |
+| **4C.4** | Rollout — what to measure first, the first weeks, and what to build when |
+| **4C.5** | Settings |
 
-Every error is turned into three things, each with exactly one job.
+---
 
-| Name | How it is made | Used for | Example |
-|---|---|---|---|
-| `error_raw` | untouched extractor output | shown to the developer; given to A3 as prompt context | `2026-08-09T04:12Z [ERROR] Could not find artifact com.acme:auth-lib:jar:2.7.1 at /builds/runner-07/frontend-app/pom.xml` |
-| `error_key` | **conservative** normalisation — run identity removed, everything diagnostic kept | the **fingerprint**, the **embedding**, and the **FTS5 index** | `[error] could not find artifact com.acme:auth-lib:jar:2.7.1 at <WS>/pom.xml` |
-| `signature` | structured extraction by rule (§4C.4) | the **signature ladder** | `BUILD\|MAVEN\|MISSING_ARTIFACT\|com.acme:auth-lib` |
+### 4C.1 Concepts and vocabulary
 
-**What `error_key` strips:** timestamps, ANSI codes, `Line N:` prefixes, pipeline/build/job
-IDs, runner name, repository and branch names, and the workspace path *prefix*.
+#### 4C.1.1 The three jobs
 
-**What `error_key` deliberately keeps:** version numbers, artifact and module names, paths
-*inside* the repository, line and column numbers, error codes, exception class names.
-
-**Why the embedding gets `error_key` and not a further-generalised text.** Embeddings
-generalise by construction — that is their function. Pre-generalising (`<PATH>/foo.c:<LINE>`)
-does by regex what the model already does, risks deleting signal the model would have used,
-and makes the dense lane more correlated with the lexical lane. Fusion pays off when the two
-lanes disagree productively, so correlating them defeats the purpose.
-
-### 4C.2 Write path — what happens when a fix is approved
-
-```
-SME approves  ──►  KB REST API
-                        │
-      ┌─────────────────┼──────────────────┬────────────────────┐
-      ▼                 ▼                  ▼                    ▼
- SQLite fixes      FTS5 index          Chroma                Redis
- system of         lexical lane        dense lane            cache
- record
-```
-
-| Store | Written | Notes |
+| Component | Its job | What it is good at |
 |---|---|---|
-| **SQLite `fixes`** | `fingerprint`, `error_key`, `error_raw`, `fix_text`, `signature`, `context_sample`, labels, `status` | authoritative; every other store is rebuildable from it |
-| **FTS5 `fixes_fts`** | `error_key`, expanded into hierarchical tokens (§4C.3) | keyword lane |
-| **Chroma** | `id = fix-<fingerprint>`, `embedding = embed(error_key)`, `document = fix_text` | one vector per fix |
-| **Redis** | `fix:<fingerprint>` = `{fix_text, source:"sme", …}`, 30-day TTL | answer cache |
+| **Retrieval** | *find* fixes that might apply | being fast and casting a wide net |
+| **A2** | *decide* whether one of them actually applies | reading carefully and saying no |
+| **A3** | *write a new fix* when nothing stored applies | starting from nothing |
 
-**Embedding calls happen on the write path, once per approved fix.** Stored fixes are never
-re-embedded at query time; only the incoming error is embedded live.
+No component does another's job. Retrieval never decides; it only offers. A2 never searches;
+it only judges what it is given. A3 is only asked when the other two have nothing.
 
-### 4C.3 Hierarchical tokens — how the lexical index is built
+Two mistakes matter more than the others:
 
-Splitting compound identifiers destroys exact matching; keeping them whole destroys
-cross-product matching. Do both: index each compound identifier in **whole and component
-form**.
+| Mistake | What happens | How bad |
+|---|---|---|
+| Retrieval offers **too few** candidates | the right fix never reaches A2, and nothing later can recover it | **bad — a silent miss** |
+| A fix is served straight from cache when it does **not** apply | a wrong fix is delivered and nobody checked | **bad — a wrong answer** |
+| Retrieval offers **too many** candidates | A2 spends a few extra tokens saying no | acceptable |
+| Something goes to A2 that could have been cached | one LLM call, about 2 seconds | acceptable |
+
+These two pull in opposite directions, and the whole design follows from balancing them:
+
+> **Be generous about what reaches A2. Be strict about what is allowed to skip A2.**
+
+---
+
+#### 4C.1.2 Normalisation
+
+**What it is.** Cleaning up a raw error line so that the same problem, occurring on different
+days on different machines in different repositories, produces the *same* text.
+
+**Why it is needed.** The same failure never appears twice identically in a log. Timestamps
+differ, build numbers differ, the machine name differs. Unless those are removed, two
+occurrences of one problem look like two different problems.
+
+**How it is done — the rule.** We only remove things that describe **which run this was**. We
+keep everything that describes **what went wrong**.
+
+| Removed — describes the run | Example |
+|---|---|
+| Timestamps | `2026-08-09T04:12Z` |
+| Colour codes the terminal added | invisible characters around text |
+| Line-number prefixes our own extractor added | `Line 447:` |
+| Pipeline, build and job numbers | `job #88213` |
+| The machine that ran the build | `runner-07` |
+| Repository and branch names | `frontend-app`, `feature/login` |
+| The folder the build happened to be checked out into | `/builds/runner-07/frontend-app/` → `<WS>/` |
+
+| **Kept — describes the problem** | Example | Why keeping it matters |
+|---|---|---|
+| Version numbers | `2.7.1` | the fix is often *"change the version"* — if we deleted versions, the fix for 2.7.1 would be served for 2.9.4 |
+| Names of libraries, packages, modules | `auth-lib` | this is the identity of the thing that broke |
+| Paths **inside** the repository | `src/main/java/com/acme/Foo.java` | tells you which part of the code broke |
+| Line and column numbers in source files | `Foo.java:112` | two different failures in one file are different failures |
+| Error codes | `ERESOLVE`, `ENOENT`, `E404` | usually the single most identifying word in the line |
+| Exception and class names | `NullPointerException` | same |
+
+**Worked example.**
+
+```
+BEFORE  2026-08-09T04:12Z [ERROR] Could not find artifact
+        com.acme:auth-lib:jar:2.7.1 at /builds/runner-07/frontend-app/pom.xml
+        (job #88213, runner-07)
+
+AFTER   [error] could not find artifact com.acme:auth-lib:jar:2.7.1 at <WS>/pom.xml
+```
+
+The result is called **`error_key`**. Notice that `auth-lib`, `2.7.1` and `pom.xml` all
+survived. Only the date, the job number, the machine, and the checkout folder were removed.
+
+**Why we are careful rather than aggressive.** An earlier version of this design also removed
+version numbers and paths. That was wrong, and the reason is specific: a fingerprint match
+(next term) **skips A2 entirely**. So if `auth-lib:2.7.1` and `auth-lib:2.9.4` were cleaned
+down to the same text, the fix approved for one version would be delivered for the other with
+nobody checking whether the version difference mattered.
+
+| If normalisation is… | Result | Cost |
+|---|---|---|
+| Too aggressive | different problems look identical → **a wrong fix is served without review** | **dangerous** |
+| Too careful | the same problem sometimes looks like two problems → an extra search runs | a few milliseconds |
+
+Only one of those two is dangerous, so we deliberately err toward being too careful.
+
+**What normalisation is *not*.** It is not summarising, rephrasing, or shortening the error.
+The developer is still shown the original raw text, and A3 is still given the original raw
+text. `error_key` exists only for matching.
+
+---
+
+#### 4C.1.3 Fingerprint
+
+**What it is.** A short fixed-length code that stands for one exact `error_key` — like an ID
+badge for a specific error.
+
+**How it is produced.** The `error_key` text is put through SHA-256, a standard one-way
+function that turns any text into a fixed-length code. The same text always produces the same
+code; any difference at all, even one character, produces a completely different code.
+
+```
+error_key   [error] could not find artifact com.acme:auth-lib:jar:2.7.1 at <WS>/pom.xml
+                                    │
+                                 SHA-256
+                                    ▼
+fingerprint  a3f9c2e5b1...
+```
+
+**What it is used for.**
+
+| Use | How |
+|---|---|
+| *"Have we answered this exact error before?"* | look up the fingerprint in the cache |
+| *"Is this the same error we already saw earlier in this same pipeline run?"* | compare fingerprints, collapse duplicates into one analysis |
+| *"How often does this exact error happen?"* | count occurrences per fingerprint — this is `times_seen` |
+
+**What it is *not*.** It is **not** a similarity measure. Two fingerprints either match
+exactly or they do not; there is no "80% match". Two errors that a human would call nearly
+identical produce two completely unrelated fingerprints if a single character differs. That is
+why searching (§4C.3) exists at all — the fingerprint only ever answers *"identical, yes or
+no"*.
+
+---
+
+#### 4C.1.4 Signature
+
+**What it is.** A short structured label describing **what kind of failure** this is, rather
+than which exact failure it is.
+
+```
+dependency | maven | maven_missing_artifact | com.acme:auth-lib
+     │         │              │                      │
+   broad     which        what kind of         which thing
+  category    tool          failure              failed
+```
+
+**How it is produced.** Almost entirely from configuration that already exists. Each entry in
+`error_patterns.json` already has a `category`, a `sub_category`, and a `label`. Those are the
+first three parts. The only new thing is an optional extra field per pattern that says how to
+pull the name of the failing item out of the error text.
+
+**What it is used for.** Answering *"we have never seen this exact error, but have we seen
+this kind of error?"* A fingerprint cannot answer that, because it is exact-or-nothing.
+
+**Fingerprint vs signature, side by side:**
+
+| | Fingerprint | Signature |
+|---|---|---|
+| Question it answers | *have I seen this exact failure?* | *what kind of failure is this?* |
+| Changes when the version number changes | yes — completely different | no — same signature |
+| Can be partially matched | no | yes |
+| Comes from | the error text itself | the pattern configuration |
+
+---
+
+#### 4C.1.5 Scope
+
+**What it is.** A label on a **stored fix** recording **where that fix is known to work**.
+
+**Why it exists.** Two different products can produce a byte-identical error and still need
+different fixes:
+
+> Both products fail with: *could not find artifact com.acme:auth-lib:jar:2.7.1*
+> Product A's correct fix: *add auth-lib to the internal Nexus repository configuration*
+> Product B's correct fix: *fix the Maven mirror configuration*
+
+The error is the same. The fingerprint is the same. **The fix is not the same** — because the
+difference is in the environment, not in the error text.
+
+So: *the same fingerprint* does **not** mean *the same fix applies*. Scope is what records the
+difference.
+
+**How it works.**
+
+| Scope | Meaning | Where the cached answer can be reused |
+|---|---|---|
+| `repo` | this fix has only ever been proven to work in one repository | that repository only |
+| `global` | this fix has been confirmed to work in more than one repository | anywhere |
+
+**How a fix moves from `repo` to `global`.** Not by anyone declaring it. A fix starts at
+`repo` because that is the only place it has ever been shown to work. The first time the same
+error appears in a *different* repository, the cached answer is deliberately **not** served
+directly — it is handed to A2 as a suggestion instead, and A2 decides whether it applies
+there. If A2 says yes, the fix becomes `global` and every future repository gets it instantly
+from cache.
+
+**What this costs.** One A2 call (about 2 seconds), **once**, the first time an error crosses
+into a new repository. After that it is back to about 1 millisecond forever.
+
+**What it is *not*.** Scope is not about permissions or ownership. It is only a record of
+where a fix has been demonstrated to work.
+
+---
+
+#### 4C.1.6 Candidate, lane, and fusion score
+
+| Term | Meaning |
+|---|---|
+| **Candidate** | a stored fix that the search brought back as *possibly* relevant. It is a suggestion for A2, never an answer by itself |
+| **Lane** | one way of searching. This design has two: signature lookup and keyword search. Each lane produces its own ranked list |
+| **Fusion score** | a single number produced by merging the lanes' ranked lists into one list. It is **not** a percentage and **not** a similarity — it only says *"the lanes collectively ranked this one highly"* |
+
+---
+
+#### 4C.1.7 The three forms of an error
+
+Putting the above together — every error is turned into three things, each with exactly one
+job.
+
+| Name | How it is made | What it is used for |
+|---|---|---|
+| `error_raw` | the extractor's output, untouched | shown to the developer; given to A3 when it writes a new fix |
+| `error_key` | conservative normalisation (§4C.1.2) | the fingerprint, and the keyword index |
+| `signature` | derived from the pattern configuration (§4C.1.4) | looking up *this kind of* failure |
+
+The developer and A3 always see the original text. Only matching uses the cleaned-up version,
+because A3 needs the exact version number and exact path in order to reason about a fix.
+
+---
+
+### 4C.2 Where fixes are stored, and how they are indexed
+
+#### 4C.2.1 Two stores that must not be confused
+
+| | **Answer cache** (Redis) | **Knowledge base** (`fixes` table + keyword index) |
+|---|---|---|
+| What it claims | *"we answered **this exact error**, in **this environment**, before"* | *"this fix might be relevant to a **similar** error"* |
+| Found by | fingerprint, within scope | searching |
+| May hold AI output nobody has reviewed? | **Yes** — clearly labelled, short expiry | **No** |
+| Used at | the very first step | the search steps |
+
+**Why the separation matters.** If an unreviewed AI-written fix were allowed into the
+knowledge base, it would later be found while searching for a *different* error, be presented
+as history, and become established fact. The AI's guess would have quietly turned into
+institutional knowledge. Keeping the two stores separate is what prevents that.
+
+#### 4C.2.2 Fix lifecycle
+
+| Status | Can the search return it? | How it gets there |
+|---|---|---|
+| `pending` | **No** | A3 wrote it. It is still served from the answer cache if the *exact same* error recurs, but it is never offered as a suggestion for a *different* error |
+| `active` | **Yes** | an SME approved it |
+| `deprecated` / `discarded` | No | withdrawn, kept for audit |
+
+#### 4C.2.3 Protections on unreviewed AI output
+
+| Protection | Rule |
+|---|---|
+| Expiry | SME-approved fixes last 30 days in the cache; AI-written fixes last **7 days**. A bad guess should expire quickly; a reviewed answer should not |
+| Labelling | the Slack message says *AI-generated, not yet reviewed* — it never looks the same as an approved fix |
+| Thumbs-down | a 👎 on an AI-written fix removes it from the cache immediately and flags it for review |
+| Did it actually work? | if the same error comes back in the same repository within a week of a fix being delivered, the fix probably did not work. This is detected automatically, with no human input |
+
+#### 4C.2.4 `times_seen` — the most valuable mechanism in this section
+
+A counter on each stored fix, increased **every time** that fingerprint occurs. The Pending
+Review page is sorted by it, **highest first — not oldest first**.
+
+Reviewing a fix that has occurred 34 times is worth 34 times as much as reviewing one that
+occurred once. In the first weeks this is the difference between a review queue of 400 items
+that nobody can start on, and roughly 20 decisions that matter.
+
+This is what turns scarce reviewer attention into a working knowledge base — and every other
+mechanism in this section only starts helping once the knowledge base has content.
+
+#### 4C.2.5 The keyword index — indexing names in whole and in parts
+
+The keyword search runs over the cleaned-up `error_key` text, using the full-text search that
+ships with SQLite. No new service is needed.
+
+**The problem.** Compound names like `com.acme:auth-lib:jar:2.7.1` sit awkwardly in a search
+index:
+
+- Keep them whole, and a query from a different product with a slightly different name never
+  matches at all.
+- Split them apart, and an exact match is no longer recognisably better than a partial one.
+
+**The solution — do both.** Each compound name is indexed in whole form *and* broken into its
+parts:
 
 ```
 com.acme:auth-lib:jar:2.7.1
-    whole      →  "com.acme:auth-lib:jar:2.7.1"
-    components →  "com.acme"  "auth-lib"  "jar"  "2.7.1"
+     whole  →  com.acme:auth-lib:jar:2.7.1
+     parts  →  com.acme    auth-lib    jar    2.7.1
 
 src/network/auth-lib/foo.c
-    whole      →  "src/network/auth-lib/foo.c"
-    components →  "src"  "network"  "auth-lib"  "foo.c"
+     whole  →  src/network/auth-lib/foo.c
+     parts  →  src    network    auth-lib    foo.c
 ```
 
-An exact query matches the whole form and ranks highest; a query from another product with a
-different directory tree still matches on `auth-lib` and `foo.c`.
+An identical error matches the whole form and ranks top. An error from another product with a
+different folder layout still matches on `auth-lib` and `foo.c` and appears further down —
+which is exactly right, because it is a weaker but real match.
 
-Because expansion happens when the index text is built, the tokenizer stays simple and
-**stemming is off** — Porter stemming is meant for prose and does nothing useful to
-`ERESOLVE` or `ENOENT`, while risking damage to identifiers.
+**Word-stemming is switched off.** Stemming is a feature designed for English prose — it
+treats *running*, *runs* and *ran* as one word. It does nothing useful for `ERESOLVE` or
+`ENOENT`, and risks mangling names. Log text is not prose.
 
-```sql
-CREATE VIRTUAL TABLE IF NOT EXISTS fixes_fts USING fts5(
-    error_tokens,                  -- error_key after hierarchical expansion
-    content = 'fixes',
-    content_rowid = 'id',
-    tokenize = 'unicode61'         -- no stemming
-);
+---
+
+### 4C.3 How an error gets answered — the flow, end to end
+
+#### 4C.3.1 Following one error through the system
+
+The clearest way to describe the flow is to follow a single error through it. Take:
+
+> *Could not find artifact `com.acme:auth-lib:jar:2.7.1`* — failing in repository
+> `payments-api`.
+
+**Step 0 — "Have we answered this exact error, here, before?"**
+
+The error is normalised and fingerprinted, and the answer cache is checked.
+
+- **Found, and the stored fix is `global` or belongs to this repository** → the answer is
+  returned immediately. About 1 millisecond, no LLM, nothing else runs.
+- **Not found** → continue.
+
+This step exists because most failures in a busy CI system are repeats of a failure that
+already happened.
+
+**Step 0b — "Have we answered this exact error somewhere *else*?"**
+
+Before searching, we check whether this exact fingerprint already exists but is scoped to a
+different repository (§4C.1.5).
+
+If it does, we do **not** serve it and we do **not** ignore it. We carry it forward as a
+suggestion for A2 to judge. This matters most in the early weeks: without it, the same error
+appearing in twenty repositories would cause A3 to write twenty near-identical fixes and flood
+the review queue with duplicates.
+
+**Step 1 — "Have we seen this *kind* of failure?"**
+
+The signature is looked up: *a Maven missing-artifact failure concerning `com.acme:auth-lib`*.
+Any stored fixes with the same signature are collected as candidates.
+
+This catches the common case where the exact error differs — a different version number, say —
+but the failure is the same kind of thing.
+
+**Step 2 — "What does keyword search turn up?"**
+
+The cleaned-up error text is searched against the keyword index (§4C.2.5). This is what finds
+fixes recorded for a different product, or a different folder layout, that still concern
+`auth-lib` and `pom.xml`.
+
+Steps 1 and 2 are two different **lanes**. Each produces its own ranked list. They frequently
+disagree, and that is the point — each finds things the other misses.
+
+**Step 3 — "Merge the lists and throw out the obvious rubbish."**
+
+The two ranked lists are merged into one (§4C.3.4), unreviewed fixes are excluded, and
+anything scoring below a minimum is dropped so it never reaches the LLM prompt. What survives
+is a small set — typically under ten — of possible fixes.
+
+Note what this step does **not** do: it does not pick a winner, and it does not decide whether
+any of them are right.
+
+**Step 4 — "Does any of these actually apply?"**
+
+A2 receives the whole set, not just the top one, and answers one of three ways:
+
+| A2's answer | Meaning | What happens next |
+|---|---|---|
+| `REUSED` | one of these fixes applies as-is | it is delivered; if it came from another repository, its scope becomes `global` |
+| `ADAPTED` | one is nearly right and needs a specific change | it is delivered with the change shown as a before/after diff |
+| `NO_MATCH` | none of these apply | hand over to A3 |
+
+**Why A2 gets the whole set rather than the best one.** Given a single candidate, A2 can only
+approve or reject a decision search already made. Given several, it can *tell them apart* —
+which is a far more useful judgement:
+
+> The error is: *gcc failed — `openssl/ssl.h` missing*
+> Candidate 1 — an OpenSSL **version mismatch**
+> Candidate 2 — `openssl/ssl.h` **not found**
+> Candidate 3 — `libssl.so` missing **at runtime**
+>
+> Only because 1 and 3 are also in front of it can A2 be confident that 2 is the right one.
+
+**Step 5 — "Nothing applies, so write something new."**
+
+A3 writes a fresh fix using the **original** error text, the surrounding log lines, and the
+repository context. The result is delivered, stored as `pending`, and cached for 7 days
+clearly labelled as AI-written and unreviewed.
+
+#### 4C.3.2 The whole flow
+
+```
+  error arrives
+       │
+       ▼
+  ┌─────────────────────────────┐
+  │ 0  answer cache             │  exact error, right scope?      ~1 ms
+  └───────┬─────────────────────┘
+     hit ─┴──────────────────────────────────────► deliver
+       │ miss
+       ▼
+  ┌─────────────────────────────┐
+  │ 0b same error elsewhere?    │  carry it forward as a suggestion
+  └───────┬─────────────────────┘
+       ▼
+  ┌─────────────────────────────┐
+  │ 1  signature lookup         │  same KIND of failure           ~2 ms
+  └───────┬─────────────────────┘
+       ▼
+  ┌─────────────────────────────┐
+  │ 2  keyword search           │  same NAMES and CODES           ~5 ms
+  └───────┬─────────────────────┘
+       ▼
+  ┌─────────────────────────────┐
+  │ 3  merge, filter, shortlist │  → a small set of candidates
+  └───────┬─────────────────────┘
+       ▼
+  ┌─────────────────────────────┐
+  │ 4  A2 judges the whole set  │                                  ~2 s
+  └───────┬─────────────────────┘
+   ┌──────┴───────┐
+REUSED/ADAPTED  NO_MATCH
+   │              │
+deliver     ┌─────▼──────────────┐
+            │ 5  A3 writes a new │                                  ~4 s
+            │    fix (pending)   │
+            └────────────────────┘
 ```
 
-### 4C.4 The signature — what kind of failure is this?
+#### 4C.3.3 What each step is allowed to decide
 
-The fingerprint answers *"have I seen this exact failure?"*. The signature answers a
-different and more useful question: *"what kind of failure is this?"* — and unlike a hash, it
-generalises.
+A useful way to read the flow is by how much authority each step has.
 
-```
-BUILD | MAVEN | MISSING_ARTIFACT | com.acme:auth-lib
- domain  tool     failure type      specific subject
-```
-
-Signatures are produced by extraction rules declared alongside the error patterns, so adding
-a rule is a configuration change:
-
-```json
-{
-  "pattern": "Could not find artifact",
-  "category": "dependency",
-  "sub_category": "maven",
-  "label": "maven_missing_artifact",
-  "signature": {
-    "domain": "BUILD", "tool": "MAVEN", "failure": "MISSING_ARTIFACT",
-    "subject_regex": "artifact ([\\w.\\-]+:[\\w.\\-]+)"
-  }
-}
-```
-
-**The ladder, and its stop condition.** Retrieval climbs the hierarchy only while nothing
-clears the floor — but **broadening widens the candidate pool while narrowing the claim**:
-
-| Level | Lookup | Meaning | May it be served on its own? |
+| Step | May it deliver an answer on its own? | May it reject a candidate? | Reasoning involved |
 |---|---|---|---|
-| Exact | `signature = 'BUILD\|MAVEN\|MISSING_ARTIFACT\|com.acme:auth-lib'` | same failure, same subject | **Yes** — A2 confirms |
-| Specific | `signature LIKE 'BUILD\|MAVEN\|MISSING_ARTIFACT\|%'` | same failure type, different subject | No — A2 judges |
-| Family | `signature LIKE 'BUILD\|MAVEN\|%'` | same tool, different failure | **No — hint only** |
-| Domain | `signature LIKE 'BUILD\|%'` | nearly meaningless on its own | **Stop — hand to A3** |
+| 0 · answer cache | **Yes** — exact error, correct scope | — | none; exact match only |
+| 0b · same error elsewhere | No | No | none |
+| 1 · signature lookup | No | No | none |
+| 2 · keyword search | No | No | none |
+| 3 · merge and filter | No | **Yes** — but only unreviewed fixes and very weak matches | none — mechanical rules only |
+| 4 · A2 | **Yes** | **Yes** — with a stated reason | full |
+| 5 · A3 | **Yes** — but the result is marked unreviewed | — | full |
 
-Without this rule the cascade always terminates in *some* match, and quietly degrades from
-"found the right fix" to "found something in the right building". Each broadening step feels
-locally reasonable, which is exactly why the stop condition has to be explicit.
+Only two steps in the entire flow can deliver an answer without an LLM having reasoned about
+it: step 0, which requires an exact fingerprint match within the correct scope, and nothing
+else. That is the design's central safety property.
 
-**Coverage is partial by design.** Extraction rules are authored per failure family, so early
-on many errors will have no signature. That is a graceful degradation — the lexical and dense
-lanes still run — but it must be visible, so `signature_coverage` is a tracked metric
-(§4C.8). A low coverage figure means missing rules, not absent errors.
+#### 4C.3.4 Step 3 in detail — merging the two lanes
 
-### 4C.5 Read path — the retrieval cascade
+Each lane returns its own ranked list. They must be combined into one list, and the two lanes'
+scores cannot simply be added together — a keyword-search score and a signature match are
+different kinds of number measured on different scales. Adding them would be meaningless.
 
-Five stages with early exits. Most requests never reach the bottom.
+**So we combine on *position*, not on score.** A fix that came 1st in either list is strong
+evidence, regardless of what number that list attached to it. This is a standard technique
+called Reciprocal Rank Fusion.
 
-```
-                          error arrives
-                               │
-                      ┌────────▼────────┐
-   STAGE 0            │ fingerprint     │  Redis GET fix:<fp>
-   exact              │ lookup          │  ~1 ms — no search at all
-                      └────────┬────────┘
-                          hit? └─── YES ──► deliver  (source = cache)
-                               │ no
-                      ┌────────▼────────┐
-   STAGE 1            │ signature       │  indexed SQL on fixes.signature
-   structured         │ ladder          │  ~2 ms
-                      └────────┬────────┘
-                               │ candidates (possibly empty)
-                      ┌────────▼────────┐
-   STAGE 2            │ FTS5 · BM25     │  ~5 ms    ─┐ run
-   lexical lane       └────────┬────────┘            │ concurrently
-                      ┌────────▼────────┐            │
-   STAGE 3            │ Chroma · cosine │  ~40 ms   ─┘
-   dense lane         └────────┬────────┘  (embed + query)
-                               │
-                      ┌────────▼────────┐
-   STAGE 4            │ fuse → filter   │
-   merge              │ → rerank        │
-                      └────────┬────────┘
-                               │ candidate SET (not a single winner)
-                      ┌────────▼────────┐
-   STAGE 5            │ A2 judges the   │  ~2 s — one LLM call
-   judgement          │ whole set       │
-                      └────────┬────────┘
-                      ┌────────┴────────┐
-                    match             no match
-                      │                  │
-                   deliver           A3 generates
-```
+**How it works.**
 
-### 4C.6 Stage 4 in detail — fuse, filter, rerank
+| | |
+|---|---|
+| Each lane contributes points to every fix it returned | based on the **position** it gave it |
+| Higher position → more points | 1st place is worth far more than 10th |
+| A fix returned by **both** lanes accumulates points from both | which is how agreement between lanes is rewarded |
+| Lanes can be given different importance | a signature match counts for more than a keyword match |
 
-```python
-# ── 1. FUSE — Reciprocal Rank Fusion, combining on RANK, because BM25 and
-#              cosine are not on a comparable scale.
-scores = defaultdict(float)
-for rank, c in enumerate(signature_hits): scores[c.id] += SIG_WEIGHT / (RRF_K + rank + 1)
-for rank, c in enumerate(lexical_hits):   scores[c.id] += 1.0       / (RRF_K + rank + 1)
-for rank, c in enumerate(dense_hits):     scores[c.id] += 1.0       / (RRF_K + rank + 1)
-error_similarity = normalise(scores)          # → [0, 1]
+**Worked example — four candidate fixes:**
 
-# ── 2. FILTER — hard, applied before any scoring effort is spent
-candidates = [c for c in candidates
-              if c.status == 'active'                       # never serve an unapproved fix
-              and c.error_category == query.error_category] # infra fix must not answer code error
-
-# ── 3. RERANK — context lines against context lines, not labels against labels
-for c in candidates:
-    c.context_similarity = cosine(embed(query.context_lines),
-                                  embed(c.context_sample))
-    c.combined_score = ERROR_WEIGHT   * c.error_similarity \
-                     + CONTEXT_WEIGHT * c.context_similarity      # 0.60 / 0.40
-
-# ── 4. TIE-BREAK — the only place metadata influences ranking
-candidates.sort(key=lambda c: (round(c.combined_score / TIE_BREAK_MARGIN),
-                               c.product_team == query.product_team,
-                               c.stage_type   == query.stage_type),
-                reverse=True)
-```
-
-Product, stage, and category never contribute to the score. They filter beforehand and settle
-ties afterwards — so a good fix from another product wins on merit, which is consistent with
-stripping repository names out of `error_key` in the first place.
-
-### 4C.7 Stage 5 — A2 receives the candidate set, not the winner
-
-Handing A2 only the top candidate makes it an approver of a decision retrieval already made.
-Given alternatives it can *discriminate*, which is a different and far more useful judgement:
-
-> Query: *gcc failed — `openssl/ssl.h` missing*
-> Candidate 1: OpenSSL **version mismatch**
-> Candidate 2: `openssl/ssl.h` **not found**
-> Candidate 3: `libssl.so` missing **at runtime**
-
-Only in the presence of 1 and 3 can A2 confidently say 2 is the same failure.
-
-```json
-{ "selected_candidate_id": 412,
-  "same_failure":     true,
-  "resolution_mode":  "adapted",
-  "adapted_diff":     "- downgrade to 2.7.1\n+ downgrade to 2.9.x",
-  "rejected": [
-    {"id": 388, "why": "version mismatch, not a missing artifact"},
-    {"id": 401, "why": "runtime failure, not build-time"}
-  ],
-  "confidence": 0.88 }
-```
-
-**Why `resolution_mode` is mandatory.** Deciding *"is this the same failure?"* and producing
-*"here is the fix"* are different jobs. When one call does both, a system can slide from
-retrieval into invented diagnosis without anything recording that it happened — *"this looks
-relevant… so here is a plausible solution."* Requiring `reused | adapted | none`, and a
-**diff** rather than a free rewrite when adapting, keeps that boundary visible and auditable.
-If `adapted` begins to dominate, the system has drifted from reuse toward generation and the
-telemetry says so out loud.
-
-### 4C.8 Routing — every scenario
-
-| # | Scenario | Stages that fire | Outcome | Cost |
+| Fix | Position in signature lane | Position in keyword lane | Fusion score | Outcome |
 |---|---|---|---|---|
-| 1 | Exact repeat, same repo | 0 | served from cache | ~1 ms, no LLM |
-| 2 | Exact repeat, **different repo** | 0 | served from cache — repo was stripped from `error_key`, so fingerprints match | ~1 ms, no LLM |
-| 3 | Same error, **different version** | 0 miss → 1 exact → 5 | A2 confirms and **adapts** the version | ~2 s, 1 LLM call |
-| 4 | Same error, different product or path | 0 miss → 1–4 → 5 | hierarchical tokens match `auth-lib`; A2 confirms | ~2 s, 1 LLM call |
-| 5 | Same root cause, **different wording** | 0 miss, 1 miss, 2 weak → **3 carries it** → 4, 5 | the stratum the dense lane exists for | ~2 s, 1 LLM call |
-| 6 | Genuinely novel | 0–4 all miss → A3 | fresh fix; cached under `fix:<fp>` | ~4 s, 1 LLM call |
-| 7 | Infrastructure error | as applicable, then A4 routes on `error_category` | DevOps channel; developer told it was not their change | unchanged |
-| 8 | No pattern matched | extraction fails | `zero_match` recorded; DevOps notified with log tail | no analysis |
-| 9 | Same error across 3 stages of one run | 0 → dedup at N7 | one analysis; stages 2 and 3 become thread replies | 1 analysis, not 3 |
-| 10 | **No signature rule for this error type** | 1 skipped → 2, 3, 4, 5 | degrades to lexical + dense; `signature_coverage` records the gap | unchanged |
+| #412 | 1st | 3rd | highest | top of the shortlist |
+| #388 | — | 1st | high | shortlisted |
+| #401 | 2nd | — | medium | shortlisted |
+| #455 | — | 9th | very low | **dropped — below the floor** |
 
-### 4C.9 Degradation routing
+Fix #412 wins because *both* lanes liked it. Fix #388 is still shortlisted even though the
+signature lane never saw it — because the keyword lane ranked it first. That is the whole
+point of running two lanes.
 
-Each dependency failure removes one lane and the cascade continues.
+**Then two mechanical filters are applied:**
 
-| Down | Lanes lost | Still running | Effect |
+| Filter | Rule | Reason |
+|---|---|---|
+| Review status | only `active` fixes survive | an unreviewed AI-written fix must never be offered as a suggestion for a different error |
+| Minimum score | anything below the floor is dropped | keeps rubbish out of the LLM prompt and out of the cost |
+
+**And nothing else.** In particular, product, team, stage and error category are **not** used
+here — not to filter and not to score. A good fix from another team wins on merit. This is
+deliberate and consistent: repository names were removed during normalisation precisely so
+that fixes could travel between products.
+
+**On the fusion score's name.** It is deliberately not called a "similarity". It is not a
+percentage and it does not mean *"91% alike"* — it means *"the lanes collectively ranked this
+one highly"*. An earlier draft called it a similarity, and as a direct result a threshold
+meant for percentages was written against it. The minimum score here is only an **admission
+floor**, and its value must be established by measurement rather than carried over.
+
+For debugging, each candidate keeps its per-lane positions alongside the merged score, so it
+is always possible to see *which* lane found something and where it placed it.
+
+#### 4C.3.5 Routing — every scenario
+
+| # | Scenario | Path taken | Cost |
 |---|---|---|---|
-| Redis | stage 0 | 1–5 | every request searches — slower, still correct |
-| Ollama | stage 3 | 0, 1, 2, 4, 5 | **this is the no-embeddings architecture, running live** |
-| Chroma | stage 3 | as above | as above |
-| SQLite | 1, 2, 4 | 0, 3 | **fatal** — no system of record |
-| LLM | stage 5 | 0–4 | cache and exact-signature hits still deliver; ambiguous cases return "unable to analyze" |
+| 1 | Exact repeat, same repository | step 0 | ~1 ms, no LLM |
+| 2 | Exact repeat, different repository, fix still `repo`-scoped | 0 miss → 0b → A2; on `REUSED` it becomes `global` | ~2 s **once**, ~1 ms thereafter |
+| 3 | Exact repeat, different repository, fix already `global` | step 0 | ~1 ms, no LLM |
+| 4 | Same error, different version number | 0 miss → 1 → A2 confirms and **adapts** | ~2 s |
+| 5 | Same error, different product or folder layout | 0 miss → 1, 2, 3 → A2 confirms | ~2 s |
+| 6 | Same underlying cause, worded quite differently | all steps miss → A3 | ~4 s |
+| 7 | Genuinely new problem | all steps miss → A3 | ~4 s |
+| 8 | **First weeks — everything is new** | A3 every time | expected; `times_seen` builds the review priority |
+| 9 | Infrastructure failure, not the developer's change | A4 routes on the error's category | DevOps is notified instead |
+| 10 | Nothing in the log matched any pattern | extraction produced nothing | recorded; DevOps notified with the log tail |
+| 11 | Same error in three stages of one run | step 0, then in-run de-duplication | one analysis, the rest become thread replies |
+| 12 | No signature configured for this error type | step 1 skipped → 2, 3, 4 | keyword lane alone |
+| 13 | A delivered fix did not work — same error returns within a week | step 0 hits, but it is **flagged** | raises a review flag automatically |
+| 14 | Developer marks a fix 👎 | — | removed from the cache immediately, flagged for review |
 
-The Ollama/Chroma row matters architecturally: because the dense lane is *one lane in a
-fusion* rather than the backbone, losing it degrades ranking quality instead of halting
-retrieval. That property is also what makes the benchmark decidable — the system can be run
-with the lane disabled and the difference measured directly.
+#### 4C.3.6 What happens when something is down
+
+| Unavailable | What stops | What still works | Effect |
+|---|---|---|---|
+| Redis | step 0 | 0b onward | every request searches — slower, still correct |
+| SQLite | 0b, 1, 2, 3 | — | **fatal** — this is the system of record |
+| The LLM | steps 4 and 5 | 0 to 3 | exact cache hits still deliver; anything needing judgement returns *"unable to analyze"* |
+
+There is no vector database or embedding service in this design, so there is no failure mode
+for one. If one is added later (§4C.4.3), it becomes one more lane that can be lost without
+stopping retrieval — which is what keeps that decision reversible.
+
+---
+
+### 4C.4 Rollout — what to measure first, the first weeks, and what to build when
+
+#### 4C.4.1 Before building any of this — the recurrence check
+
+**The question.** Does the same build failure happen again and again, or is every failure
+different from every other?
+
+**Why it decides everything.** A knowledge base only saves work when problems come back. If
+the same twenty errors cause most of your failed builds, then solving those twenty once and
+remembering the answers solves most of the problem — and everything in this section is worth
+building. If every failure is genuinely one-of-a-kind, there is nothing worth remembering, no
+amount of searching will help, and the sensible system is just to ask the LLM each time.
+
+**How to check it.** This needs no LLM, no knowledge base, and no labelled data — only the
+build logs you already have:
+
+1. Take the last few months of failed pipeline logs.
+2. For each failure, produce its `error_key` and its fingerprint (§4C.1).
+3. Count how many times each distinct fingerprint appears.
+4. Sort the list, most frequent first.
+5. Add up how much of the total the top 20 account for.
+
+**How to read the answer.**
+
+| Top 20 fingerprints cover… | What it means | What to do |
+|---|---|---|
+| **60% or more** of all failures | a small number of problems cause most of the pain; answers will be reused constantly | build this design — it pays back fast |
+| **around 30%** | worth having, but the benefit builds up more slowly | build it; the keyword search in phase 2 matters more |
+| **around 5%** | almost every failure is unique; there is nothing to look up | **do not build retrieval.** Ship A3 with good prompts and stop there |
+
+**A bonus from the same exercise.** The sorted list *is* the priority order for writing error
+patterns, and later the priority order for which fixes an SME should review first. One
+counting job answers three questions.
+
+> **Run this on the scraped log export before any retrieval code is written.**
+
+#### 4C.4.2 Cold start — what the first weeks actually look like
+
+On day 1 the knowledge base is empty, so every search returns nothing, A2 has nothing to
+judge, and **A3 writes every answer**. This is expected and correct. It is worth stating
+plainly because the design reads very differently on day 1 than it does six months later.
+
+| | Week 1 | Week 4 | Month 6 |
+|---|---|---|---|
+| Answer cache | filling up | catching exact repeats | catching most repeats |
+| Keyword search | nothing stored | first approved fixes returning | the main source of candidates |
+| A2 | rarely runs — nothing to judge | starts running | runs on most non-cached errors |
+| A3 | **writes everything** | writes new problems only | writes rarely |
+| Reviewer effort | highest value it will ever have | still high | maintenance |
+
+The transition from "A3 writes everything" to "the knowledge base answers" depends entirely on
+approvals turning `pending` fixes into `active` ones. That is why `times_seen` ordering
+(§4C.2.4) is treated as more important than anything in the search itself.
+
+**Track the approval rate against the recurrence rate.** If approvals persistently fall
+behind, the knowledge base never becomes useful no matter how good the search is — and that is
+a staffing observation, not an engineering one.
+
+#### 4C.4.3 Build order
+
+| Phase | What ships | Why in this order |
+|---|---|---|
+| **1** | normalisation · fingerprint · answer cache · scope · the "same error elsewhere" check · AI/SME expiry split, labelling, 👎 removal · **`times_seen` and recurrence-ordered review** · A3 · A4 | These are the only parts that do anything at all with an empty knowledge base |
+| **2** | keyword index with whole-and-parts names · signature lookup · lane merging · A2 judging a candidate set | Cheap, needs no new services, and by now there is something worth searching |
+| **3** | *Optional:* semantic search, added as a third lane — measured against phase 2 before being kept | Only worth evaluating once there is enough stored knowledge to search, and enough labelled history to measure against |
+
+Phase 1 on its own — A3, A4, `times_seen`, and a review queue ordered by recurrence — is
+already a useful tool. Everything after it improves a system that has to work first.
+
+Phase 3 is written as optional deliberately. On day 1 a semantic search lane cannot help,
+because there is nothing stored to retrieve. The decision to add it belongs after phase 2 has
+been running long enough to show whether keyword search and signatures are missing a
+meaningful class of failure — see §9.2 for how that is measured.
+
+---
+
+### 4C.5 Settings
+
+| Setting | Where it lives | Starting value |
+|---|---|---|
+| Weight given to the signature lane when merging | `.env` | 2.0 — a starting point, to be measured |
+| Weight given to the keyword lane when merging | `.env` | 1.0 |
+| Rank-fusion constant | `.env` | 60 |
+| Minimum score to reach the shortlist | `.env` | **to be established by measurement** |
+| Maximum candidates shown to A2 | `.env` | 10 — also to be measured; too many candidates confuse the judgement as well as costing more |
+| Cache lifetime, AI-written fix | `.env` | 7 days |
+| Cache lifetime, SME-approved fix | `.env` | 30 days |
+| How to extract the failing item's name | `error_patterns.json` | optional, per pattern |
+| Severity weight per error category | `error_patterns.json` | set by an SME — used so that a hundred trivial failures do not outrank three release-blocking ones |
+
+Every analysed error records which lane found the chosen fix and at what position, how many
+candidates there were, what A2 decided, and the scope involved. §8.5 explains what those
+numbers mean and what to do about each of them; §9.2 describes the benchmark, which is the
+only place a search lane may be added, removed, or re-weighted.
 
 ---
 
@@ -1813,7 +2160,7 @@ A weekly job runs every Monday at 00:00 (via `apscheduler`) and surfaces fixes t
 |---|---|
 | **Keep** | Clears the flag — fix stays active, not surfaced again for 6 months |
 | **Deprecate** | `UPDATE fixes SET status='deprecated'` — kept in KB for history, not used for matching |
-| **Delete** | Hard delete: `DELETE FROM fixes`; Chroma DELETE `fix-{fingerprint}`; Redis DELETE `fix:<fp>`; INCR `kb_version`; INSERT `fix_revisions` with `action='deleted'` for audit trail |
+| **Delete** | Hard delete: `DELETE FROM fixes`; delete the FTS5 index row; Redis DELETE `fix:<fp>` (all scope variants); INSERT `fix_revisions` with `action='deleted'` for audit trail |
 
 When `resolved_count = flagged_count`, the `pruning_runs.completed_at` is set and the banner is dismissed.
 
@@ -1926,7 +2273,7 @@ at `INFO`.
 
 `PipeDelimitedFormatter` prints a fixed list of `extra` fields
 (`src/logging_config.py:161-162`). Extend that list with the analyzer's fields —
-`fingerprint`, `fix_source`, `match_result`, `combined_score`, `product_team`,
+`fingerprint`, `fix_source`, `outcome`, `fusion_score`, `product_team`,
 `scenario_id` — so they appear in the context column. This is a one-line change to an
 existing list, not a new formatter.
 
@@ -1957,17 +2304,16 @@ existing list, not a new formatter.
 | N9 (AI Cache miss) | `bfa.analyzer` | DEBUG | AI cache miss | `request_id`, `fingerprint` | Yes |
 | N9 (Match result hit) | `bfa.analyzer` | DEBUG | Match result cache hit | `request_id`, `fingerprint`, `ctx_hash`, `match_result` | Yes |
 | N9 (Match result miss) | `bfa.analyzer` | DEBUG | Match result cache miss | `request_id`, `fingerprint`, `ctx_hash` | Yes |
-| N10 (A2 result) | `bfa.agents.deviation` | INFO | A2 match_result computed | `request_id`, `fingerprint`, `match_result`, `combined_score`, `error_similarity`, `context_similarity`, `signature_level`, `signature_rank`, `lexical_rank`, `dense_rank`, `fused_rank`, `candidate_count`, `a2_resolution_mode`, `latency_ms` | Yes |
+| N10 (A2 result) | `bfa.agents.deviation` | INFO | A2 outcome decided | `request_id`, `fingerprint`, `outcome`, `fusion_score`, `signature_rank`, `lexical_rank`, `fused_rank`, `candidate_count`, `scope`, `a2_rejected_count`, `latency_ms` | Yes |
 | N10 (A2 skip) | `bfa.agent.a2` | WARNING | A2 skipped — degradation ladder | `request_id`, `fingerprint`, `reason`, `degradation_ladder_step` | Yes |
 | N11 (A3 start) | `bfa.agent.a3` | INFO | LLM call started | `request_id`, `fingerprint`, `model`, `prompt_token_count` | Yes |
 | N11 (A3 result) | `bfa.agent.a3` | INFO | LLM call completed | `request_id`, `fingerprint`, `completion_token_count`, `cost_estimate_usd`, `latency_ms` | Yes |
 | N11 (A3 fail) | `bfa.agent.a3` | ERROR | LLM call failed | `request_id`, `fingerprint`, `error`, `dead_letter_path` | Yes |
 | N12a (Gate) | `bfa.agent.a4` | WARNING | Forbidden text gate triggered | `request_id`, `fingerprint`, `pattern_matched` | Yes |
 | N12b (Gate) | `bfa.agent.a4` | INFO | Infrastructure gate triggered | `request_id`, `fingerprint`, `error_category` | Yes |
-| N12c (Gate) | `bfa.agent.a4` | INFO | Disambiguation gate triggered | `request_id`, `fingerprint`, `score_0`, `score_1`, `band` | Yes |
 | N12 (A4 delivered) | `bfa.agent.a4` | INFO | Fix delivered | `request_id`, `fingerprint`, `delivery_method`, `fix_source`, `times_sent_before`, `jira_key` | Yes |
 | N12 (A4 fallback) | `bfa.agent.a4` | WARNING | Developer not found — email fallback | `request_id`, `fingerprint`, `delivery_method` | Yes |
-| N14 (KB approve) | `bfa.kb` | INFO | Fix approved | `fix_id`, `fingerprint`, `approved_by`, `chroma_upsert_ms`, `disambig_resumed` | No (KB REST call) |
+| N14 (KB approve) | `bfa.kb` | INFO | Fix approved | `fix_id`, `fingerprint`, `approved_by`, `fts_index_ms` | No (KB REST call) |
 | N14 (KB edit) | `bfa.kb` | INFO | Fix edited | `fix_id`, `revision`, `edited_by`, `label_change`, `chroma_updated` | No |
 | N14 (KB discard) | `bfa.kb` | INFO | Fix discarded | `fix_id`, `fingerprint` | No |
 | N14 (KB feedback) | `bfa.kb` | INFO | Feedback recorded | `fix_id`, `sentiment`, `negative_count`, `routed_to_sme`, `sme_review_count` | No |
@@ -2105,14 +2451,33 @@ This tab answers *is the service healthy and what is it costing*. **§8.5 adds a
 Retrieval tab** answering a different question — *which retrieval lane is actually finding
 answers, and what should be optimised next*.
 
-### 8.5 Retrieval Telemetry — what is performing well, and what to optimise next
+### 8.5 Measuring the search — what is working, and what to fix next
 
-§8.4 measures whether the service is *healthy*. This section measures whether the
-**retrieval design** (§4C) is *earning its keep* — which of the three lanes is actually
-finding answers, where the knowledge base is thin, and which optimisation to spend effort on
-next.
+§8.4 measures whether the service is *healthy*. This section measures whether the **search**
+(§4C) is *earning its keep*, and — for the first months, when there is nothing to search —
+whether the knowledge base is filling up at all.
 
-#### 8.5.1 Two kinds of measurement, and why they must not be mixed
+#### 8.5.1 The first months measure something different
+
+Almost every indicator in this section is about the search. In the first weeks there is
+nothing stored, so the search returns nothing and all of those indicators read zero. That is
+not a fault, and it is not a signal.
+
+**The only thing worth measuring early is whether the knowledge base is filling.**
+
+| Cold-start indicator | How it is computed | What it tells you |
+|---|---|---|
+| **Recurrence rate** | share of analysed errors whose fingerprint has been seen before | whether a knowledge base can ever pay off here (§4C.4.1) |
+| **Approval rate vs recurrence rate** | fixes moved to `active` per week, against distinct recurring fingerprints per week | if approvals persistently lag, the knowledge base never becomes useful no matter how good the search is. **This is a staffing observation, not an engineering one** |
+| **Review queue depth and top `times_seen`** | count of `pending`, and the highest `times_seen` among them | a large queue is fine; a large queue whose top item has fired 30 times is not |
+| **Answer-cache hit rate** | share served at step 0 | the first thing that starts working, usually within days |
+| **Did the fix work?** | same fingerprint, same repository, recurring within a week of delivery | the only quality signal available before anyone reviews anything |
+| **Feedback rate and 👍 ratio** | responses per delivery | thin, but it is real human judgement |
+
+Do not tune the search on these. Do not conclude anything about lanes from them. They answer
+one question: *is this thing accumulating knowledge, or not?*
+
+#### 8.5.2 Two kinds of measurement, and why they must not be mixed
 
 | | **Production telemetry** | **Benchmark evaluation** |
 |---|---|---|
@@ -2122,71 +2487,83 @@ next.
 | Bias | heavily weighted toward **frequent, easy, repeated** failures | stratified deliberately, so rare cases count |
 | May it decide architecture? | **No** | **Yes** |
 
-The distinction matters because the two disagree in a predictable direction. Production
-traffic is dominated by the same handful of failures recurring; those are served from cache
-and never reach retrieval at all. If the lanes were judged on live traffic, a lane that only
-matters for the long tail would look worthless — precisely because the tail is, by
-definition, rare. **Frequency is not value.** So production telemetry is used to spot drift,
-cost, and coverage gaps, and the benchmark is used to decide what to keep, drop, or tune.
+The two disagree in a predictable direction. Live traffic is dominated by the same handful of
+failures recurring, and those are served from the answer cache and never reach the search at
+all. A lane that exists for the long tail therefore measures as worthless on volume alone —
+precisely because the tail is, by definition, rare. **Frequency is not value.**
 
-#### 8.5.2 Retrieval provenance — what every analysed error records
+So production telemetry spots drift, cost, and gaps. The benchmark decides what to keep, drop,
+or tune.
+
+#### 8.5.3 What every analysed error records
 
 Recording only the winner is not enough. Knowing that a fix was served says nothing about
-whether one lane would have found it alone. So every lane's opinion of the **selected**
-candidate is recorded, including the lanes that did *not* surface it.
+whether one lane would have found it alone. So **every lane's opinion of the selected
+candidate is recorded, including the lanes that did not surface it.**
 
 | Field | Records | Enables |
 |---|---|---|
-| `signature` | signature of the incoming error, `NULL` if no rule matched | coverage measurement |
-| `signature_level` | `exact` / `specific` / `family` / `domain` / `none` | ladder-descent monitoring — how often broadening was needed |
+| `signature` | signature of the incoming error, `NULL` if no pattern supplied one | coverage measurement |
 | `signature_rank` | rank of the selected fix in the signature lane, `NULL` if that lane missed it | per-lane recall |
-| `lexical_rank` | its rank in the FTS5 lane | per-lane recall |
-| `dense_rank` | its rank in the Chroma lane | per-lane recall |
-| `fused_rank` | its rank after RRF, i.e. its position in what A2 saw | tells you whether **K** can shrink |
-| `candidate_count` | size of the set handed to A2 | prompt cost, KB density |
+| `lexical_rank` | its rank in the keyword lane, `NULL` if that lane missed it | per-lane recall |
+| `fused_rank` | its rank after merging — its position in what A2 actually saw | tells you whether `CANDIDATE_K` can shrink |
+| `candidate_count` | size of the set handed to A2 | prompt cost; `0` means a gap in the knowledge base, not a ranking problem |
 | `candidate_sources` | JSON — how many candidates each lane contributed, and the union size | lane overlap |
 | `lane_latency_ms` | JSON — per-lane time | where the milliseconds go |
-| `a2_resolution_mode` | `reused` / `adapted` / `none` | retrieval-vs-generation drift |
-| `a2_confidence` | A2's own confidence | threshold calibration |
+| `scope` | scope of the fix that answered | how often the cross-repo path is exercised |
+| `outcome` | `REUSED` / `ADAPTED` / `NO_MATCH`, plus `GENERATED` when A3 answered | the drift KPI below |
+| `a2_confidence` | A2's own confidence | **telemetry only — gates nothing** |
 | `a2_rejected_count` | how many candidates A2 explicitly rejected | discrimination value of the set |
 
-The three `*_rank` columns are the important ones, and they are cheap: three integers per
-analysed error. Together they turn every production request into a small, honest experiment —
-*given this query, which lanes had the right answer, and how far down?*
+The two `*_rank` columns are the important ones and they are cheap: two integers per analysed
+error. Together they turn every production request into a small, honest experiment — *given
+this query, which lanes had the right answer, and how far down?*
 
-#### 8.5.3 The indicators that actually drive decisions
-
-Each derives from the fields above with a single SQL query. Each exists because a specific
-decision depends on it.
+#### 8.5.4 The indicators that drive decisions
 
 | Indicator | How it is computed | Decision it informs |
 |---|---|---|
 | **Lane recall** | share of served answers where `<lane>_rank IS NOT NULL` | is this lane finding anything? |
-| **Unique contribution** | share where one lane found the answer and the **other two missed it entirely** | would dropping this lane lose answers? |
-| **Dense-lane rescue rate** | `dense_rank IS NOT NULL AND lexical_rank IS NULL AND signature_rank IS NULL` | the single number that justifies keeping embeddings |
-| **Rank depth** | distribution of `fused_rank` for served answers | if it is almost always 1–3, **K** can be reduced and A2's prompt shrinks |
-| **Signature coverage** | `signature IS NOT NULL` ÷ all analysed errors | how many extraction rules are still missing |
-| **Ladder descent** | distribution of `signature_level` | `family` firing often means the specific rules are too narrow |
-| **Adapted ratio** | `a2_resolution_mode = 'adapted'` ÷ (`reused` + `adapted`) | **drift from reuse toward generation** — see below |
+| **Unique contribution** | share where one lane found the answer and the other missed it entirely | what would actually be lost by dropping this lane |
+| **Rank depth** | distribution of `fused_rank` for served answers | if it is almost always 1–3, `CANDIDATE_K` can be reduced and A2's prompt shrinks |
+| **Signature coverage** | `signature IS NOT NULL` ÷ all analysed errors | how many error patterns still lack a subject rule |
+| **Outcome mix** | `REUSED` / `ADAPTED` / `GENERATED` / `NO_MATCH` | **the drift KPI — see below** |
 | **Rejection rate** | mean `a2_rejected_count` ÷ `candidate_count` | a set of near-duplicates teaches A2 nothing |
-| **KB thinness** | share where `candidate_count = 0` | where to direct SME authoring effort |
+| **Knowledge gaps** | share where `candidate_count = 0` | where to direct SME authoring |
 | **Weighted value** | Σ `severity_weight[error_category]` over served answers, not a raw count | stops frequent-and-trivial failures dominating the KPI |
 
-**The adapted ratio deserves particular attention.** `reused` means the knowledge base
-answered. `adapted` means retrieval found something *near* and the LLM rewrote it. A slow
-climb in this ratio is the signature of a system quietly sliding from *retrieval* into
-*generation dressed as retrieval* — the answers still look plausible, the KB stops
-compounding, and nothing fails loudly. Requiring A2 to declare the mode (§4C.7) is what makes
-the slide visible at all.
+**The outcome mix is the single most valuable number here**, and it must be read over time
+rather than as a snapshot:
+
+| | Month 1 | Month 6 |
+|---|---|---|
+| `REUSED` | 72% | 31% |
+| `ADAPTED` | 18% | 40% |
+| `GENERATED` | 8% | 27% |
+| `NO_MATCH` | 2% | 2% |
+
+`REUSED` means the knowledge base answered. `ADAPTED` means the search found something *near*
+and the LLM rewrote it. A drift like the one above is the signature of a system quietly
+sliding from *retrieval* into *generation dressed as retrieval* — the answers still look
+plausible, the knowledge base stops compounding, and nothing fails loudly. Requiring A2 to
+declare its outcome (§4C.3.1) is what makes the slide visible at all.
+
+**And the same headline has two opposite causes**, which is why it must be read against
+`candidate_count`:
+
+| Observation | Cause | What to do |
+|---|---|---|
+| `GENERATED` ↑, `candidate_count` healthy | matching is weakening — the search finds things, A2 rejects them | tune the lane weights, widen the signature subjects |
+| `GENERATED` ↑, `candidate_count = 0` rising | the corpus has moved — new stack, new tooling | SME authoring and new error patterns; no search change will help |
 
 **On weighted value.** Engineer time saved is the metric that matters and the one nobody can
-measure directly. Rather than invent a fake number, each `error_category` carries an
-SME-assigned `severity_weight` in configuration — a coarse statement of *how much pain this
-class of failure causes*. Reporting the weighted sum alongside the raw count keeps a hundred
-trivial lint failures from outranking three release-blocking build breaks. It is a judgement
-recorded in config, and it is honest about being one.
+measure directly. Rather than invent a number, each `error_category` carries an SME-assigned
+`severity_weight` in configuration — a coarse statement of *how much pain this class of
+failure causes*. Reporting the weighted sum alongside the raw count keeps a hundred trivial
+lint failures from outranking three release-blocking build breaks. It is a judgement recorded
+in config, and it is honest about being one.
 
-#### 8.5.4 The Retrieval tab
+#### 8.5.5 The Retrieval tab
 
 The Metrics tab (§8.4) shows service health. A second **Retrieval** tab shows the above, over
 a selectable window, sliced by `error_category`:
@@ -2195,56 +2572,59 @@ a selectable window, sliced by `error_category`:
 {
   "window": "30d",
   "analysed": 812,
+  "recurrence_rate": 0.68,
+  "approvals_per_week": 11,
+  "recurring_fingerprints_per_week": 14,
   "signature_coverage": 0.61,
   "lanes": {
-    "signature": { "recall": 0.58, "unique": 0.07, "p50_latency_ms":  2 },
-    "lexical":   { "recall": 0.84, "unique": 0.11, "p50_latency_ms":  6 },
-    "dense":     { "recall": 0.71, "unique": 0.09, "p50_latency_ms": 43 }
+    "signature": { "recall": 0.58, "unique": 0.09, "p50_latency_ms": 2 },
+    "lexical":   { "recall": 0.84, "unique": 0.21, "p50_latency_ms": 6 }
   },
   "fused_rank_of_served": { "1": 0.62, "2-3": 0.24, "4-10": 0.14 },
-  "resolution_mode": { "reused": 0.73, "adapted": 0.21, "none": 0.06 },
-  "candidate_count": { "p50": 7, "p95": 12, "zero": 0.09 },
-  "ladder": { "exact": 0.44, "specific": 0.12, "family": 0.04, "none": 0.40 }
+  "outcome": { "reused": 0.63, "adapted": 0.21, "generated": 0.14, "no_match": 0.02 },
+  "candidate_count": { "p50": 7, "p95": 12, "zero": 0.09 }
 }
 ```
 
-Read that example as it would actually be read: lexical is the workhorse; the dense lane
-uniquely rescues about one answer in eleven, which is a real but not dominant contribution;
-signature coverage at 0.61 says roughly two in five errors still have no extraction rule; and
-`fused_rank` being 1 only 62% of the time says A2 is genuinely doing discrimination work
-rather than rubber-stamping rank 1 — which is the behaviour §4C.7 was designed for.
+Read that example as it would actually be read: the keyword lane is the workhorse and uniquely
+rescues about one answer in five; signature coverage at 0.61 says roughly two in five errors
+have no subject rule; approvals at 11/week against 14 recurring fingerprints/week means the
+knowledge base is *just* keeping pace and should be watched; and `fused_rank` being 1 only 62%
+of the time says A2 is doing real discrimination rather than rubber-stamping the top result —
+which is the behaviour §4C.3.1 was designed for.
 
-#### 8.5.5 From observation to action
+#### 8.5.6 From observation to action
 
 Telemetry that does not name the next move is decoration. This table is the contract.
 
 | What the numbers show | What it means | Action |
 |---|---|---|
-| `dense.unique` < 0.02 sustained over a full benchmark run | the dense lane is finding nothing the others miss | drop Chroma and Ollama — one less service, ~40 ms off every miss |
-| `dense.unique` healthy but `dense.recall` low | embeddings help only on paraphrase | keep the lane, lower its RRF weight, stop tuning it |
-| `signature_coverage` < 0.5 | extraction rules lag behind reality | **highest-value work available** — rules are config, not code |
-| `ladder.family` > 0.10 | specific rules are too narrow, broadening is compensating | split or widen the `failure` terms, do not relax the stop condition |
-| `fused_rank` = 1 for > 90% | retrieval is already decisive | reduce **K**; A2's prompt shrinks and cost falls |
-| `fused_rank` frequently > 5 | fusion is ranking poorly | tune `RRF_K` and `SIG_WEIGHT` before touching the model |
-| `candidate_count = 0` concentrated in one category | the KB has a hole, not a ranking problem | direct SME authoring there; no retrieval change will help |
-| `adapted` ratio climbing month over month | drift from reuse toward generation | promote frequently-adapted fixes into the KB as their own entries |
-| `rejection rate` near zero with `candidate_count` high | the set is near-duplicates, A2 has nothing to discriminate between | de-duplicate candidates by fingerprint before the A2 prompt |
-| `a2_confidence` clustered just under the threshold | the threshold, not the retrieval, is rejecting good answers | recalibrate on the benchmark — never on live traffic |
-| lexical `p50_latency` rising with KB size | FTS5 index needs maintenance | `INSERT INTO fixes_fts(fixes_fts) VALUES('optimize')` on a schedule |
+| Approvals persistently below recurring fingerprints | the knowledge base will never fill | **staffing, not engineering.** Escalate before building anything else |
+| `signature_coverage` < 0.5 | patterns lack subject rules | **cheapest high-value work available** — it is configuration, not code |
+| Recurrence rate below ~20% | failures are mostly one-of-a-kind | reconsider whether search is worth having at all (§4C.4.1) |
+| `fused_rank` = 1 for > 90% | the search is already decisive | reduce `CANDIDATE_K`; A2's prompt shrinks and cost falls |
+| `fused_rank` frequently > 5 | merging is ranking poorly | tune `RRF_K` and the lane weights before anything else |
+| `candidate_count = 0` concentrated in one category | a gap in the knowledge base, not a ranking problem | direct SME authoring there; no search change will help |
+| `ADAPTED` climbing month over month | drift from reuse toward generation | promote frequently-adapted fixes into the knowledge base as entries of their own |
+| Rejection rate near zero with high `candidate_count` | the set is near-duplicates; A2 has nothing to tell apart | de-duplicate candidates by fingerprint before building the prompt |
+| `a2_confidence` clustered just under any threshold | if a threshold is ever added, it — not the search — is doing the rejecting | recalibrate on the benchmark, never on live traffic |
+| Keyword lane `p50_latency` rising with knowledge-base size | the index needs maintenance | schedule an FTS5 optimise |
+| A lane's unique contribution near zero across a full benchmark run | it is finding nothing the other does not | drop the lane — see §9.2 |
 
-#### 8.5.6 Optimisations deliberately not done yet
+#### 8.5.7 Optimisations deliberately not done yet
 
 Each is listed with the measurement that would justify it. None should be built before that
 measurement exists.
 
 | Optimisation | Build it when | Why wait |
 |---|---|---|
-| Cross-encoder reranker between stage 4 and A2 | `fused_rank` of served answers is routinely > 5 | A2 already reranks; a second model is only worth it if fusion is demonstrably weak |
-| Fine-tuned or domain-adapted embedding model | dense unique-contribution is high **and** dense recall is the binding constraint | expensive; pointless if lexical is carrying retrieval |
-| Error→resolution embeddings alongside error→error | benchmark arm 6 (§9.2) beats arm 5 | doubles vector storage and write cost for an unproven gain |
-| Learned fusion weights instead of fixed RRF | a grid search over the benchmark beats fixed weights by a clear margin | fixed RRF is strong, explainable, and has no training pipeline to maintain |
-| Query expansion (synonyms, tool aliases) | a recurring class of misses traces to vocabulary mismatch | hierarchical tokens (§4C.3) already cover most of this |
-| Incremental KB re-embedding on model upgrade | the embedding model is actually changed | premature until there is a second model in play |
+| **Semantic search as a third lane** | benchmark arm 4 vs arm 5 (§9.2) shows unique contribution above ~15%; between ~2% and ~15%, `severity_weight` decides | On day 1 it cannot help — there is nothing stored to retrieve. Two services and ~40 ms per miss to return nothing for months |
+| Signature broadening ladder — same-type, same-tool, same-domain levels with per-level weights | exact signature plus keyword search measurably miss a recurring class of failure | Four weights to tune against no data |
+| A `provisional` status tier, letting frequently-recurring AI fixes be searchable before review | the measured approval rate persistently lags recurrence (§8.5.1) | Solves a predicted problem. If it appears, it is one filter clause plus a promotion job |
+| Per-lane slot quotas in the candidate set | telemetry shows a lane's candidates being truncated rather than out-ranked | Meaningless with two lanes |
+| Acting on stored rejections — demotion of repeatedly-rejected pairs | the same `(signature, fix_id)` pair is rejected repeatedly | The data is stored from day one; only the *use* is deferred. Usual root cause is coarse patterns, not ranking |
+| Cross-encoder reranker between merging and A2 | `fused_rank` of served answers is routinely > 5 | A2 already reranks; a second model is only worth it if merging is demonstrably weak |
+| Learned merge weights instead of fixed RRF | a grid search over the benchmark beats fixed weights by a clear margin | Fixed RRF is strong, explainable, and has no training pipeline to maintain |
 
 ---
 
@@ -2372,7 +2752,7 @@ The following nodes currently produce zero logs and must have loggers added:
 
 | Current | Fix |
 |---|---|
-| `"=== Best Similarity Score: X ==="` at INFO every lookup | Move to DEBUG; use `extra={"error_similarity": score}` |
+| `"=== Best Similarity Score: X ==="` at INFO every lookup | Move to DEBUG; use `extra={"fusion_score": score}` |
 | Full payload at ERROR on retry exhaustion | Log only `pipeline_id`, `error_count`, `retry_attempts` |
 | PII (email, Slack user ID) at INFO | Remove or mask to `user[:4]+"****"` |
 | f-string calls everywhere | Replace with `%s` style or move values into `extra=` — prevents string interpolation at suppressed log levels |
@@ -2454,12 +2834,11 @@ Node coverage (node_entry detected / scenarios that traversed node):
   N7  (Dedup)            :   0/100  ✗  NO LOGS — sentinel missing
   N8  (SME Cache)        :   0/100  ✗  NO LOGS — sentinel missing
   N9  (AI Cache)         :   0/100  ✗  NO LOGS — sentinel missing
-  N9 (Match Result Cache)   :   0/100  ✗  NO LOGS — sentinel missing
+  N9 (Scope probe)          :   0/100  ✗  NO LOGS — sentinel missing
   N10 (A2)               :  72/72   ✓  (28 took cache path — correct)
   N11 (A3)               :  18/18   ✓
   N12a (Forbidden Gate)  :   5/5    ✓
   N12b (Infra Gate)      :  12/12   ✓
-  N12c (Disambig Gate)   :   3/3    ✓
   N12 (A4)               :  80/80   ✓
   N18 (Slack Actions)    :   0/100  ✗  NO LOGS — sentinel missing
 
@@ -2480,7 +2859,7 @@ The coverage report directly produces the list of nodes that need logging added.
 | BFA-TEST-1010 | Unit test | `POST /api/auth/login` rejects wrong password with HTTP 401; valid login returns session token; `POST /api/auth/logout` invalidates token; expired token returns HTTP 401 |
 | BFA-TEST-1020 | Component test (real Chroma + real embeddings) | 0% false-match rate on known-tricky pairs; similarity threshold calibration; deterministic `fix-<fingerprint>` ID round-trip; cosine hnsw:space setup |
 | BFA-TEST-1030 | Contract test | Shared `AnalyzePayload` Pydantic model validated in both extractor and analyzer test suites; Analysis Envelope fields match across service boundary |
-| BFA-TEST-1040 | End-to-end (docker-compose) | Simulated GitLab; record/replay mock LLM; mock Slack; real Redis; real Chroma; covers: approve → Chroma upsert → SME cache write, degradation-ladder chaos (kill Redis, Chroma, Ollama one by one), disambiguation flow, infrastructure routing, dead-letter replay, two-phase pipeline_events write |
+| BFA-TEST-1040 | End-to-end (docker-compose) | Simulated GitLab; record/replay mock LLM; mock Slack; real Redis; real Chroma; covers: approve → FTS index write → SME cache write, degradation chaos (kill Redis, then SQLite), scope promotion on cross-repo reuse, infrastructure routing, dead-letter replay, two-phase pipeline_events write |
 | BFA-TEST-1050 | Evaluation harness | Routing accuracy ≥ 95%; false-match rate 0%; recall ≥ 90%; cost/latency vs forecast; CI mode (mock LLM, every PR) + nightly mode (real LLM) |
 | BFA-TEST-1060 | Component test | Context-matched fixes score higher than non-matching for same fingerprint; swapping labels inverts ranking; 100% pass required |
 | BFA-TEST-1070 | Regression corpus | Curated tricky pairs: MVP-1 production incident, path-noise, version-bump, cross-product confusion, context-ranking inversion, match result cache invalidation |
@@ -2553,7 +2932,6 @@ Successfully replayed files are removed from the dead-letter directory. Still-fa
 | `A3` | Reached N11, LLM generated a fix |
 | `A4DEVOPS` | Infra gate triggered, routed to devops channel |
 | `A4SME` | Forbidden text gate triggered, held for SME review |
-| `A4DISAMBIG` | Disambiguation gate triggered, held for SME choice |
 | `THREADREPLY` | Dedup hit, added as thread reply |
 | `DEADLETTER` | LLM failed, saved to dead-letter |
 
@@ -2568,7 +2946,7 @@ Successfully replayed files are removed from the dead-letter directory. Still-fa
 @dataclass
 class ReplayCapture:
     node_outputs: dict    # {"N6": {error_category, stage_type, product_team, is_infra},
-                          #  "N10": {match_result, combined_score, fix_id},
+                          #  "N10": {outcome, fusion_score, fix_id},
                           #  "N12": {fix_source}, ...}
     path_taken: str       # actual path taken: SME_CACHE / A2 / A3 / A4DEVOPS / ...
     db_writes: list       # [{table, operation, fields}] — what WOULD have been written
@@ -2605,7 +2983,7 @@ Reads are never intercepted — real Redis, real Chroma. The envelope already ca
             DEBUG bfa.analyzer  node_entry node=N9  (AI cache miss)
             DEBUG bfa.analyzer  node_entry node=N9 (match result cache miss)
             DEBUG bfa.agent.a2  node_entry node=N10
-            INFO  bfa.agent.a2  A2 match_result computed match_result=partial combined_score=0.71
+            INFO  bfa.agent.a2  A2 outcome decided outcome=ADAPTED fusion_score=0.71
             ← divergence here: expected exact_match, got partial
 [t] r004  FAIL  N6✗  expected error_category=dependency  actual=infrastructure
           Log trace:
@@ -2736,11 +3114,12 @@ that mirrors production frequency simply re-imports production's bias.
 
 | # | Stratum | What it tests | Which lane should win |
 |---|---|---|---|
-| 1 | 300 | Exact repeat — identical error, same repo | fingerprint cache; nothing else should even run |
-| 2 | 200 | Parameter variation — same failure, different version, artifact, or line number | signature + lexical |
-| 3 | 150 | Product / path variation — same failure, different repo and directory tree | hierarchical tokens (lexical) |
+| 1 | 300 | Exact repeat — identical error, same repo | answer cache; nothing else should even run |
+| 1b | 100 | Exact repeat, **different repo** | scope probe → A2, then `global` thereafter (§4C.1.5) |
+| 2 | 200 | Parameter variation — same failure, different version, artifact, or line number | signature + keyword |
+| 3 | 150 | Product / path variation — same failure, different repo and directory tree | hierarchical tokens (keyword) |
 | 4 | 150 | Tool / version variation — same failure, different tool release, altered message layout | signature |
-| 5 | 100 | Wording variation — same root cause, materially different phrasing | **dense** — this stratum is the entire case for embeddings |
+| 5 | 100 | Wording variation — same root cause, materially different phrasing | **nothing should win.** This stratum is the entire case for a semantic lane, and phase 2 is expected to fail it — that failure is the measurement |
 | 6 | 100 | Genuinely novel — no correct fix exists in the KB | **all lanes must miss**; correct behaviour is routing to A3 |
 
 Stratum 6 is not filler. A retrieval system that never returns "nothing" is worse than
@@ -2761,15 +3140,26 @@ python benchmark.py --arm sig+lex+dense --report out/2026-08-14/
 | Arm | Lanes enabled | Isolates |
 |---|---|---|
 | 1 | signature only | how far structure alone gets |
-| 2 | lexical only | the BM25 baseline |
-| 3 | dense only | embeddings alone — the assumption being tested |
-| 4 | signature + lexical | **the no-embeddings architecture** |
-| 5 | signature + lexical + dense | the design as specified (§4C) |
-| 6 | arm 5, plus error→resolution vectors | whether a second embedding view earns its cost |
+| 2 | keyword only | the BM25 baseline |
+| 3 | signature + keyword | **what actually ships (§4C phase 2)** |
+| 4 | semantic only | embeddings alone — the assumption being tested |
+| 5 | signature + keyword + semantic | **phase 3, if it happens** |
 
-Arm 4 versus arm 5 is the decision that matters. If the difference is inside the noise band,
-Chroma and Ollama come out of the deployment — which is exactly the outcome §4C.9 predicted
-would be measurable, because the dense lane is one lane in a fusion rather than the backbone.
+**Arm 3 versus arm 5 is the only decision this benchmark exists to make.** Arms 1, 2 and 4
+exist to explain the result, not to choose anything.
+
+The comparison is possible at all because the semantic lane, if added, is *one lane in a
+merge* rather than the backbone — so it can simply be switched off and the difference
+measured. Nothing else in the design has to change to run either arm.
+
+**The decision band.** Measure the semantic lane's **unique contribution**: queries where it
+found the correct fix and the other two lanes did not.
+
+| Unique contribution | Decision |
+|---|---|
+| below ~2% | do not add it — two services and ~40 ms per miss for nothing |
+| above ~15% | add it |
+| between | `severity_weight` decides — if the rescued failures are disproportionately release-blocking, add it even at the low end. This is the point at which that config value stops being decoration |
 
 #### 9.2.3 Metrics — reported per arm **and per stratum**
 
@@ -2783,24 +3173,29 @@ overall and is indispensable in fact.
 | **Unique contribution** | queries where this lane found it and the others did not | what is actually lost by dropping the lane |
 | **A2 selection accuracy** | given a set containing the correct fix, does A2 choose it | separates *finding* from *judging* |
 | **False-positive rate** | on stratum 6 — served an answer where none was correct | **gate: 0%.** The one metric with no acceptable trade-off |
-| **Resolution-mode split** | `reused` / `adapted` / `none` per stratum | high `adapted` on strata 1–3 means retrieval underperformed and the LLM covered for it |
-| **Latency** | p50 / p95, per lane and end to end | dense-lane cost is only justified by dense-lane recall |
+| **Outcome split** | `REUSED` / `ADAPTED` / `GENERATED` / `NO_MATCH` per stratum | high `ADAPTED` on strata 1–3 means the search underperformed and the LLM covered for it |
+| **Latency** | p50 / p95, per lane and end to end | a lane's cost is only justified by its recall |
 | **LLM cost** | calls and estimated spend per 100 queries | comparable across arms |
 
 **Why Recall@K and not "which lane produced the winner".** Winner-counting manufactures its
-own conclusion. If the fused list is dominated by one lane, the correct fix arriving at rank 8
+own conclusion. If the merged list is dominated by one lane, the correct fix arriving at rank 8
 from lane A and rank 25 from lane B is scored as a clean win for A — even though B found it
 too, and even though a small weight change would flip the attribution. Recall@K asks whether
-the lane *had* the answer, independent of how fusion happened to be tuned that day.
+the lane *had* the answer, independent of how the merge happened to be tuned that day.
+
+**Free negative labels.** Every candidate A2 rejects is written to `match_rejections`
+(§4C.3.4) with a stated reason. Negatives are the expensive half of a labelled corpus, and
+these cost nothing to collect — they feed stratum 6 and the false-positive gate directly.
 
 #### 9.2.4 When it runs
 
 | Trigger | Scope | Gate |
 |---|---|---|
-| Every PR touching normalisation, fusion, signature rules, or scoring | arm 5, mock LLM | no Recall@5 regression; false positives stay 0% |
-| Nightly | arms 4 and 5, real LLM | report only |
-| Before any lane is added, removed, or reweighted | all six arms | the result **is** the decision |
-| When §8.5.5 raises a flag | the arms relevant to that flag | re-decide with fresh data |
+| Every PR touching normalisation, merging, signature rules, or scoring | arm 3, mock LLM | no Recall@5 regression; false positives stay 0% |
+| Nightly | arm 3, real LLM | report only |
+| Before any lane is added, removed, or reweighted | all five arms | the result **is** the decision |
+| When §8.5.6 raises a flag | the arms relevant to that flag | re-decide with fresh data |
+| Tuning `CANDIDATE_K` | arm 3, sweeping K | A2 accuracy peaks and then falls as distractors accumulate — K has an interior optimum, and it is measurable |
 
 ---
 
@@ -2860,178 +3255,28 @@ pipeline_info: dict          # from N2 Pipeline Extractor
 ---
 
 
-#### 10.1.1 Normalisation, fingerprinting, and retrieval — how the three fit together
+#### 10.1.1 Normalisation, fingerprinting, and retrieval
 
-> **§4C is the specification; this section is the reasoning behind it.** §4C states what the
-> system does — the three representations, the signature ladder, hierarchical tokens, the
-> cascade, and the A2 contract. What follows explains *why* it is built that way, including
-> the flaw in the earlier design that forced the change. §8.5 then covers how the result is
-> measured, and §9.2 how a change to it may be decided.
+> **Moved.** This material is now **§4C** — one section covering normalisation, the
+> fingerprint, the signature, resolution scope, where fixes are stored, the end-to-end flow,
+> and the rollout order. It was previously split across §10 and had drifted out of step with
+> itself.
 
-This section replaces the earlier "normalise everything aggressively" approach. Review
-identified a real flaw in it, described below.
+For the parts most often needed while reading A1's specification:
 
-##### The mistake in the earlier design
-
-The earlier design normalised **aggressively** — stripping version numbers, paths, and
-identifiers — and then used that one string for *both* the fingerprint *and* the embedding.
-Two problems follow.
-
-**Problem 1 — an over-collapsed fingerprint produces wrong answers, silently.**
-A fingerprint hit goes **straight to delivery**; it does not pass through A2. So if
-`auth-lib:2.7.1` and `auth-lib:2.9.4` normalise to the same string, the fix approved for
-2.7.1 is served for 2.9.4 with nobody judging whether the version difference matters. The
-one component designed to catch exactly that — A2 — has been bypassed by the cache.
-
-**Problem 2 — the design contradicted itself on cross-product reuse.**
-Repo names were stripped from the fingerprint *specifically* to let one fix serve many
-products. The scoring formula then penalised candidates from a different product
-(`context_similarity = matching_labels / 3`), pushing a perfect text match from another product
-to 0.78 — below the 0.90 threshold — and rejecting it. One half of the design worked to
-enable cross-product reuse while the other half blocked it.
-
-##### The correcting principle
-
-> **Only one of these mistakes produces a wrong answer. Bias every early decision toward
-> being conservative, and push judgement downstream.**
-
-| Mistake | What actually happens | Severity |
-|---|---|---|
-| Fingerprint too **aggressive** | A wrong fix is served from cache, bypassing A2 entirely | **Wrong answer** |
-| Fingerprint too **conservative** | Cache misses, so the vector search runs | Slower only |
-| Embedded text over-normalised | Discriminating tokens are lost, ranking degrades | Worse ranking |
-| Metadata folded into the score | Good cross-product fixes are rejected | Lost reuse |
-
-Only the first row is dangerous. Everything else costs milliseconds or a little quality.
-So: **keep the early stages dumb and safe, and let the vector search and A2 do the judging.**
-
-##### Two texts, two jobs
-
-| Text | How it is produced | Used for | Kept or stripped |
-|---|---|---|---|
-| **`error_raw`** | untouched extractor output | shown to the developer; given to A3 as prompt context | everything kept — A3 needs the exact version and path to reason about the fix |
-| **`error_key`** | conservative normalisation (below) | the fingerprint **and** the embedding **and** the keyword index | run-identity stripped; everything diagnostic kept |
-
-There is no third "aggressively normalised" text. Conservative normalisation serves the hash
-and the search equally well, because what it removes is noise to both.
-
-##### What `error_key` strips, and what it deliberately keeps
-
-| Stripped — pure run identity | Why it is safe |
+| Question | Where |
 |---|---|
-| Timestamps | change every run, never diagnostic |
-| ANSI colour codes | rendering artefact |
-| `Line N:` prefixes added by the extractor | our own annotation |
-| Pipeline, build, and job IDs | identify the run, not the problem |
-| Runner / agent name | identifies the machine |
-| Repository and branch names | identify *where*, not *what* (guarded — §10.1.1 guard rules) |
-| Workspace path **prefix** — `/builds/runner-07/frontend-app/` → `<WS>/` | identifies the checkout location |
+| What exactly does normalisation strip, and what does it keep? | §4C.1.2 — with a worked before/after |
+| Why *conservative* rather than aggressive? | §4C.1.2 — an over-collapsed key serves a wrong fix **without A2 ever seeing it** |
+| What is the fingerprint, and what is it *not*? | §4C.1.3 — exact-or-nothing; never a similarity |
+| Why does the same fingerprint not mean the same fix applies? | §4C.1.5 — resolution scope |
 
-| **Kept — diagnostic signal** | Why removing it was wrong |
-|---|---|
-| **Version numbers** — `auth-lib:jar:2.7.1` | the fix often *is* a version change; collapsing versions serves the wrong remedy |
-| Artifact, package, and module names | the identity of the failing thing |
-| **Paths inside the repository** — `src/main/java/com/acme/Foo.java` | tells you which module broke |
-| Line and column numbers within source files | distinguish two different failures in one file |
-| Error codes — `ERESOLVE`, `E404`, `ENOENT` | the most discriminating token in the line |
-| Exception class names | ditto |
+**The one thing worth repeating here**, because A1 is where it is decided: normalisation
+biases deliberately toward being *too careful*. Being too aggressive makes two different
+problems look identical, and since a fingerprint hit bypasses A2, that delivers a wrong fix
+with nobody checking. Being too careful costs an extra search — a few milliseconds. Only one
+of those two failures is dangerous.
 
-The fingerprint still does its three jobs — same error recurring, same error in another
-repository, same error across stages of one run — because all three differ only in run
-identity, which is exactly what is stripped.
-
-##### Retrieval: keyword **and** vector, not vector alone
-
-A dense embedding blurs precisely the tokens that matter most here: `auth-lib`, `ERESOLVE`,
-`2.7.1`. Lexical search is excellent at those and poor at paraphrase; embeddings are the
-reverse. Using both is materially better than either.
-
-**No new infrastructure is required** — SQLite ships with **FTS5**, and SQLite is already
-the system of record.
-
-| Stage | Mechanism | Catches |
-|---|---|---|
-| 1a · Lexical | SQLite **FTS5** index over `error_key` | exact tokens: error codes, artifact names, versions |
-| 1b · Semantic | Chroma cosine over the embedding of `error_key` | rewordings, differently phrased messages |
-| 2 · Fusion | **Reciprocal Rank Fusion** — `score = Σ 1 / (60 + rank_i)` across both lists | a candidate ranked well by *either* method surfaces |
-
-RRF is used rather than a weighted sum of raw scores because BM25 and cosine are not on the
-same scale; fusing on *rank* avoids inventing a normalisation between them.
-
-##### Scoring: metadata filters and breaks ties — it does not score
-
-This adopts the review's proposal: compare **context lines against context lines**, and use
-product/stage/category as a filter, not as a term in the score.
-
-```
-1. FILTER   (hard)   status = 'active'
-                     error_category matches      ← an infra fix must not answer a code error
-2. RANK     (fused)  RRF over FTS5 + vector on error_key
-3. RERANK   (score)  final = 0.60 × error_similarity + 0.40 × context_similarity
-                     where context_similarity = cosine( embed(query context_lines),
-                                                        embed(stored context_sample) )
-4. TIE-BREAK         when the top two are within ε, prefer the candidate whose
-                     product_team and stage_type match
-```
-
-**Why this is better than `matching_labels / 3`:**
-
-| Old behaviour | New behaviour |
-|---|---|
-| Product mismatch cost a flat 0.30 of the score and could reject a perfect match | Product never lowers a score; it only settles a tie |
-| `context_similarity` had four possible values (0, 0.33, 0.67, 1.0) — very coarse | Context similarity is continuous, measured on the actual surrounding log lines |
-| Labels were compared, so two errors with identical context but different products scored differently | The real context is compared, which is what "similar situation" actually means |
-| Contradicted the cross-repo normalisation | Consistent with it — a fix from another product can win on merit |
-
-**Worked comparison.** The same npm dependency error, stored fix from a different product,
-context lines nearly identical:
-
-| | Old formula | New formula |
-|---|---|---|
-| text similarity | 0.97 | 0.97 |
-| context | labels 1/3 match → 0.33 | context lines 0.91 similar |
-| result | `0.70×0.97 + 0.30×0.33 = 0.78` → **rejected** | `0.60×0.97 + 0.40×0.91 = 0.95` → **served** |
-
-The old formula threw away a good fix because it came from another team. The new one keeps
-it, and uses product only if a second candidate scores within ε.
-
-##### Why the three are inseparable
-
-They form one chain, and a change in any one shifts the others:
-
-```
-error_raw ──► error_key ──┬──► SHA-256 ──► fingerprint ──► exact cache, row id, dedup
-   │                      ├──► FTS5 index ─┐
-   │                      └──► embedding ──┴──► fused rank ──► rerank ──► A2 judgement
-   └──────────────────────────────────────────────────────► A3 prompt (raw, unmodified)
-```
-
-- Normalise **more** → more fingerprint hits → **fewer** requests reach A2 → less judgement
-  applied → higher risk of a wrong answer.
-- Normalise **less** → fewer fingerprint hits → more requests reach retrieval and A2 → more
-  judgement applied → slower and slightly more expensive, but safer.
-- Weight metadata **more** in the score → fewer cross-product matches → the knowledge base
-  compounds value more slowly.
-
-Given a knowledge base that must serve many products and hundreds of repositories, the
-correct bias is: **conservative fingerprint, rich retrieval signal, judgement late.**
-
-##### How this behaves across many logs in one pipeline
-
-A single failed pipeline commonly produces several related errors — one root cause plus
-cascading failures in later stages.
-
-| Situation | Behaviour |
-|---|---|
-| Same error text in build, test, and package | identical `error_key` → identical fingerprint → in-run dedup collapses them into one analysis and one thread |
-| A dependency failure that then causes a compile failure | different `error_key` → different fingerprints → analysed separately, which is correct: they have different fixes |
-| Both delivered | A4 groups them under one message per stage, so the developer sees the relationship without three separate DMs |
-
-The fingerprint is deliberately not clever about causality. Two distinct error texts are two
-errors; relating them is A4's presentation job, not the matcher's.
-
-
----
 
 #### 10.1.2 Why `product_team` comes from the namespace, not the repo name
 
@@ -3074,76 +3319,85 @@ implementation.
 
 ---
 
-### 10.2 Agent A2 — Deviation Analyzer
+### 10.2 Search + Agent A2 — Deviation Analyzer
 
-**Role:** Context-ranked vector search. Computes combined score. Assigns match_result. Caches result.
+**Role:** run the two search lanes, merge them into a shortlist, and let A2 **judge the whole
+set**. A2 is not a reranker approving a decision the search already made — given alternatives
+it can tell candidates apart, which is a different and far more useful judgement (§4C.3.1).
 
-**Input:** Analysis Envelope fields: `error_key`, `context_block`, `fingerprint`  
-**Config inputs:** `VECTOR_TOP_K` (10), `ERROR_WEIGHT` (0.60), `CONTEXT_WEIGHT` (0.40), `RRF_K` (60), `SIMILARITY_THRESHOLD` (0.90), `TIE_BREAK_MARGIN` (0.02)
+**Input:** Analysis Envelope fields `error_key`, `signature`, `context_lines`, `fingerprint`,
+plus any `ranked_candidates` already seeded by the N9 scope probe.
+**Config inputs:** `SIG_WEIGHT` (2.0), `LEXICAL_WEIGHT` (1.0), `RRF_K` (60),
+`MIN_FUSION_SCORE` (**establish by measurement — do not carry over 0.90**), `CANDIDATE_K` (10).
 
 **Processing steps (in order):**
 
-1. **Embed query.** POST `error_key` to Ollama HTTP embedding endpoint (`granite-embedding` model). Returns `query_vector: List[float]`.
+1. **Signature lane.** Indexed lookup on `fixes.signature` for an exact signature match.
+   Skipped when the matched error pattern supplies no signature — the keyword lane then runs
+   alone (§4C.3.5, scenario 12).
 
-2. **Hybrid candidate generation.** Two searches over `error_key`, fused by rank:
+2. **Keyword lane.** FTS5 `MATCH` over `fixes_fts`, whose text is `error_key` after
+   hierarchical token expansion (§4C.2.5) — compound names indexed whole *and* in parts.
 
-   ```python
-   lexical = fts5_search(error_key, limit=VECTOR_TOP_K * 2)      # SQLite FTS5 MATCH
-   dense   = chroma_query(embed(error_key), n=VECTOR_TOP_K * 2)  # cosine
+3. **Merge on rank.** Reciprocal Rank Fusion across both lanes → `fusion_score`. Rank, not
+   score: a BM25 value and a signature match are different kinds of number on different
+   scales, so adding them would be meaningless (§4C.3.4).
 
-   # Reciprocal Rank Fusion — combines on RANK, not raw score, because BM25
-   # and cosine are not on a comparable scale.
-   scores = defaultdict(float)
-   for rank, c in enumerate(lexical): scores[c.id] += 1 / (RRF_K + rank + 1)
-   for rank, c in enumerate(dense):   scores[c.id] += 1 / (RRF_K + rank + 1)
+4. **Filter — two rules, and no others.**
+   - `status = 'active'`. An unreviewed AI-written fix is never offered as a suggestion for a
+     *different* error.
+   - `fusion_score >= MIN_FUSION_SCORE` — an admission floor, keeping weak candidates out of
+     the prompt and out of the cost.
 
-   candidates = top_n(scores, VECTOR_TOP_K)   # normalised → error_similarity ∈ [0,1]
-   ```
+   Product, stage and category are used **nowhere** — not to filter, not to score, not to
+   break ties. A good fix from another team wins on merit, which is the point of normalising
+   repository names out of `error_key` in the first place.
 
-   Lexical search catches error codes, artifact names, and version strings that a dense
-   embedding blurs; the vector search catches rewordings. Record **each lane's rank** for the
-   selected candidate — `signature_rank`, `lexical_rank`, `dense_rank`, and `fused_rank`,
-   leaving a rank `NULL` when that lane did not surface it at all. Recording only "the
-   keyword lane also had it" is not enough: per-lane recall and unique contribution (§8.5.3)
-   need the ranks, and the misses, from every lane.
+5. **Take the top `CANDIDATE_K` as a set.** The shortlist is handed to A2 whole. Each entry
+   keeps its per-lane positions for debugging, and any candidate seeded by the scope probe is
+   labelled with its `scope`, `status` and provenance.
 
-   > **This is a summary. §4C is the full specification** — the signature lane and its
-   > broadening stop condition, hierarchical FTS tokens, the five-stage cascade, and the
-   > candidate-set contract with A2.
+6. **A2 judges.** One LLM call over the whole set, returning:
 
-3. **Fetch context labels and filter by status.** For each top-K result, look up `product_team`, `stage_type`, `error_category`, and `status` from `bfa_kb.db.fixes` using `metadata.fix_id`. **Discard any candidate whose `status` is not `active`** — `pending`, `deprecated`, and `discarded` fixes are never served.
+```json
+{ "selected_candidate_id": 412,
+  "outcome":       "ADAPTED",           // REUSED | ADAPTED | NO_MATCH
+  "adapted_diff":  "- downgrade to 2.7.1\n+ downgrade to 2.9.x",
+  "rejected": [
+    {"id": 388, "why": "version mismatch, not a missing artifact"},
+    {"id": 401, "why": "runtime failure, not build-time"}
+  ],
+  "confidence": 0.88 }
+```
 
-4. **Rerank on context lines, not labels.** For each surviving candidate compute
+   `outcome` is **categorical, not a probability**. `confidence` is recorded as telemetry and
+   **gates nothing** — an LLM confidence number is not calibrated, and logging it against
+   benchmark ground truth is the only way that ever gets settled.
 
-   ```python
-   context_similarity = cosine(embed(query.context_lines),
-                               embed(candidate.context_sample))
-   final_score = 0.60 * error_similarity_fused + 0.40 * context_similarity
-   ```
+   Requiring `ADAPTED` to carry a **diff** rather than a free rewrite is what keeps the
+   boundary between *reusing* knowledge and *inventing* it visible. §8.5.4 tracks the mix,
+   because a rising `ADAPTED` share is what drift looks like.
 
-   `error_similarity_fused` is the RRF score from step 2. Product, stage, and category are
-   **not** terms in this formula — see §10.1.1, "Scoring: metadata filters and breaks ties".
+7. **Record rejections.** INSERT one `match_rejections` row per rejected candidate, keyed by
+   `(query_signature, fix_id)` with A2's stated reason. Stored, not yet acted on (§4C.3.4).
 
-5. **Sort and assign `match_result`.**
-   - `final_score >= SIMILARITY_THRESHOLD` (0.90) → `exact_match`
-   - `final_score >= 0.70` but below threshold → `partial`
-   - otherwise → `no_match`
-   - when the top two are within a small margin, prefer the candidate whose `product_team`
-     and `stage_type` match; this is the **only** use of metadata in ranking
+8. **Promote scope.** On `outcome = REUSED` where the winning fix is `repo`-scoped and the
+   current repository differs, UPDATE `fixes.scope = 'global'` (§4C.1.5). From then on the
+   answer cache serves it everywhere in ~1 ms.
 
-6. **Take `fix_text`** from the winning candidate's stored fix.
+9. **Write telemetry.** INSERT `request_telemetry` with `outcome`, `fusion_score`, and the
+   per-lane provenance — `signature_rank`, `lexical_rank`, `fused_rank`, `candidate_count`,
+   `scope` — each rank left `NULL` when that lane did not surface the selected fix. Those
+   `NULL`s are the point: they are what make per-lane recall computable (§8.5.3).
 
-7. **Cache match_result.** `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name  
-   Redis SET `match:<kb_version>:<fingerprint>:<ctx_hash>` = JSON `{match_result, ranked_candidates, top_candidate}`, TTL = 30 days.  
-   **This formula is the canonical one — N9 (Match Result Cache Check) must use identical separators (`:`) and truncation (`[:16]`) to produce matching keys.**
+**Output:** Envelope updated with `outcome`, `ranked_candidates`, `top_candidate`, `fix_text`,
+and `adapted_diff` when adapted.
 
-8. **Write telemetry.** INSERT `bfa_stats.db.request_telemetry` with match_result, scores, latency.
-
-**Output:** Envelope updated with `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` (if match_result ≠ no_match)
-
-**Degradation:** If Chroma or Ollama unavailable → skip A2 entirely, set `match_result = "no_match"`, proceed to A3. Fire health alert.
+**Degradation:** SQLite unavailable → fatal; it is the system of record. LLM unavailable →
+"unable to analyze"; exact answer-cache hits still deliver (§4C.3.6).
 
 ---
+
 
 ### 10.3 Agent A3 — Solution Synthesizer
 
@@ -3182,7 +3436,7 @@ implementation.
 
 3. **Call LLM.** POST to OpenWebUI / Ollama. `OUTGOING_PROTOCOL` governs HTTP vs HTTPS.
 
-4. **Cache result.** On success: Redis SET `fix:<fingerprint>` = JSON `{fix_text, source:"ai"}` (written only when the slot is empty or already `source=ai` — an SME entry is never overwritten), TTL = 30 days. Update `fix_text`, `fix_source="llm_generated"`, and **clear `ranked_candidates = None`** in envelope — prevents stale A2 candidates from triggering the disambiguation gate at N12c on the A3 path.
+4. **Cache result.** On success: Redis SET `fix:<fingerprint>:<repo>` = JSON `{fix_text, source:"ai", scope:"repo"}` (written only when the slot is empty or already `source=ai` — an SME entry is never overwritten), **TTL = 7 days** (§4C.2.3). INSERT `fixes` with `status='pending'`, `scope='repo'`. Update `fix_text`, `fix_source="llm_generated"`, and clear `ranked_candidates = None` in the envelope.
 
 **Output:** Envelope updated with `fix_text="llm_generated"`, `fix_source`, `ranked_candidates=None` — OR failure path.
 
@@ -3212,8 +3466,6 @@ implementation.
 1. **Gate 1 — Forbidden text.** Check `fix_text` against `FORBIDDEN_TEXT_PATTERNS` (env var, newline-separated regex list). Match → post to `SME_SLACK_CHANNEL` (env var) with `⚠ FORBIDDEN TEXT` warning label; INSERT `delivery_records` (`delivered_to_channel=SME_SLACK_CHANNEL`, `fallback_used=1`, `fix_source`); UPDATE `pipeline_events` (`final_status='failed'`). Stop — do not DM developer until SME reviews.
 
 2. **Gate 2 — Infrastructure.** `is_infra == True` → post fix to `DEVOPS_SLACK_CHANNEL` (env var). DM developer: "This build failed due to an infrastructure issue — not your code. Please retry after the infrastructure team resolves it." INSERT `delivery_records`; UPDATE `pipeline_events`. Stop main delivery path.
-
-3. **Gate 3 — Disambiguation.** Guard: if `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → skip gate (proceed to step 4). Otherwise: check if `len(ranked_candidates) ≥ 2` AND within `TIE_BREAK_MARGIN`. If ambiguous → post side-by-side to `SME_SLACK_CHANNEL` (env var) showing both fix options with context labels and scores; Redis SET `disambig_pending:<fingerprint>` = envelope JSON (24h TTL). Stop — hold delivery until SME approves via KB REST API. (The KB REST API approve handler performs the full write path before clearing the pending key, ensuring no infinite loop.)
 
 **Main delivery (all gates passed):**
 
@@ -3271,40 +3523,23 @@ N14: KB REST API handler
      └─ INSERT INTO fix_revisions (fix_id, revision, fix_text_before,
                                    fix_text_after, changed_by, action='approved')
      COMMIT
-  3. Embed error_key → vector (Ollama granite-embedding)
-  4. Chroma HttpClient upsert:
-     id       = "fix-{fingerprint}"
-     document = fix_text
-     embedding = vector
-     metadata = {fingerprint, fix_id, product_team, stage_type, error_category}
+  3. Expand error_key into hierarchical tokens (§4C.2.5)
+  4. INSERT into fixes_fts (error_tokens, fix_id)
+     ← this is the moment the fix becomes FINDABLE. Until now it was
+       status='pending' and invisible to search.
   5. Redis SET fix:<fingerprint> with source=sme
-     value = {fix_text, approved_by, fix_id}
-     TTL   = 30 days
-  6. INCR kb_version                        ← orphans every stale match_result
-  7. Redis DELETE kb_version INCR             ← invalidate match result cache
-  8. INSERT bfa_stats.db.sme_audit_log
+     value = {fix_text, approved_by, fix_id, scope}
+     key   = fix:<fp>  when scope='global'
+             fix:<fp>:<repo>  when scope='repo'
+     TTL   = 30 days   (AI-written entries get 7 — §4C.2.3)
+  6. INSERT bfa_stats.db.sme_audit_log
      (fix_id, fingerprint, slack_user_id, action='approved', fix_text_after=fix_text)
-
-  ── THEN check for pending disambiguation (step 9) ───────────────────────
-  9. Redis GET disambig_pending:<fingerprint>
-     ├─ NOT EXISTS → Return {status: "ok", fix_id, revision}
-     └─ EXISTS →
-        a. Deserialize stored envelope_json → stored_envelope
-        b. Overwrite stored_envelope fields:
-           stored_envelope.fix_text         = fix_text  (from this approve payload)
-           stored_envelope.fix_source       = "sme_cache"
-           stored_envelope.approved_by      = approved_by
-           stored_envelope.ranked_candidates = None    ← CRITICAL: clear stale
-                                                         candidates so Gate 3
-                                                         skips disambiguation
-           stored_envelope.match_result          = "exact_match"
-        c. Redis DELETE disambig_pending:<fingerprint>  ← delete AFTER patching
-        d. Trigger async A4 delivery with patched stored_envelope
-           (Gate 3 sees ranked_candidates=None → skips directly to delivery)
-        e. Return {status: "ok", fix_id, revision, delivery_triggered: true}
+  7. Return {status: "ok", fix_id, revision}
 ```
 
-**Vector DB state after approve:** Chroma has a new or updated document for this fingerprint. Next A2 query for the same (or similar) error will find this fix as a candidate. SME cache means A2 is bypassed entirely on an exact fingerprint match.
+**Search state after approve:** the keyword index now contains this fix, so it becomes a
+candidate for *similar* errors — which it was not while `pending` (§4C.2.1). The answer cache
+means the search is bypassed entirely on an exact fingerprint match within scope.
 
 ---
 
@@ -3332,12 +3567,14 @@ N14: KB REST API handler
   6. Redis SET fix:<fingerprint> with source=sme
      value = {fix_text: new_text, approved_by: edited_by, fix_id}
      TTL   = 30 days (reset)
-  7. Redis DELETE kb_version INCR   ← force A2 re-evaluation with new fix
   8. INSERT bfa_stats.db.sme_audit_log (action='edited')
   9. Return {status: "ok", fix_id, revision}
 ```
 
-**Note:** The embedding is keyed on `error_key` (what errors are searched by), not `fix_text` (what is returned). So re-embedding is only needed if `error_key` changes — but for safety, the edit flow always re-upserts Chroma with the updated `document` field (fix_text) while keeping the same embedding. Chroma's `upsert` with same `id` updates the document without changing the embedding if the embedding argument is omitted.
+**Note:** the keyword index is built from `error_key` (what errors are *searched by*), not from
+`fix_text` (what is *returned*). Correcting the wording of a fix therefore requires **no index
+write at all** — it is a SQLite update plus a cache refresh. Only a change to `error_key` needs
+the index rebuilt.
 
 ---
 
@@ -3393,12 +3630,14 @@ N14: KB REST API discard handler
      COMMIT
   3. Chroma HttpClient delete: id="fix-{fingerprint}"
   4. Redis DELETE fix:<fingerprint>
-  5. Redis DELETE kb_version INCR
   6. INSERT bfa_stats.db.sme_audit_log (action='discarded')
   7. Return {status: "ok"}
 ```
 
-**After discard:** The fingerprint no longer has a match in Chroma. Next occurrence of this error goes through A2 (no match) → A3 (LLM generates fresh fix) → delivered as LLM-generated → SME can approve the new fix. The `fixes` row remains in `bfa_kb.db` with `status='discarded'` for audit purposes.
+**After discard:** the fingerprint is no longer in the keyword index and no longer in the answer
+cache. The next occurrence of this error searches, finds nothing, reaches A3, and is delivered as
+AI-generated — after which an SME can approve the new fix. The `fixes` row remains in `bfa_kb.db`
+with `status='discarded'` for audit.
 
 ---
 
@@ -3513,7 +3752,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 
 | Step | Node | ID | Inputs (exact fields) | Processing summary | Outputs (exact fields) | Consumed by |
 |---|---|---|---|---|---|---|
-| 0 | Startup Validator | N0 | `error_patterns.json`, `routing.json`, mandatory env vars (§2.1) | Validate both config files (declared vocabulary, regex compiles, unique labels); assert `ERROR_WEIGHT + CONTEXT_WEIGHT == 1.0`; assert mandatory env vars present | Pass → service starts; Fail → `sys.exit(1)` + stderr | N1 (service accepts traffic only on pass) |
+| 0 | Startup Validator | N0 | `error_patterns.json`, `routing.json`, mandatory env vars (§2.1) | Validate both config files (declared vocabulary, regex compiles, unique labels); assert mandatory env vars present | Pass → service starts; Fail → `sys.exit(1)` + stderr | N1 (service accepts traffic only on pass) |
 | 1 | Webhook Listener | N1 | HTTP POST body | Generate `request_id` (UUID); check event type + status. No auth check (§6.1) | `request_id: str`, validated `payload: dict` | N2 |
 | 2 | Pipeline Extractor | N2 | `request_id`, `payload` | `extract_pipeline_info(payload)`; `should_process_pipeline()`; external-stage guard | `AnalysisEnvelope(request_id=..., pipeline_info={project_id, pipeline_id, ref, sha, repo, branch, commit_sha, triggered_by, triggered_by_email, stages, job_names=[]})` | N3 (as background task) |
 | 3 | Log Fetcher | N3 | `pipeline_info.project_id`, `pipeline_info.pipeline_id` | `fetch_pipeline_jobs(project_id, pipeline_id)`; `fetch_job_log_tail(project_id, job_id)` per failed job; populate `job_names` | `all_logs: List[{job_id, job_name, details, log_text}]`; updates `pipeline_info.job_names` | N4 |
@@ -3523,8 +3762,8 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | 7 | Dedup Check | N7 | Envelope: `fingerprint`, `pipeline_info.pipeline_id` | Redis GET `run_dedup:<pipeline_id>:<fp>` | **Hit:** `envelope.slack_message_ts = cached_ts` → THREADREPLY; **Miss:** → N8 | THREADREPLY or N8 |
 | 7a | Thread Reply | THREADREPLY | Envelope: `slack_message_ts`, `error_key`, `pipeline_info.stage name` | Post thread reply to existing Slack message; UPDATE `pipeline_events.failed_jobs+1`; INSERT `delivery_records` | Thread reply posted; DB partial update | Terminal |
 | 8 | Fix Cache Check | N8 | Envelope: `fingerprint` | Redis GET `fix:<fp>` → `{fix_text, source, approved_by, fix_id}` | **Hit:** envelope: `fix_text`, `fix_source` per `source`, `approved_by` → N12a; **Miss:** → N9 | N12a (hit) or N9 (miss) |
-| 9 | Match Result Cache Check | N9 | Envelope: `fingerprint`, `context_block.{product_team, stage_type, error_category}` | `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name; Redis GET `match:<kb_version>:<fp>:<ctx_hash>` | **Hit (match):** envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_source="match_cache"`, `fix_text` → N12a; **Hit (no_match):** → N11; **Miss:** → N10 | N12a / N11 / N10 |
-| 10 | Agent A2 | N10 | Envelope: `error_key`, `context_lines`, `context_block`, `fingerprint`; config: `VECTOR_TOP_K`, `ERROR_WEIGHT`, `CONTEXT_WEIGHT`, `RRF_K`, threshold=0.90 | Ollama embed; FTS5 + Chroma hybrid search fused by RRF; filter to `status='active'` and matching category; rerank on context-line similarity; `combined_score = 0.60×error + 0.40×context`; assign match_result; tie-break on metadata; Redis SET `match:<kb_version>:<fp>:<ctx_hash>` 30d; INSERT `request_telemetry` | Envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` (if match), `fix_source="vector_db"` | N12a (match) or N11 (no_match) |
+| 9 | Fingerprint Scope Probe | N9 | Envelope: `fingerprint`, `repo` | SELECT from `fixes` WHERE `fingerprint` matches — any scope, any status | Envelope: `ranked_candidates` seeded with the out-of-scope fix, labelled with `scope`/`status` | N10 (always) |
+| 10 | Search + Agent A2 | N10 | Envelope: `error_key`, `signature`, `context_lines`, `fingerprint`, seeded `ranked_candidates`; config: `SIG_WEIGHT`, `LEXICAL_WEIGHT`, `RRF_K`, `MIN_FUSION_SCORE`, `CANDIDATE_K` | Signature lane + keyword lane; merge on rank by RRF → `fusion_score`; filter to `status='active'` and `≥ MIN_FUSION_SCORE`; take top `CANDIDATE_K` as a **set**; A2 judges the set → `outcome`; promote `scope` on cross-repo `REUSED`; INSERT `match_rejections`; INSERT `request_telemetry` | Envelope: `outcome`, `ranked_candidates`, `top_candidate`, `fix_text`, `adapted_diff`, `fix_source="search"` | N12a (`REUSED`/`ADAPTED`) or N11 (`NO_MATCH`) |
 | 11 | Agent A3 | N11 | Envelope: `error_key`, `context_block`, `pipeline_info` | Domain RAG lookup; build LLM prompt; call LLM; Redis SET `fix:<fp>` `source=ai` 30d; **clear `ranked_candidates=None`** | Envelope: `fix_text`, `fix_source="llm_generated"`, `ranked_candidates=None` | N12a (success) or dead-letter (LLM fail) |
 | 11f | LLM Failure | DEADLETTER | Envelope + failure reason | Send "unable to analyze" to team channel; email DevOps; Slack #devops-alerts; write dead-letter file; INSERT `request_telemetry(fix_source="no_match")` | Dead-letter JSON on disk | Terminal (replay via `replay_failed.py`) |
 
@@ -3534,16 +3773,15 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 |---|---|---|---|---|---|---|
 | 12a | Forbidden Text Gate | Envelope: `fix_text` | `fix_text` matches `FORBIDDEN_TEXT_PATTERNS`? | N12b | A4 SME channel + hold; INSERT `delivery_records`; UPDATE `pipeline_events` | Yes — delivery_records + pipeline_events |
 | 12b | Infrastructure Gate | Envelope: `is_infra` | `is_infra == True`? | N12c | A4 DevOps channel + developer DM; INSERT `delivery_records`; UPDATE `pipeline_events` | Yes — delivery_records + pipeline_events |
-| 12c | Disambiguation Gate | Envelope: `ranked_candidates`, `fix_source` | `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → skip; else check DISAMBIG_BAND | N12 | A4 SME side-by-side; Redis SET `disambig_pending:<fp>` (24h, envelope JSON) | No DB write — held pending SME choice |
 | 12 | Agent A4 — Reporter | Full Envelope | READ `bfa_kb.db.fixes` (`hit_count`, `last_seen`, `jira_key`); developer lookup by email; build DM; check/create Jira | Slack DM (or email fallback) sent; DB writes: UPDATE `pipeline_events`; INSERT `delivery_records`; UPDATE `fixes.hit_count`; Redis SET `run_dedup` | N/A | Fallback: developer not found → send fix via SMTP to `triggered_by_email` |
 
 ### 12.3 SME Review Flows (UI / Slack buttons)
 
 | Step | Action | Trigger | Inputs | Writes (in order) | Outputs | Next |
 |---|---|---|---|---|---|---|
-| A | Approve | `POST /api/kb/approve` (Slack service or dashboard) | `fingerprint`, `error_key`, `fix_text`, `approved_by`, `context`, `request_id` | ① `bfa_kb.db.fixes` INSERT/UPDATE + `fix_revisions` INSERT; ② Chroma upsert; ③ Redis SET `fix:<fp>` `source=sme`; ④ INCR `kb_version` (orphans every stale match_result); ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Check `disambig_pending` → if exists: patch envelope, DELETE key, trigger A4 delivery |
-| B | Edit | `PATCH /api/kb/{id}` (Slack service or dashboard) | `fix_id`, `fix_text`, `edited_by` | ① `bfa_kb.db.fixes` UPDATE + `fix_revisions` INSERT; ② Chroma upsert (updated document); ③ Redis SET `fix:<fp>` `source=sme` (reset TTL); ④ INCR `kb_version` ; ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Terminal |
-| C | Discard | `DELETE /api/kb/{id}/discard` (Slack service or dashboard) | `fix_id` | ① `bfa_kb.db.fixes` UPDATE `status='discarded'` + `fix_revisions` INSERT; ② Chroma DELETE `id="fix-{fp}"`; ③ Redis DELETE `fix:<fp>`; ④ INCR `kb_version`; ⑤ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok"}` | Terminal |
+| A | Approve | `POST /api/kb/approve` (Slack service or dashboard) | `fingerprint`, `error_key`, `fix_text`, `approved_by`, `context`, `request_id` | ① `bfa_kb.db.fixes` INSERT/UPDATE `status='active'` + `fix_revisions` INSERT; ② **FTS5 index write** (hierarchical tokens); ③ Redis SET `fix:<fp>` `source=sme` 30 d; ④ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Terminal |
+| B | Edit | `PATCH /api/kb/{id}` (Slack service or dashboard) | `fix_id`, `fix_text`, `edited_by` | ① `bfa_kb.db.fixes` UPDATE + `fix_revisions` INSERT; ② FTS5 index rewrite **only if `error_key` changed** — the index is built from the error, not the fix text; ③ Redis SET `fix:<fp>` `source=sme` (reset TTL); ④ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok", fix_id, revision}` | Terminal |
+| C | Discard | `DELETE /api/kb/{id}/discard` (Slack service or dashboard) | `fix_id` | ① `bfa_kb.db.fixes` UPDATE `status='discarded'` + `fix_revisions` INSERT; ② DELETE the FTS5 index row; ③ Redis DELETE `fix:<fp>` (all scope variants); ④ `bfa_stats.db.sme_audit_log` INSERT | `{status:"ok"}` | Terminal |
 | D | Feedback | `POST /api/kb/{id}/feedback` (Slack button → N18 → internal call, or dashboard) | `fix_id`, `sentiment`, `slack_user_id`, `slack_display_name` | ① `bfa_stats.db.sme_audit_log` INSERT; ② COUNT negative feedback for `fix_id` | `{status:"ok", negative_count, routed_to_sme: bool}` | if `routed_to_sme`: post to SME review channel |
 | E | Re-approve after feedback | Same as action A | `fingerprint`, updated `fix_text`, `approved_by` | Same as action A (full write path) | `{status:"ok", fix_id, revision}` | Terminal |
 
@@ -3565,12 +3803,10 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | Redis | `fix:<fp>` SET `source=sme` (30d) | N14 (KB API) — approve, edit | On approve or edit |
 | Redis | `fix:<fp>` DELETE | N14 (KB API) — discard | On discard |
 | Redis | `fix:<fp>` SET `source=ai` (30d) | N11 (A3) | After the LLM generates a fix, only if no SME entry exists |
-| Redis | `kb_version` INCR | N14 (KB API) — approve, edit, discard | Orphans every cached match_result in one operation |
-| Redis | `match:<kb_version>:<fp>:<ctx_hash>` SET (30d) | N10 (A2) | After hybrid search |
-| Redis | `kb_version` INCR DELETE | N14 (KB API) — approve, edit, discard | On any KB mutation |
+| SQLite | `fixes_fts` INSERT / DELETE | N14 (KB API) — approve, discard | The moment a fix becomes findable, or stops being |
+| SQLite | `match_rejections` INSERT | N10 (A2) | One row per rejected candidate |
+| SQLite | `fixes.scope` UPDATE → `global` | N10 (A2) | On cross-repo `REUSED` |
 | Redis | `run_dedup:<pipeline_id>:<fp>` SET (1h) | N12 (A4) | After first delivery |
-| Redis | `disambig_pending:<fp>` SET (24h) | N12c Gate 3 | On disambiguation hold |
-| Redis | `disambig_pending:<fp>` DELETE | N14 (KB API) — approve (disambig path) | After disambig SME choice + write |
 | `bfa_stats.db` | `pruning_runs` INSERT | Weekly pruning job | Every Monday — records flagged fix_ids |
 | `bfa_stats.db` | `pruning_runs` UPDATE (`resolved_count`, `completed_at`) | Dashboard pruning resolve endpoint | After each operator action |
 | `bfa_kb.db` | `fixes` UPDATE `status='deprecated'` | Dashboard pruning resolve (deprecate) | On operator deprecate action |
@@ -3578,24 +3814,8 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | `bfa_kb.db` | `fix_revisions` INSERT `action='deleted'` | Dashboard pruning resolve (delete) | Audit trail for hard deletes |
 | Chroma | `fix_embeddings` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 | Redis | `fix:<fp>` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
-| Redis | `kb_version` INCR DELETE | Dashboard pruning resolve (delete) | On operator delete action |
+| SQLite | `fixes_fts` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 
-### 12.5 Match Result Cache Key Formula (canonical)
-
-Both the **writer** (N10, A2 §10.2 step 7) and the **reader** (N9) must use this exact formula:
-
-```python
-ctx_hash = hashlib.sha256(
-    f"{context_block.product_team}:{context_block.stage_type}:{context_block.error_category}"
-    .encode()
-).hexdigest()[:16]
-
-redis_key = f"match_result:{fingerprint}:{ctx_hash}"
-```
-
-Any deviation in separators, casing, or truncation length causes the writer and reader to produce different keys, making the match result cache permanently non-functional.
-
----
 
 *End of Design Document — covers all 106 BFA requirements (PP through FMR)*
 
@@ -3800,7 +4020,10 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 15 | `bfa_kb.db` | `fixes` | `hit_count` | INTEGER | Existing | A4 | Times this fix was delivered | KPI, KB |
 | 16 | `bfa_kb.db` | `fixes` | `first_seen` | TEXT | **New** | A1 | ISO 8601 — when error was first analysed (not first approved). Without this, derivable only by joining `pipeline_events` — slow at scale | KPI, KB |
 | 17 | `bfa_kb.db` | `fixes` | `last_seen` | TEXT | Existing | A4 | ISO 8601 — last delivery datetime | KB |
-| 18 | `bfa_kb.db` | `fixes` | `fix_confidence` | REAL | **New** | A4 | Running average `combined_score` across all deliveries — rises as matches confirm fix quality | KPI, KB |
+| 18 | `bfa_kb.db` | `fixes` | `fix_confidence` | REAL | **New** | A4 | Running average `fusion_score` across all deliveries — how strongly this fix keeps being found | KPI, KB |
+| 18a | `bfa_kb.db` | `fixes` | `scope` | TEXT | **New** | A2 | `repo` \| `global` — where this fix is known to work (§4C.1.5). Starts `repo`; A2 promotes it on cross-repo `REUSED` | answer-cache key |
+| 18b | `bfa_kb.db` | `fixes` | `times_seen` | INTEGER | **New** | A1 | Times this **fingerprint occurred**, whether or not a fix was delivered. **Pending Review is sorted by this DESC** (§4C.2.4) | review ordering |
+| 18c | `bfa_kb.db` | `fixes` | `signature` | TEXT | **New** | A1 | `category\|sub_category\|label[\|subject]`, derived from `error_patterns.json` (§4C.1.4) | signature lane |
 | 19 | `bfa_kb.db` | `fixes` | `sme_review_count` | INTEGER | **New** | KB API | Times routed to SME review via 3× thumbs-down — quality signal | KPI, KB |
 | 20 | `bfa_kb.db` | `fixes` | `jira_key` | TEXT | Existing | A4 | Jira issue linked to fingerprint | KB |
 | 21 | `bfa_kb.db` | `fixes` | `created_at` | TEXT | Existing | KB API | ISO 8601 — first approval | KB |
@@ -3820,11 +4043,11 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 35 | `bfa_stats.db` | `pipeline_events` | `total_duration_ms` | INTEGER | Existing | A4 | Wall-clock pipeline duration | KPI |
 | 36 | `bfa_stats.db` | `pipeline_events` | `final_status` | TEXT | Existing | A4 | `failed/recovered` | KPI |
 | 37 | `bfa_stats.db` | `pipeline_events` | `source_ci` | TEXT | **New** | A1 | `gitlab` or `jenkins` — enables KPI segmentation by CI system | KPI |
-| 38 | `bfa_stats.db` | `request_telemetry` | `fix_source` | TEXT | Existing | A2/A4 | `sme_cache/ai_cache/match_cache/vector_db/llm_generated/no_match` | KPI |
+| 38 | `bfa_stats.db` | `request_telemetry` | `fix_source` | TEXT | Existing | A2/A4 | `sme_cache/ai_cache/search/llm_generated/no_match` | KPI |
 | 39 | `bfa_stats.db` | `request_telemetry` | `match_result` | TEXT | Existing | A2 | `exact_match/applicable_with_adjustments/partial/no_match` | KPI |
-| 40 | `bfa_stats.db` | `request_telemetry` | `error_similarity` | REAL | **Changed** | A2 | Fused FTS5 + vector score for the winning candidate | KPI |
-| 41 | `bfa_stats.db` | `request_telemetry` | `combined_score` | REAL | Existing | A2 | Top combined score | KPI |
-| 42 | `bfa_stats.db` | `request_telemetry` | `context_similarity` | REAL | **Changed** | A2 | Cosine between query context lines and stored context sample — no longer a label ratio | KPI |
+| 40 | `bfa_stats.db` | `request_telemetry` | `fusion_score` | REAL | **Changed** | A2 | Merged rank score for the winning candidate. **Not a similarity and not a percentage** — never compare it to 0.90 (§4C.3.4) | KPI |
+| 41 | `bfa_stats.db` | `request_telemetry` | `outcome` | TEXT | **New** | A2/A3 | `REUSED` \| `ADAPTED` \| `GENERATED` \| `NO_MATCH` — one derived column, so the drift KPI is one query (§8.5.4) | KPI |
+| 42 | `bfa_stats.db` | `request_telemetry` | `scope` | TEXT | **New** | A2 | Scope of the fix that answered — how often the cross-repo path is exercised | KPI |
 | 43 | `bfa_stats.db` | `request_telemetry` | `llm_cost_estimate` | REAL | Existing | A3 | Estimated token cost USD | KPI |
 | 44 | `bfa_stats.db` | `request_telemetry` | `request_latency_ms` | INTEGER | Existing | A4 | Total analysis latency | KPI |
 | 45 | `bfa_stats.db` | `request_telemetry` | `product_team` | TEXT | Existing | A1 | | KPI |
@@ -4054,6 +4277,11 @@ dead-letter entries, and replay output. Per-error rows are keyed by
 
 ### 13.10 Two caches, not three
 
+> **Superseded by §13.25 — there is now one cache.** The Match Result Cache and `kb_version`
+> were removed entirely. The reasoning below is retained because it records why the *third*
+> cache went first, and the same argument, followed one step further, removes the second.
+
+
 **Decision.** Merge the SME and AI caches into `fix:<fp>` carrying a `source` field; keep
 the match result cache separate and add `kb_version` to its key. Uniform 30-day TTL.
 
@@ -4190,6 +4418,12 @@ re-enabling it later is configuration, not development.
 
 ### 13.19 Simplification review — what else may be over-built for an internal tool
 
+> **Resolved by §13.25 and §13.26.** Items 1 (disambiguation hold), 2 (Match Result Cache and
+> `kb_version`) and 4 (domain RAG) are **removed**. Item 3 (`sub_category` pre-filtering) is
+> moot — the hard category filter is gone and `sub_category` is now a component of the
+> signature. Item 5 (Prometheus) was already done. The list below is the original analysis.
+
+
 Prompted by the same reasoning that removed webhook authentication. Each item below is
 weighed by *what it costs to build and operate* against *what it protects an internal tool
 from*. Nothing here has been removed yet — this is the decision list.
@@ -4255,6 +4489,12 @@ removals.
 
 ### 13.20 Normalisation corrected — conservative fingerprint, hybrid retrieval
 
+> **Partly superseded by §13.25.** The conservative-normalisation principle stands and is now
+> §4C.1.2. The scoring model described below — the context term, the category filter, the
+> blended `combined_score` — was later removed entirely. This entry is retained because it
+> records why aggressive normalisation was abandoned, which remains the reasoning in force.
+
+
 **The flaw.** The earlier design normalised aggressively (stripping versions, paths, and
 identifiers) and used one string for both the fingerprint and the embedding. Review pointed
 out that the fix often depends on precisely those details. Two consequences followed:
@@ -4305,6 +4545,11 @@ and is consistent with the cross-product reuse the fingerprint enables.
 
 ### 13.22 Scoring model — every reference updated
 
+> **Partly superseded by §13.26.** The context term and the hard category filter were later
+> removed altogether, and `error_similarity` was renamed `fusion_score`. The table below
+> records the intermediate state, which is why some rows describe fields that no longer exist.
+
+
 The corrected scoring model of §13.20 was applied throughout, not only in the sections that
 introduced it. Recorded here so a reader of an older copy can see what moved.
 
@@ -4333,8 +4578,8 @@ amount of editing in place would have answered, so §4C was written as a single 
 | Objection | What changed |
 |---|---|
 | "BM25 + embeddings is stronger than embeddings alone" | Accepted, and taken further: **three** lanes — signature, lexical, dense — fused by RRF. The dense lane is one contributor, not the backbone (§4C.5) |
-| "A2 is not merely a reranker" | Accepted. A2 receives the **candidate set**, not the winner. Given alternatives it can discriminate; given one candidate it can only approve a decision retrieval already made (§4C.7) |
-| "Finding, deciding sameness, and producing an answer are three different jobs" | A2 must now declare `resolution_mode` — `reused` \| `adapted` \| `none` — and supply a **diff** when adapting rather than a free rewrite. Silent drift from retrieval into invented diagnosis becomes a visible number (§4C.7, §8.5.3) |
+| "A2 is not merely a reranker" | Accepted. A2 receives the **candidate set**, not the winner. Given alternatives it can discriminate; given one candidate it can only approve a decision retrieval already made (§4C.3.1) |
+| "Finding, deciding sameness, and producing an answer are three different jobs" | A2 must now declare `resolution_mode` — `reused` \| `adapted` \| `none` — and supply a **diff** when adapting rather than a free rewrite. Silent drift from retrieval into invented diagnosis becomes a visible number (§4C.3.1, §8.5.4) |
 | "Preserving full paths in the tokenizer destroys cross-product matching" | Correct, and it was a flaw in the proposed tokenizer. Resolved by **hierarchical token expansion** — index each compound identifier in whole *and* component form — leaving the tokenizer as plain `unicode61`. Porter stemming is dropped: it is built for prose and does nothing useful to `ERESOLVE` (§4C.3) |
 
 Two things were added that had not been proposed by either side:
@@ -4372,5 +4617,59 @@ What was built instead:
 
 One consequence is worth stating plainly: because the dense lane is one lane in a fusion
 rather than the backbone, losing Ollama and Chroma **is the no-embeddings architecture,
-running live** (§4C.9). The same property makes the benchmark decidable — the arm can simply
+running live** (§4C.3.6). The same property makes the benchmark decidable — the arm can simply
 be run with the lane disabled and the difference measured.
+
+### 13.25 Search consolidated into §4C, and cut to what an empty knowledge base can use
+
+Retrieval had been described in fragments across §10, and had grown a mechanism for every
+objection raised in review. Review then asked the question that none of those objections had:
+*is this over-built?* It was. §4C is now one section, and the design is reduced to the parts
+that do something on day one.
+
+#### What was removed, and why
+
+| Removed | What it was | Why it went |
+|---|---|---|
+| **Match Result Cache + `kb_version`** | a second cache holding the *outcome* of a search, plus a counter that existed only to invalidate it | **Provably useless during the period it was meant to help.** `kb_version` incremented on every approval, so while the knowledge base is being populated the cache was invalidated continuously and never hit — while caching `no_match` for hundreds of fingerprints that would shortly have become findable. The answer cache already holds A3's answer under the same fingerprint. Removed, not deferred |
+| **Disambiguation hold** (N12c, `disambig_pending`) | a paused-delivery state machine, a Redis key holding a serialised envelope, a resume path in the approve handler, and an extra SME workflow | A2 now returns a ranked set with a stated reason per candidate. There is nothing left to ask a human |
+| **Domain RAG collection** (72 pairs) | a second vector collection, an indexing job, and a query on **every** A3 call | 72 static entries belong in the prompt. This sat in the hot path during exactly the phase where A3 is the entire system |
+| **Context embedding** and `combined_score` | a second dense representation, scored against stored context samples | Two write-time and two query-time embeddings, a confounded experiment, and a degradation table that did not survive contact with the code. A2 already receives the context lines and can *read* them |
+| **Hard filter on `error_category`** | candidates from a different category were deleted before scoring | It never protected delivery routing — A4 routes on the **query's** category, not the candidate's. It only manufactured false negatives: a Maven failure classified `dependency` historically and `build` today would have had its correct fix deleted before A2 saw it |
+| **Semantic search on day one** | Chroma + Ollama as a launch dependency | On day one there is nothing stored to retrieve. Two services and ~40 ms per miss to return nothing for months. Deferred to an optional phase 3, decided on the §9.2 benchmark |
+| The signature broadening ladder, per-level weights, reserved slots, per-lane slot quotas, a `provisional` status tier, and rejection-based demotion | answers to objections that are real but unobserved | Recorded in §8.5.7 with the measurement that would justify each. **Build the mechanism when a measurement demands it, not when an argument predicts it** |
+
+#### What was added
+
+| Added | Why |
+|---|---|
+| **Resolution scope** (`repo` → `global`), with the answer-cache key carrying the repository for `repo`-scoped fixes | **Fingerprint equality is not resolution equality.** Two products can produce a byte-identical Maven error and need different fixes — one a Nexus configuration change, the other a mirror configuration change. Serving one from cache to the other bypasses A2, which is the only wrong-answer-in-silence path in the design. Encoding scope in the key means a cross-scope lookup simply *misses*; no new gate, no new failure mode |
+| **The fingerprint scope probe** (N9) | A scope miss must not behave as though nothing is known. Without it, cold start would have one error in twenty repositories produce twenty A3 calls and twenty near-identical review-queue rows. The probe finds the existing fix regardless of scope and hands it to A2 — one A2 call instead of one A3 call, which is **cheaper** |
+| **`times_seen` and recurrence-ordered review** | The highest-value mechanism in §4C, and it is a counter and a sort order. Reviewing a fix that has fired 34 times is worth 34× reviewing one that fired once. Review was sorted by age, which is uncorrelated with value |
+| **Signature derived from `error_patterns.json`** | `category`, `sub_category` and `label` already exist per pattern — three of the four parts, already authored and maintained. Only an optional subject regex is new. There is no signature subsystem to build, and no second authoring effort competing for the same scarce SME attention that is already the approval bottleneck |
+| **AI/SME cache TTL split, provenance labelling, 👎 eviction, recurrence-after-delivery** | An AI answer is a hypothesis. It may be cached and re-served, but it must expire fast, must never look like an approved fix, and must never enter the search index. The `status` filter already enforced the last of those; the rest closes the gap |
+| **`match_rejections`** | A2's rejected candidates are free, SME-effort-free negative labels, and negatives are the expensive half of a labelled corpus. Stored from day one because it cannot be reconstructed later. Keyed by the **pair**, never the candidate — a per-candidate penalty would let one bad query poison a good fix. Nothing acts on it yet |
+| **The recurrence check** (§4C.4.1) | One counting job over historical logs, needing no LLM, no knowledge base and no labels, answers whether any of this is worth building — and produces the priority order for error patterns and for review as a by-product |
+
+### 13.26 Telemetry measures lanes, not winners — and the first months measure something else entirely
+
+Three proposals were made and withdrawn.
+
+| Proposal | Why it was withdrawn |
+|---|---|
+| Record `winner_source` — which lane produced the served answer | It manufactures its own conclusion. A correct fix at rank 8 from one lane and rank 25 from another scores as a clean win for the first, though both found it and a small weight change flips the attribution. **Recall@K** asks the honest question — did the lane *have* the answer — independent of how the merge happened to be tuned |
+| Decide the architecture after a few weeks of production telemetry | Live traffic is dominated by frequent, easy, repeated failures, which are served from the answer cache and never reach the search. Judged on volume, a lane existing for the long tail measures as worthless precisely because the tail is rare. **Frequency is not value.** A labelled stratified benchmark must exist first (§9.2) |
+| Gate anything on A2's `confidence` | An LLM confidence number is not a calibrated probability. It is kept as telemetry only — logged against benchmark ground truth so a reliability curve can eventually settle the question, rather than the assumption standing open |
+
+What was built instead:
+
+| Piece | Purpose |
+|---|---|
+| **Per-lane ranks** — `signature_rank`, `lexical_rank`, `fused_rank`, each `NULL` when that lane missed | Two integers per request turn every production request into a small honest experiment: which lanes had the answer, and how far down |
+| **Unique contribution** per lane | The only number that says what is actually *lost* by dropping a lane, as against what it happens to rank first |
+| **A single derived `outcome`** — `REUSED` / `ADAPTED` / `GENERATED` / `NO_MATCH` | The drift KPI in one column rather than a three-way join. A climbing `ADAPTED` share is a system sliding from retrieval into generation dressed as retrieval — it looks fine and fails nothing, so only the declared outcome makes it visible |
+| **Outcome read against `candidate_count`** | The same headline has two opposite causes. `GENERATED` rising with healthy candidate counts means matching is weakening; rising with `candidate_count = 0` means the corpus has moved. Opposite responses |
+| **Cold-start indicators** (§8.5.1) | For the first months every lane indicator reads zero, because there is nothing to search. The only questions that matter then are whether failures recur at all and whether **approvals are keeping pace with recurrence** — and the second is a staffing observation, not an engineering one |
+| **`severity_weight` per category** | Engineer time saved is what matters and cannot be measured directly. Rather than invent a number, an SME-assigned weight keeps a hundred trivial lint failures from outranking three release-blocking build breaks — a judgement recorded openly as one |
+| **Five benchmark arms** (§9.2) | Arm 3 (signature + keyword) versus arm 5 (+ semantic) is the only decision it exists to make. Under ~2% unique contribution the lane is not added; over ~15% it is; between, `severity_weight` decides |
+| **§8.5.6 observation → action, §8.5.7 deferred list** | Telemetry that does not name the next move is decoration, and a deferred optimisation without its trigger measurement is just a wish |
