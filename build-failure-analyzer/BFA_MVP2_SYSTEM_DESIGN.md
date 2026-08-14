@@ -66,8 +66,8 @@ revision to remove jargon.
 | **`match_result`** | A2's decision about a stored candidate: `exact_match`, `applicable_with_adjustments`, `partial`, or `no_match`. | "match_result" |
 | **Match Result Cache** | Remembers A2's decision so the same error in the same context does not re-run the embedding call and the vector query. | "Match Result Cache" |
 | **Cached (computed once, reused)** | The result of an expensive computation is stored under a key so the computation is not repeated. | "memoised" |
-| **`combined_score`** | One number blending text similarity and context similarity, used to decide whether a stored fix is good enough to serve. See §1.2. | — |
-| **top-K** | How many nearest candidates the vector search returns before re-ranking. Configurable — see §1.2. | — |
+| **`combined_score`** | One number blending **error-text similarity** (keyword + vector search, fused) with **context-line similarity**. Metadata is not part of it — it filters beforehand and breaks ties afterwards. See §1.2. | — |
+| **top-K** | How many candidates the fused keyword + vector search returns before re-ranking. Configurable — see §1.2. | — |
 
 ---
 
@@ -189,28 +189,42 @@ every product.
 This is the gate that decides whether a stored fix is served instead of calling the LLM.
 Both halves must hold.
 
-**`combined_score`** blends two measurements:
+**`combined_score`** blends two *measured similarities*. Neither term is a metadata label:
 
 ```
-combined_score = VECTOR_WEIGHT × text_similarity  +  CONTEXT_WEIGHT × context_similarity
-                 (default 0.70)                        (default 0.30)
+combined_score = ERROR_WEIGHT   × error_similarity     +  CONTEXT_WEIGHT × context_similarity
+                 (default 0.60)                            (default 0.40)
 ```
 
-| Part | What it measures | Range |
+| Part | What it measures | How it is produced | Range |
+|---|---|---|---|
+| `error_similarity` | how close the two **error texts** are | Reciprocal Rank Fusion of two searches over `error_key` — SQLite FTS5 keyword search and Chroma cosine search (§10.1.1) | 0.0 – 1.0 |
+| `context_similarity` | how close the two **surrounding log contexts** are | cosine between the embedding of the query's `context_lines` and the stored candidate's `context_sample` | 0.0 – 1.0 |
+
+**Product, stage, and category are not in this formula.** They are used in two other ways:
+
+| Use | How |
+|---|---|
+| **Hard filter**, before scoring | only `status='active'` candidates, and only those whose `error_category` matches — an infrastructure fix must never answer a code error |
+| **Tie-break**, after scoring | when the top two candidates are within `TIE_BREAK_MARGIN`, prefer the one whose `product_team` and `stage_type` match |
+
+**Worked comparison.** The same npm dependency error; the stored fix comes from a *different*
+product, but the surrounding context is nearly identical:
+
+| | Old formula (labels in the score) | New formula |
 |---|---|---|
-| `text_similarity` | how close the two error texts are, as cosine similarity of their embeddings | 0.0 – 1.0 |
-| `context_similarity` | how many of the three labels — product, stage, category — match, divided by three | 0.0, 0.33, 0.67, 1.0 |
+| error text similarity | 0.97 | 0.97 |
+| context term | 1 of 3 labels matched → 0.33 | context lines 0.91 similar |
+| result | `0.70×0.97 + 0.30×0.33 = 0.78` → **rejected** | `0.60×0.97 + 0.40×0.91 = 0.95` → **served** |
 
-So a candidate with near-identical text from a *different* product and stage scores
-`0.70 × 0.97 + 0.30 × 0.33 = 0.78` and is **not** served; the same text from the *same*
-product and stage scores `0.70 × 0.97 + 0.30 × 1.0 = 0.98` and is. Context breaks ties that
-text alone cannot.
+The old formula discarded a good fix purely because it came from another team — which
+contradicted the whole point of normalising repository names out of the fingerprint. The new
+formula keeps it, and consults product only if a second candidate scores within the margin.
 
-**`match_result ≠ no_match`** is A2's own judgement. A candidate can score above the
-threshold on similarity while A2 still concludes the stored fix does not apply — for example
-the same missing-artifact wording but a different artifact. Requiring both means a fix is
-served only when the numbers *and* the judgement agree; otherwise the request falls through
-to A3.
+**`match_result ≠ no_match`** is A2's own judgement. A candidate can clear the threshold on
+score while A2 still concludes the stored fix does not apply — for example identical
+missing-artifact wording but a *different* artifact. Requiring both means a fix is served
+only when the numbers **and** the judgement agree; otherwise the request falls through to A3.
 
 **Tuning `top-K`.** `VECTOR_TOP_K` controls how many nearest candidates are retrieved before
 context re-ranking. It is configurable and intended to be tuned with the replay harness:
@@ -397,8 +411,9 @@ A representative subset — not the full list:
 | `ROUTING_CONFIG` | `config/routing.json` | team routing cannot resolve |
 
 Optional variables carry defaults and do not block startup — for example
-`VECTOR_TOP_K` (10), `SIMILARITY_THRESHOLD` (0.90), `VECTOR_WEIGHT` (0.70),
-`CONTEXT_WEIGHT` (0.30), `LOG_LEVEL` (`INFO`).
+`VECTOR_TOP_K` (10), `SIMILARITY_THRESHOLD` (0.90), `ERROR_WEIGHT` (0.60),
+`CONTEXT_WEIGHT` (0.40), `RRF_K` (60 — the Reciprocal Rank Fusion constant),
+`TIE_BREAK_MARGIN` (0.02), `LOG_LEVEL` (`INFO`).
 
 **Rules.** Secrets appear only in the environment, never in source or in the repository. A
 `.env.example` lists every variable with a safe placeholder value, and startup validation is
@@ -470,7 +485,7 @@ and a name with a count of zero is dead — it is declared but nothing ever matc
 
 | Node | ID | Inputs | Processing | Outputs | Next Node | Error Handling |
 |---|---|---|---|---|---|---|
-| **Startup Validator** | N0 | `error_patterns.json`, env vars (`VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY`, `JWT_PRIVATE_KEY_PATH`, `JWT_PUBLIC_KEY_PATH` for Slack service) | Load `error_patterns.json`; assert weight constraints; assert `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY` set; validate JWT key paths for Slack service only | Pass / Fail | N1 on pass; `sys.exit(1)` on fail | Write specific error to stderr naming the exact bad field |
+| **Startup Validator** | N0 | `error_patterns.json`, `routing.json`, mandatory env vars (§2.1) | Load and validate both config files: every `category` and `sub_category` must be declared; every regex must compile; `label` must be unique. Assert `ERROR_WEIGHT + CONTEXT_WEIGHT == 1.0`. Assert every mandatory env var is present | Pass / Fail | N1 on pass; `sys.exit(1)` on fail | Write a specific error to stderr naming the exact bad field or pattern |
 | **Webhook Listener** | N1 | HTTP POST `/webhook` or `/webhook/jenkins` | Generate `request_id`; check event type; check pipeline status. **No authentication** — network isolation only (§6.1) | `request_id` + validated payload dict | N2 | HTTP 200 "ignored" on non-failed or out-of-scope status |
 | **Pipeline Extractor** | N2 | Webhook payload dict | Call `PipelineExtractor.extract_pipeline_info()`; call `should_process_pipeline()` (project allow/block list, status filter); apply `external` stage guard | `pipeline_info` dict added to Envelope; fire background task | N3 (background) | Return `"skipped"` with log reason if filtered |
 | **Log Fetcher** | N3 | `pipeline_info` (from Envelope): `project_id`, `pipeline_id` | Call `fetch_pipeline_jobs(project_id, pipeline_id)` → list of jobs; for each failed job call `fetch_job_log_tail(project_id, job_id)`; apply `should_save_job_log()` filter; collect `job_names` list | `all_logs: List[{job_id, job_name, details, log_text}]` (one entry per failed job); add `job_names` list to `pipeline_info` in Envelope | N4 (iterates over list) | Retry up to `RETRY_ATTEMPTS` with exponential backoff; on exhaustion → dead-letter + DevOps alert |
@@ -481,11 +496,11 @@ and a name with a count of zero is dead — it is declared but nothing ever matc
 | **Thread Reply** | THREADREPLY | Envelope: `slack_message_ts`, `pipeline_info` (stage name), `error_key` | Post thread reply to existing Slack message at `slack_message_ts`; UPDATE `bfa_stats.db.pipeline_events` SET `failed_jobs = failed_jobs+1` if `request_id` exists; INSERT `delivery_records` with `slack_message_ts` reference | Thread reply posted; `pipeline_events` row updated (partial phase-2 — no `final_status` write since event is still in-flight) | Terminal | SlackApiError → log and skip; DB update failure → log and skip |
 | **Fix Cache Check** | N8 | Envelope: `fingerprint` | Redis GET `fix:<fingerprint>` (30d TTL) → JSON `{fix_text, source, approved_by, fix_id}`. One lookup covers both SME-approved and AI-generated fixes; `source` says which | Envelope updated: `fix_text`, `fix_source` (`sme_cache` or `ai_cache` from `source`), `approved_by` when `source=sme` | N12a on hit; N9 on miss | Redis unavailable → skip to N9 |
 | **Match Result Cache Check** | N9 | Envelope: `fingerprint`, `context_block` (`product_team`, `stage_type`, `error_category`) | Compute `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name (must match formula used by N10 writer); Redis GET `match:<kb_version>:<fingerprint>:<ctx_hash>` (30d TTL) → JSON `{match_result, ranked_candidates, top_candidate}` | Envelope updated: `match_result`, `ranked_candidates`, `top_candidate`, `fix_source="match_cache"`; `fix_text` from `top_candidate.fix_text` if match_result ≠ `no_match` | N12a (match hit); N11 (no_match hit — `ranked_candidates` already in envelope); N10 (miss) | Redis unavailable → skip to N10 |
-| **Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_key`, `context_block`, `fingerprint`); `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `SIMILARITY_THRESHOLD=0.90` | ① Embed `error_key` via Ollama HTTP (granite-embedding); ② Chroma cosine query top-K; ③ For each: fetch context labels from `bfa_kb.db`; compute `context_score = matching_labels / 3`; compute `combined_score`; ④ Sort by `combined_score`; ⑤ Assign match_result; ⑥ Redis SET `match:<fp>:<ctx_hash>` 7d; ⑦ INSERT `request_telemetry` | Envelope updated with `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` | N12a (match); N11 (no_match) | Chroma/Ollama unavailable → skip to N11 + fire alert |
+| **Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_key`, `context_lines`, `context_block`, `fingerprint`); `VECTOR_TOP_K`, `ERROR_WEIGHT`, `CONTEXT_WEIGHT`, `RRF_K`, `SIMILARITY_THRESHOLD=0.90` | ① Embed `error_key` via Ollama (granite-embedding); ② **Hybrid search** — SQLite FTS5 `MATCH` over `fixes_fts` **and** Chroma cosine, fused by Reciprocal Rank Fusion → `error_similarity`; ③ **Hard filter** — keep only `status='active'` and matching `error_category`; ④ **Rerank** — `context_similarity` = cosine of query `context_lines` against candidate `context_sample`; `combined_score = 0.60×error_similarity + 0.40×context_similarity`; ⑤ Assign `match_result`; tie-break on `product_team`/`stage_type` within `TIE_BREAK_MARGIN`; ⑥ Redis SET `match:<kb_version>:<fp>:<ctx_hash>` 30d; ⑦ INSERT `request_telemetry` | Envelope updated with `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` | N12a (match); N11 (no_match) | Chroma/Ollama unavailable → skip to N11 + fire alert |
 | **Agent A3 — Solution Synthesizer** | N11 | Envelope (`error_key`, `context_block`, `pipeline_info`) | ① Domain RAG: embed error text, query `domain_rag` Chroma collection, retrieve top snippet; ② Assemble LLM prompt (error text + context_block + repo + branch + infra overview + RAG snippet); ③ Call LLM (OpenWebUI); ④ Redis SET `fix:<fingerprint>` `source=ai` 30d (never overwrites an `sme` entry) | Envelope updated with `fix_text`, `fix_source="llm_generated"` | N12a | LLM fail → send "unable to analyze" + email + Slack to DevOps + write dead-letter; never silently discard |
 | **Forbidden Text Gate** | N12a | Envelope (`fix_text`) | Check `fix_text` against `FORBIDDEN_TEXT_PATTERNS` env var list | Pass or match | N12b (pass); A4 SME warning route (match) | Config missing → log warning, treat as empty list (never block delivery) |
 | **Infrastructure Gate** | N12b | Envelope (`is_infra`) | Check `is_infra` flag | Pass or infrastructure | N12c (pass); A4 DevOps route (infra) | — |
-| **Disambiguation Gate** | N12c | Envelope: `ranked_candidates`, `fix_source` | **Guard first:** if `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → gate is clear (skip directly to N12); else if `len(ranked_candidates) ≥ 2` AND `abs(candidates[0].combined_score - candidates[1].combined_score) ≤ CONTEXT_DISAMBIG_BAND` → ambiguous; else → clear | Ambiguous or clear | A4 DISAMBIG route (ambiguous); N12 (clear) | `ranked_candidates is None` on cache/A3 path → treat as clear; never call `len()` on None |
+| **Disambiguation Gate** | N12c | Envelope: `ranked_candidates`, `fix_source` | **Guard first:** if `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → gate is clear (skip directly to N12); else if `len(ranked_candidates) ≥ 2` AND `abs(candidates[0].combined_score - candidates[1].combined_score) ≤ TIE_BREAK_MARGIN` → ambiguous; else → clear | Ambiguous or clear | A4 DISAMBIG route (ambiguous); N12 (clear) | `ranked_candidates is None` on cache/A3 path → treat as clear; never call `len()` on None |
 | **Agent A4 — Reporter** | N12 | Full Envelope (`fix_text`, `fix_source`, `approved_by`, `context_block`, `pipeline_info`, `is_infra`, `fingerprint`, `request_id`) | ① READ `bfa_kb.db.fixes` WHERE `fingerprint`: get `hit_count`, `last_seen`, `jira_key`; ② Developer lookup by email (`triggered_by_email`); ③ Build DM (`fix_text` + provenance using `approved_by` or `fix_source` + `hit_count` + `last_seen` + `repo` + feedback buttons + dashboard deep link); ④ Developer not found → fallback to email via `triggered_by_email` (SMTP); ⑤ UPDATE `pipeline_events` (`final_status`, `total_duration_ms`); ⑥ INSERT `delivery_records`; ⑦ UPDATE `bfa_kb.db.fixes` SET `hit_count+1`, `last_seen=now()`; ⑧ Redis SET `run_dedup:<pipeline_id>:<fp>` = `slack_message_ts` (1h TTL); ⑨ Set `envelope.slack_message_ts` | Slack DM (or email fallback) delivered; `pipeline_events` updated; `delivery_records` inserted; `run_dedup` Redis key written | Feedback loop (async, via the Slack connector); Jira creation is a dashboard action | SlackApiError → fallback to email; developer not found → send fix via SMTP to `triggered_by_email`; `request_id` None → skip `pipeline_events` UPDATE, still INSERT `delivery_records` |
 | **KB REST API** | N14 | RS256 JWT (Slack service) or session token (dashboard) + action payload | Validate token (RS256 for Slack service; session token lookup in Redis for dashboard); route to approve/edit/discard/feedback handler. **On approve:** (1) Execute FULL write path first (SQLite INSERT/UPDATE + fix_revisions + Chroma upsert + Redis sme:fix SET + audit log INSERT); (2) THEN check `disambig_pending:<fp>` — if exists: deserialize stored `envelope_json`, overwrite `fix_text` and `fix_source="sme_cache"` from the newly approved fix, clear `ranked_candidates` to `None`, DELETE `disambig_pending:<fp>` key, **then** trigger A4 delivery with the patched envelope (Gate 3 will see `ranked_candidates=None` → treat as clear → proceed directly to delivery, no re-trigger loop). If not exists: return `{status: ok}`. | `{status: ok}` (+ async A4 delivery if disambig path) | Terminal (or async A4 DEV if disambig) | Write first, disambig check second prevents infinite loop; SQLite WAL mode; Chroma HTTP server for concurrent access |
 | **Dashboard API** | N15 | Session token + query params | Validate session token (Redis lookup); query `bfa_kb.db` and `bfa_stats.db`; support pagination, free-text search, label filtering; return Resolved / Needs-Attention / Stats views | Paginated JSON | Terminal | Invalid/expired session → HTTP 401; read-only; no lock contention |
@@ -554,7 +569,7 @@ CREATE TABLE IF NOT EXISTS fixes (
                             -- pending  = AI-generated, awaiting SME review (Pending Review page)
                             -- active   = SME-approved; ONLY this status is served by A2
     -- ── Context labels (A2 scoring + dashboard filtering) ───────────────────
-    product_team    TEXT,               -- derived from the namespace, see §10.1.2; NULL on legacy → context_score 0
+    product_team    TEXT,               -- from the namespace (§10.1.2); used for filtering and tie-break only
     stage_type      TEXT,               -- build|test|package|deploy
     error_category  TEXT,               -- code|infrastructure|dependency|configuration
     sub_category    TEXT,               -- NEW: finer grouping e.g. docker, npm, pip
@@ -638,7 +653,7 @@ and should not be conflated:
 it, questions like "what fraction of answers came from cache", "is the 0.90 threshold
 right", "what is this costing per pipeline", and "how often does A2 decline" are all
 unanswerable. It records the decision path (`fix_source`, `match_result`, `cache_tier_hit`), the
-scoring detail (`vector_similarity`, `context_score`, `combined_score`,
+scoring detail (`error_similarity`, `context_similarity`, `combined_score`, `lexical_hit`,
 `a2_candidate_count`), the cost and latency (`llm_cost_estimate`, `request_latency_ms`,
 `domain_rag_used`), and the classification labels used for grouping.
 
@@ -690,9 +705,10 @@ CREATE TABLE IF NOT EXISTS request_telemetry (
                             'exact_match','applicable_with_adjustments',
                             'partial','no_match')),
     -- ── Scoring detail ──────────────────────────────────────────────────────
-    vector_similarity   REAL,
-    combined_score      REAL,
-    context_score       REAL,
+    error_similarity    REAL,               -- fused FTS5 + vector score (RRF)
+    context_similarity  REAL,               -- query context_lines vs stored context_sample
+    combined_score      REAL,               -- 0.60*error_similarity + 0.40*context_similarity
+    lexical_hit         INTEGER DEFAULT 0,  -- 1 if FTS5 also surfaced the winning candidate
     a2_candidate_count  INTEGER,            -- NEW: Chroma candidates evaluated — KB coverage signal
     cache_tier_hit      TEXT,               -- NEW: sme|ai|match_result|none — cache effectiveness
     -- ── Cost / latency ──────────────────────────────────────────────────────
@@ -798,19 +814,21 @@ client.get_or_create_collection(
 
 **Similarity threshold: `0.90`, applied to `combined_score` — not to raw vector similarity.**
 
-The distinction matters. `vsim` (raw vector similarity) measures only how alike the two
-error *texts* are. `combined_score` blends that with how well the *context* matches —
-product, stage, and category:
+The distinction matters. Raw vector distance measures only how alike the two error *texts*
+look to the embedding model. `combined_score` is broader:
 
 ```
-combined_score = 0.70 × vsim  +  0.30 × context_score
+combined_score = 0.60 × error_similarity      +  0.40 × context_similarity
+                 (FTS5 + vector, fused by RRF)   (query context lines vs stored context)
 ```
 
-A candidate can look almost identical as text yet come from an unrelated product and stage,
-in which case its `combined_score` falls below 0.90 and it is not served. Thresholding on
-`vsim` alone would serve it. The full formula, the worked comparison (0.78 versus 0.98 for
-the same text in different contexts), and the tuning guidance are in **§1.2, "What
-`combined_score ≥ 0.90 and match_result ≠ no_match` means"**.
+Two consequences. First, the vector search is only **half** of `error_similarity` — keyword
+search contributes the other half, which is what catches error codes, artifact names, and
+version strings that an embedding blurs. Second, a candidate whose text looks alike but
+whose surrounding log context differs scores lower and may fall below 0.90. Thresholding on
+raw vector distance alone would miss both effects. The full formula, the worked comparison
+(0.78 under the old label-based formula versus 0.95 under this one, for the same fix from
+another product), and the tuning guidance are in **§1.2**.
 
 **Rebuild utility:** If Chroma is corrupted or the HTTP server is replaced, `rebuild_chroma.py` reads all `active` rows from `bfa_kb.db`, re-embeds each `error_key`, and upserts to the Chroma collection. `bfa_kb.db` is always authoritative.
 
@@ -1031,7 +1049,7 @@ A hit at `fix:<fp>` short-circuits both the vector query and the LLM.
 | Chroma `fix_embeddings` | R | query vector of `error_key`, `n_results = VECTOR_TOP_K` (default 10; tune within 3–20, see §1.2), optional `sub_category` pre-filter | `id`, `document` (`fix_text`), `metadata{fingerprint, fix_id, product_team, stage_type, error_category}`, `distance` | `VectorUnavailable` → match_result `no_match`, proceed to A3, raise health alert |
 | SQLite `fixes` | R | `fix_id[]` from candidate metadata | `product_team`, `stage_type`, `error_category`, `status`, `hit_count` | treat candidate labels as unmatched (context score 0) |
 | Redis `match:<kb_version>:<fp>:<ctx_hash>` | W | match_result payload, TTL 30d | — | log and continue |
-| SQLite `request_telemetry` | W | `request_id`, `fingerprint`, `match_result`, `vsim`, `context_score`, `combined_score`, `latency_ms` | — | log and continue |
+| SQLite `request_telemetry` | W | `request_id`, `fingerprint`, `match_result`, `error_similarity`, `context_similarity`, `combined_score`, `lexical_hit`, `latency_ms` | — | log and continue |
 
 Candidates whose `status` is not `active` are excluded before scoring.
 
@@ -1633,7 +1651,7 @@ existing list, not a new formatter.
 | N9 (AI Cache miss) | `bfa.analyzer` | DEBUG | AI cache miss | `request_id`, `fingerprint` | Yes |
 | N9 (Match result hit) | `bfa.analyzer` | DEBUG | Match result cache hit | `request_id`, `fingerprint`, `ctx_hash`, `match_result` | Yes |
 | N9 (Match result miss) | `bfa.analyzer` | DEBUG | Match result cache miss | `request_id`, `fingerprint`, `ctx_hash` | Yes |
-| N10 (A2 result) | `bfa.agent.a2` | INFO | A2 match_result computed | `request_id`, `fingerprint`, `match_result`, `combined_score`, `vsim`, `context_score`, `candidate_count`, `latency_ms` | Yes |
+| N10 (A2 result) | `bfa.agents.deviation` | INFO | A2 match_result computed | `request_id`, `fingerprint`, `match_result`, `combined_score`, `error_similarity`, `context_similarity`, `lexical_hit`, `candidate_count`, `latency_ms` | Yes |
 | N10 (A2 skip) | `bfa.agent.a2` | WARNING | A2 skipped — degradation ladder | `request_id`, `fingerprint`, `reason`, `degradation_ladder_step` | Yes |
 | N11 (A3 start) | `bfa.agent.a3` | INFO | LLM call started | `request_id`, `fingerprint`, `model`, `prompt_token_count` | Yes |
 | N11 (A3 result) | `bfa.agent.a3` | INFO | LLM call completed | `request_id`, `fingerprint`, `completion_token_count`, `cost_estimate_usd`, `latency_ms` | Yes |
@@ -1901,7 +1919,7 @@ The following nodes currently produce zero logs and must have loggers added:
 
 | Current | Fix |
 |---|---|
-| `"=== Best Similarity Score: X ==="` at INFO every lookup | Move to DEBUG; use `extra={"vsim": score}` |
+| `"=== Best Similarity Score: X ==="` at INFO every lookup | Move to DEBUG; use `extra={"error_similarity": score}` |
 | Full payload at ERROR on retry exhaustion | Log only `pipeline_id`, `error_count`, `retry_attempts` |
 | PII (email, Slack user ID) at INFO | Remove or mask to `user[:4]+"****"` |
 | f-string calls everywhere | Replace with `%s` style or move values into `extra=` — prevents string interpolation at suppressed log levels |
@@ -2321,7 +2339,7 @@ one component designed to catch exactly that — A2 — has been bypassed by the
 **Problem 2 — the design contradicted itself on cross-product reuse.**
 Repo names were stripped from the fingerprint *specifically* to let one fix serve many
 products. The scoring formula then penalised candidates from a different product
-(`context_score = matching_labels / 3`), pushing a perfect text match from another product
+(`context_similarity = matching_labels / 3`), pushing a perfect text match from another product
 to 0.78 — below the 0.90 threshold — and rejecting it. One half of the design worked to
 enable cross-product reuse while the other half blocked it.
 
@@ -2414,7 +2432,7 @@ product/stage/category as a filter, not as a term in the score.
 | Old behaviour | New behaviour |
 |---|---|
 | Product mismatch cost a flat 0.30 of the score and could reject a perfect match | Product never lowers a score; it only settles a tie |
-| `context_score` had four possible values (0, 0.33, 0.67, 1.0) — very coarse | Context similarity is continuous, measured on the actual surrounding log lines |
+| `context_similarity` had four possible values (0, 0.33, 0.67, 1.0) — very coarse | Context similarity is continuous, measured on the actual surrounding log lines |
 | Labels were compared, so two errors with identical context but different products scored differently | The real context is compared, which is what "similar situation" actually means |
 | Contradicted the cross-repo normalisation | Consistent with it — a fix from another product can win on merit |
 
@@ -2514,13 +2532,31 @@ implementation.
 **Role:** Context-ranked vector search. Computes combined score. Assigns match_result. Caches result.
 
 **Input:** Analysis Envelope fields: `error_key`, `context_block`, `fingerprint`  
-**Config inputs:** `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `SIMILARITY_THRESHOLD=0.90`, `CONTEXT_DISAMBIG_BAND`
+**Config inputs:** `VECTOR_TOP_K` (10), `ERROR_WEIGHT` (0.60), `CONTEXT_WEIGHT` (0.40), `RRF_K` (60), `SIMILARITY_THRESHOLD` (0.90), `TIE_BREAK_MARGIN` (0.02)
 
 **Processing steps (in order):**
 
 1. **Embed query.** POST `error_key` to Ollama HTTP embedding endpoint (`granite-embedding` model). Returns `query_vector: List[float]`.
 
-2. **Query Chroma.** Call `fix_embeddings` collection with cosine distance, `n_results=VECTOR_TOP_K`. Returns top-K results with `id`, `document` (fix_text), `metadata`, `distance` (cosine distance). Convert: `vsim = 1.0 - distance` (valid for cosine — range [−1, 1], but hnsw:space=cosine returns [0, 2] distance where 0 = identical; so `vsim = 1.0 - distance/2` for normalized vectors, OR use distance directly and threshold at `0.10` for ≥ 0.90 similarity. **Design choice: use `vsim = 1.0 - distance` with Chroma cosine where distance ∈ [0, 2]. Threshold: `distance ≤ 0.10` → `vsim ≥ 0.90`.**
+2. **Hybrid candidate generation.** Two searches over `error_key`, fused by rank:
+
+   ```python
+   lexical = fts5_search(error_key, limit=VECTOR_TOP_K * 2)      # SQLite FTS5 MATCH
+   dense   = chroma_query(embed(error_key), n=VECTOR_TOP_K * 2)  # cosine
+
+   # Reciprocal Rank Fusion — combines on RANK, not raw score, because BM25
+   # and cosine are not on a comparable scale.
+   scores = defaultdict(float)
+   for rank, c in enumerate(lexical): scores[c.id] += 1 / (RRF_K + rank + 1)
+   for rank, c in enumerate(dense):   scores[c.id] += 1 / (RRF_K + rank + 1)
+
+   candidates = top_n(scores, VECTOR_TOP_K)   # normalised → error_similarity ∈ [0,1]
+   ```
+
+   Lexical search catches error codes, artifact names, and version strings that a dense
+   embedding blurs; the vector search catches rewordings. Record `lexical_hit = 1` when the
+   winning candidate also appeared in the lexical list — it shows how much the keyword half
+   is contributing and is reported by the replay harness.
 
 3. **Fetch context labels and filter by status.** For each top-K result, look up `product_team`, `stage_type`, `error_category`, and `status` from `bfa_kb.db.fixes` using `metadata.fix_id`. **Discard any candidate whose `status` is not `active`** — `pending`, `deprecated`, and `discarded` fixes are never served.
 
@@ -2624,7 +2660,7 @@ implementation.
 
 2. **Gate 2 — Infrastructure.** `is_infra == True` → post fix to `DEVOPS_SLACK_CHANNEL` (env var). DM developer: "This build failed due to an infrastructure issue — not your code. Please retry after the infrastructure team resolves it." INSERT `delivery_records`; UPDATE `pipeline_events`. Stop main delivery path.
 
-3. **Gate 3 — Disambiguation.** Guard: if `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → skip gate (proceed to step 4). Otherwise: check if `len(ranked_candidates) ≥ 2` AND within `CONTEXT_DISAMBIG_BAND`. If ambiguous → post side-by-side to `SME_SLACK_CHANNEL` (env var) showing both fix options with context labels and scores; Redis SET `disambig_pending:<fingerprint>` = envelope JSON (24h TTL). Stop — hold delivery until SME approves via KB REST API. (The KB REST API approve handler performs the full write path before clearing the pending key, ensuring no infinite loop.)
+3. **Gate 3 — Disambiguation.** Guard: if `ranked_candidates is None` OR `fix_source in (sme_cache, ai_cache, llm_generated)` → skip gate (proceed to step 4). Otherwise: check if `len(ranked_candidates) ≥ 2` AND within `TIE_BREAK_MARGIN`. If ambiguous → post side-by-side to `SME_SLACK_CHANNEL` (env var) showing both fix options with context labels and scores; Redis SET `disambig_pending:<fingerprint>` = envelope JSON (24h TTL). Stop — hold delivery until SME approves via KB REST API. (The KB REST API approve handler performs the full write path before clearing the pending key, ensuring no infinite loop.)
 
 **Main delivery (all gates passed):**
 
@@ -2924,7 +2960,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 
 | Step | Node | ID | Inputs (exact fields) | Processing summary | Outputs (exact fields) | Consumed by |
 |---|---|---|---|---|---|---|
-| 0 | Startup Validator | N0 | `error_patterns.json`, env vars (`VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY`, `JWT_PRIVATE_KEY_PATH`, `JWT_PUBLIC_KEY_PATH` for Slack service) | Load `error_patterns.json`; assert weight constraints; assert `DEVOPS_SLACK_CHANNEL`, `SME_SLACK_CHANNEL`, `ANALYZE_API_KEY` set; validate JWT key paths | Pass → service starts; Fail → `sys.exit(1)` + stderr | N1 (service accepts traffic only on pass) |
+| 0 | Startup Validator | N0 | `error_patterns.json`, `routing.json`, mandatory env vars (§2.1) | Validate both config files (declared vocabulary, regex compiles, unique labels); assert `ERROR_WEIGHT + CONTEXT_WEIGHT == 1.0`; assert mandatory env vars present | Pass → service starts; Fail → `sys.exit(1)` + stderr | N1 (service accepts traffic only on pass) |
 | 1 | Webhook Listener | N1 | HTTP POST body | Generate `request_id` (UUID); check event type + status. No auth check (§6.1) | `request_id: str`, validated `payload: dict` | N2 |
 | 2 | Pipeline Extractor | N2 | `request_id`, `payload` | `extract_pipeline_info(payload)`; `should_process_pipeline()`; external-stage guard | `AnalysisEnvelope(request_id=..., pipeline_info={project_id, pipeline_id, ref, sha, repo, branch, commit_sha, triggered_by, triggered_by_email, stages, job_names=[]})` | N3 (as background task) |
 | 3 | Log Fetcher | N3 | `pipeline_info.project_id`, `pipeline_info.pipeline_id` | `fetch_pipeline_jobs(project_id, pipeline_id)`; `fetch_job_log_tail(project_id, job_id)` per failed job; populate `job_names` | `all_logs: List[{job_id, job_name, details, log_text}]`; updates `pipeline_info.job_names` | N4 |
@@ -2935,7 +2971,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | 7a | Thread Reply | THREADREPLY | Envelope: `slack_message_ts`, `error_key`, `pipeline_info.stage name` | Post thread reply to existing Slack message; UPDATE `pipeline_events.failed_jobs+1`; INSERT `delivery_records` | Thread reply posted; DB partial update | Terminal |
 | 8 | Fix Cache Check | N8 | Envelope: `fingerprint` | Redis GET `fix:<fp>` → `{fix_text, source, approved_by, fix_id}` | **Hit:** envelope: `fix_text`, `fix_source` per `source`, `approved_by` → N12a; **Miss:** → N9 | N12a (hit) or N9 (miss) |
 | 9 | Match Result Cache Check | N9 | Envelope: `fingerprint`, `context_block.{product_team, stage_type, error_category}` | `ctx_hash = sha256(f"{product_team}:{stage_type}:{error_category}").hexdigest()[:16]`, and `kb_version` is read from the Redis counter of the same name; Redis GET `match:<kb_version>:<fp>:<ctx_hash>` | **Hit (match):** envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_source="match_cache"`, `fix_text` → N12a; **Hit (no_match):** → N11; **Miss:** → N10 | N12a / N11 / N10 |
-| 10 | Agent A2 | N10 | Envelope: `error_key`, `context_block`, `fingerprint`; config: `VECTOR_TOP_K`, `VECTOR_WEIGHT`, `CONTEXT_WEIGHT`, threshold=0.90 | Ollama embed; Chroma cosine top-K; fetch context labels from `bfa_kb.db`; compute combined_score; assign match_result; Redis SET `match:<fp>:<ctx_hash>` 7d; INSERT `request_telemetry` | Envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` (if match), `fix_source="vector_db"` | N12a (match) or N11 (no_match) |
+| 10 | Agent A2 | N10 | Envelope: `error_key`, `context_lines`, `context_block`, `fingerprint`; config: `VECTOR_TOP_K`, `ERROR_WEIGHT`, `CONTEXT_WEIGHT`, `RRF_K`, threshold=0.90 | Ollama embed; FTS5 + Chroma hybrid search fused by RRF; filter to `status='active'` and matching category; rerank on context-line similarity; `combined_score = 0.60×error + 0.40×context`; assign match_result; tie-break on metadata; Redis SET `match:<kb_version>:<fp>:<ctx_hash>` 30d; INSERT `request_telemetry` | Envelope: `match_result`, `ranked_candidates`, `top_candidate`, `fix_text` (if match), `fix_source="vector_db"` | N12a (match) or N11 (no_match) |
 | 11 | Agent A3 | N11 | Envelope: `error_key`, `context_block`, `pipeline_info` | Domain RAG lookup; build LLM prompt; call LLM; Redis SET `fix:<fp>` `source=ai` 30d; **clear `ranked_candidates=None`** | Envelope: `fix_text`, `fix_source="llm_generated"`, `ranked_candidates=None` | N12a (success) or dead-letter (LLM fail) |
 | 11f | LLM Failure | DEADLETTER | Envelope + failure reason | Send "unable to analyze" to team channel; email DevOps; Slack #devops-alerts; write dead-letter file; INSERT `request_telemetry(fix_source="no_match")` | Dead-letter JSON on disk | Terminal (replay via `replay_failed.py`) |
 
@@ -2977,7 +3013,7 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | Redis | `fix:<fp>` DELETE | N14 (KB API) — discard | On discard |
 | Redis | `fix:<fp>` SET `source=ai` (30d) | N11 (A3) | After the LLM generates a fix, only if no SME entry exists |
 | Redis | `kb_version` INCR | N14 (KB API) — approve, edit, discard | Orphans every cached match_result in one operation |
-| Redis | `match:<fp>:<ctx_hash>` SET (7d) | N10 (A2) | After vector search |
+| Redis | `match:<kb_version>:<fp>:<ctx_hash>` SET (30d) | N10 (A2) | After hybrid search |
 | Redis | `kb_version` INCR DELETE | N14 (KB API) — approve, edit, discard | On any KB mutation |
 | Redis | `run_dedup:<pipeline_id>:<fp>` SET (1h) | N12 (A4) | After first delivery |
 | Redis | `disambig_pending:<fp>` SET (24h) | N12c Gate 3 | On disambiguation hold |
@@ -3233,9 +3269,9 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 37 | `bfa_stats.db` | `pipeline_events` | `source_ci` | TEXT | **New** | A1 | `gitlab` or `jenkins` — enables KPI segmentation by CI system | KPI |
 | 38 | `bfa_stats.db` | `request_telemetry` | `fix_source` | TEXT | Existing | A2/A4 | `sme_cache/ai_cache/match_cache/vector_db/llm_generated/no_match` | KPI |
 | 39 | `bfa_stats.db` | `request_telemetry` | `match_result` | TEXT | Existing | A2 | `exact_match/applicable_with_adjustments/partial/no_match` | KPI |
-| 40 | `bfa_stats.db` | `request_telemetry` | `vector_similarity` | REAL | Existing | A2 | Top vsim score | KPI |
+| 40 | `bfa_stats.db` | `request_telemetry` | `error_similarity` | REAL | **Changed** | A2 | Fused FTS5 + vector score for the winning candidate | KPI |
 | 41 | `bfa_stats.db` | `request_telemetry` | `combined_score` | REAL | Existing | A2 | Top combined score | KPI |
-| 42 | `bfa_stats.db` | `request_telemetry` | `context_score` | REAL | Existing | A2 | Context label match ratio | KPI |
+| 42 | `bfa_stats.db` | `request_telemetry` | `context_similarity` | REAL | **Changed** | A2 | Cosine between query context lines and stored context sample — no longer a label ratio | KPI |
 | 43 | `bfa_stats.db` | `request_telemetry` | `llm_cost_estimate` | REAL | Existing | A3 | Estimated token cost USD | KPI |
 | 44 | `bfa_stats.db` | `request_telemetry` | `request_latency_ms` | INTEGER | Existing | A4 | Total analysis latency | KPI |
 | 45 | `bfa_stats.db` | `request_telemetry` | `product_team` | TEXT | Existing | A1 | | KPI |
@@ -3613,7 +3649,7 @@ from*. Nothing here has been removed yet — this is the decision list.
 | 4 | **Domain RAG collection** (`domain_rag`, 72 pairs) | A second Chroma collection, an indexing step, and a query on every A3 call | Adds a hint to the LLM prompt | **Replace with static text.** With only 72 entries, include the relevant guidance directly in the prompt from `infra_overview.md`. Removes a collection, an index job, and a query per generation. |
 | 5 | ~~Prometheus metrics~~ | — | — | **Done — removed.** Replaced by `/api/metrics` JSON plus a dashboard Metrics tab (§8.4). |
 | 6 | **Weekly pruning job** (D-3) | A job, an archive format, an operator review step | Keeps the knowledge base tidy | **Defer.** A KB with a few hundred rows after a year does not need pruning. Revisit when it passes a few thousand. |
-| 7 | **Weight-constraint validation** (`VECTOR_WEIGHT ≤ 0.80`, `CONTEXT_WEIGHT ≥ 0.20`, sum exactly 1.0) | Startup validation logic and a rule to explain | Prevents a nonsensical weighting | **Simplify** to "both weights must sum to 1.0". The bounds encode a tuning opinion the replay harness should settle with evidence. |
+| 7 | ~~Weight-constraint bounds~~ | — | — | **Done — simplified.** Startup now asserts only `ERROR_WEIGHT + CONTEXT_WEIGHT == 1.0`; the upper and lower bounds are gone, since they encoded a tuning opinion the replay harness should settle with evidence. |
 
 #### Worked example — when does the Match Result Cache actually help?
 
@@ -3687,7 +3723,7 @@ early stages conservative and push judgement downstream.
 | Stripped | timestamps, paths, **versions**, IDs, repo, branch | timestamps, ANSI, line prefixes, run/build/job IDs, runner, repo, branch, workspace path **prefix** |
 | Kept | — | **versions**, artifact and module names, **paths inside the repository**, line and column numbers, error codes, exception classes |
 | Retrieval | dense vector only | **hybrid** — SQLite FTS5 lexical + Chroma dense, fused by Reciprocal Rank Fusion |
-| Scoring | `0.7 × vsim + 0.3 × (matching_labels / 3)` | `0.6 × fused_similarity + 0.4 × context_line_similarity` |
+| Scoring | `0.7 × error_similarity + 0.3 × (matching_labels / 3)` | `0.6 × fused_similarity + 0.4 × context_line_similarity` |
 | Metadata | a term in the score | a **hard filter** (`status`, `error_category`) and a **tie-break** only |
 
 **Why hybrid retrieval.** A dense embedding blurs exactly the tokens that discriminate here
@@ -3711,3 +3747,25 @@ and is consistent with the cross-product reuse the fingerprint enables.
 | **systemd unit extended, not rewritten** | The existing file already has `Restart=always`; three directives are added — `StartLimitIntervalSec`/`StartLimitBurst` to expose crash loops, `MemoryMax` to bound one enormous log, and `OnFailure` to alert |
 | **Storage alerts** for the log, database, and dead-letter directories | A full disk breaks SQLite writes; a growing dead-letter directory means replay is not being run |
 | **`/health` probes every dependency** and separates fatal from degraded | Returns 503 only when the service genuinely cannot work, so a container probe does not restart on a Slack outage (§8.3) |
+
+### 13.22 Scoring model — every reference updated
+
+The corrected scoring model of §13.20 was applied throughout, not only in the sections that
+introduced it. Recorded here so a reader of an older copy can see what moved.
+
+| Item | Before | After |
+|---|---|---|
+| Formula | `0.70 × vsim + 0.30 × (matching_labels / 3)` | `0.60 × error_similarity + 0.40 × context_similarity` |
+| Config names | `VECTOR_WEIGHT` (0.70), `CONTEXT_WEIGHT` (0.30) | `ERROR_WEIGHT` (0.60), `CONTEXT_WEIGHT` (0.40), plus `RRF_K` (60) |
+| Weight validation | `ERROR_WEIGHT ≤ 0.80`, `CONTEXT_WEIGHT ≥ 0.20`, sum 1.0 | sum must equal 1.0 — nothing more |
+| Error-text term | single dense cosine (`vsim`) | **fused** FTS5 lexical + dense cosine, combined by Reciprocal Rank Fusion |
+| Context term | `matching_labels / 3` — four discrete values | continuous cosine between query `context_lines` and stored `context_sample` |
+| Metadata | a term in the score | hard filter (`status`, `error_category`) plus tie-break within `TIE_BREAK_MARGIN` |
+| Telemetry columns | `vector_similarity`, `context_score` | `error_similarity`, `context_similarity`, `lexical_hit` |
+| Band config | `CONTEXT_DISAMBIG_BAND` | `TIE_BREAK_MARGIN` — one name for one concept |
+| Match cache TTL | 7 days, key `match:<fp>:<ctx>` | 30 days, key `match:<kb_version>:<fp>:<ctx>` |
+
+Sections touched: the §1.0 glossary, §1.2 worked example, §2.1 env defaults, §3 node-by-node
+rows for N0 and N10, §4.1 and §4.2 schemas, §4.3 Chroma threshold discussion, §4A phase
+tables, §8.2 log fields, §10.2 agent specification, §12 audit tables, and the §3 data
+dictionary.
