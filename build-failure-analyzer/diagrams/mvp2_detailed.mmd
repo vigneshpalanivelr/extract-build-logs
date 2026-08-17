@@ -1,0 +1,153 @@
+flowchart TB
+    classDef src fill:#ffffff,stroke:#333,stroke-width:2px
+    classDef ing fill:#d5e8d4,stroke:#2d6a2d,stroke-width:2px
+    classDef agent fill:#b8dcb4,stroke:#1e5c1e,stroke-width:2px
+    classDef ui fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    classDef store fill:#ffe6cc,stroke:#d79b00,stroke-width:2px
+    classDef tbl fill:#fff4e0,stroke:#d79b00,stroke-width:1px
+    classDef outside fill:#f5f5f5,stroke:#666,stroke-width:2px,stroke-dasharray:5 3
+    classDef human fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+    classDef notify fill:#f8cecc,stroke:#b85450,stroke-width:2px
+    classDef dec fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+
+    subgraph CI["CI SOURCES"]
+      direction LR
+      GL(["<b>GitLab</b>"]):::src
+      JK(["<b>Jenkins</b>"]):::src
+    end
+
+    subgraph CORP["CORP NETWORK"]
+      direction TB
+
+      subgraph SVC["UNIFIED BFA SERVICE&nbsp;&nbsp;—&nbsp;&nbsp;one process · one port · one repo"]
+        direction TB
+
+        subgraph L1["1 · INGEST&nbsp;&nbsp;(all pipeline events: success AND failed)"]
+          direction LR
+          WH["<b>Webhook endpoints</b><br/>/webhook/gitlab · /webhook/jenkins<br/>HMAC verify (X-Gitlab-Token)<br/><b>→ HTTP 202 Accepted</b>"]:::ing
+          ROUTE{"<b>pipeline<br/>status?</b>"}:::dec
+          SUC["<b>2a · SUCCESS PATH</b><br/>stats only — no extraction, no LLM<br/>user · commit · branch · product<br/>per-stage E.time + status · total time"]:::ing
+          WH --> ROUTE
+          ROUTE -->|"<b>SUCCESS</b>"| SUC
+        end
+
+        subgraph L2["2b · FAILED PATH — EXTRACTION (in-process)"]
+          direction LR
+          F1["<b>Log Fetcher</b><br/>pulls job logs back from<br/>GitLab REST / Jenkins Blue Ocean"]:::ing
+          F2["<b>Error Extractor</b><br/>patterns from config (code/infra)<br/>per-region split:<br/>error_lines + context_lines"]:::ing
+          F3["<b>Redactor</b><br/>tokens · passwords · JWT<br/>AWS keys · cred URLs<br/><i>before any store or send</i>"]:::ing
+          F4["<b>Checkpoint</b><br/>persist redacted payload<br/><i>CI will not re-deliver</i>"]:::ing
+          F1 --> F2 --> F3 --> F4
+        end
+
+        HAND{{"<b>IN-PROCESS PYTHON CALL</b> — analyze(ErrorRegion list) — <b>NO HTTP · NO JWT · no api_poster</b>"}}:::dec
+
+        subgraph L3["3 · ANALYSIS — asyncio background task"]
+          direction LR
+          A1["<b>A1 SUMMARISER</b><br/>(no LLM)<br/>normalize → fingerprint<br/>strip Line-N, timestamps,<br/>SHA/UUID → sha256(fp)"]:::agent
+          DED["<b>Dedup</b><br/>by fingerprint<br/>N stages → 1 analysis"]:::agent
+          C1{"<b>Fix cache</b><br/>fix:&lt;fp&gt;<br/>sme or ai<br/>hit?"}:::dec
+          V1["<b>Vector lookup</b><br/>Chroma cosine ≥0.90<br/>top-k 10 + SQLite meta"]:::agent
+          C2{"<b>candidates?</b>"}:::dec
+          A2["<b>A2 DEVIATION</b> (LLM)<br/>exact_match /<br/>applicable_with_adjustments /<br/>partial / no_match<br/>+ confidence · 30d verdict cache"]:::agent
+          A3["<b>A3 SYNTHESIZER</b> (LLM)<br/>fresh fix, strict JSON<br/>fail → 'unable to analyze'<br/>+ DevOps alert"]:::agent
+          A4["<b>A4 REPORTER</b> (no LLM)<br/>1 dangerous-fix guardrail<br/>2 infra vs code routing<br/>3 team routing (routing.json)<br/>4 one msg per stage + thread<br/>5 recurrence counter + provenance"]:::agent
+          A1 --> DED --> C1
+          C1 -->|MISS| V1 --> C2
+          C2 -->|"1 cand 0.90-0.95<br/>or 2+ cands"| A2
+          C2 -->|"0 cands"| A3
+          A2 -->|"partial / no_match / fail"| A3
+          A2 -->|"exact / adjusted"| A4
+          A3 --> A4
+          C1 -->|"<b>HIT</b> — no LLM"| A4
+          C2 -->|"1 cand ≥0.95"| A4
+        end
+
+        subgraph L4["4 · MANAGEMENT PLANE"]
+          direction LR
+          UIK["<b>KPI DASHBOARD</b><br/>success vs failed pipelines<br/><b>% of failed that got a solution</b><br/>source split: cache/vector/A2/A3/unable<br/>per-product · per-stage · cost · latency"]:::ui
+          UIB["<b>KB DASHBOARD</b><br/>Resolved · Needs-Attention · Stats<br/><b>approve · edit · deprecate</b>"]:::ui
+          KBAPI["<b>KB REST API</b> (CRUD, SQL)<br/>POST add · GET search/detail<br/>PUT edit (rev++) · DELETE deprecate"]:::ing
+          STAPI["<b>Stats API</b><br/>/api/stats/pipelines<br/>/api/stats/summary"]:::ing
+          WD["<b>Watchdog</b> · /health<br/>webhooks&gt;0 &amp; analyses=0<br/>→ alert"]:::ing
+          UIB --> KBAPI
+          UIK --> STAPI
+        end
+
+        CONN["<b>Slack connector</b><br/>opens the connection <b>outbound</b> to Slack —<br/>no inbound firewall path required<br/>authenticates channel · auto-reconnect<br/>writes only via the KB API, in-process"]:::ing
+
+        ROUTE -->|"<b>FAILED</b>"| F1
+        F4 --> HAND --> A1
+      end
+
+      subgraph ST3["STORES — 3 stores · single writer · one machine"]
+        direction LR
+        RED[("<b>1 · REDIS</b> — cache, all TTLed<br/><b>fix:&lt;fp&gt;</b> 30d — merged sme + ai<br/><b>verdict:&lt;kb_version&gt;:&lt;fp&gt;:&lt;ctx&gt;</b> 30d<br/>kb_version counter · run_dedup · thread_map")]:::store
+        CHR[("<b>2 · CHROMA</b> — vectors only<br/>id = fix-sha256(fingerprint)<br/>embedding(fingerprint) · cosine space<br/>meta: embedding_model + embedding_dim")]:::store
+        MTA["<b>3 · SQLITE bfa.db — METADATA</b><br/>(system of record)<br/><b>fixes</b>: id · fingerprint · fix_text · repo · branch<br/>product_team · error_pattern · error_class<br/>source · status · approver · hits · jira<br/><b>fix_revisions</b>: who · when · old/new text"]:::tbl
+        STA["<b>3 · SQLITE bfa.db — STATISTICS</b><br/><b>pipeline_events</b>: status (success/failed) · user<br/>commit · branch · product · per-stage E.time · total<br/><b>analyze_decisions</b>: fingerprint · source · similarity<br/>latency · cost · zero_match<br/><b>feedback_events</b>: fix_id · verdict"]:::tbl
+        MTA <==>|"<b>LINKED (same DB file)</b><br/>fixes.id = analyze_decisions.fix_id<br/>fixes.fingerprint = analyze_decisions.fingerprint<br/>pipeline_events.pipeline_id = analyze_decisions.pipeline_id<br/><i>→ 'of N failed pipelines, M received a solution'</i>"| STA
+      end
+
+      OLL["<b>Ollama</b><br/>granite-embedding (local)"]:::outside
+      DLQ[/"<b>dead_letter/</b> + replay_failed.py"/]:::store
+      MAIL(["<b>Email to developer</b>"]):::src
+    end
+
+    BED["<b>AWS Bedrock — Claude</b><br/>chat.sandvine.com/apis"]:::outside
+
+    subgraph SLK["SLACK CLOUD&nbsp;&nbsp;—&nbsp;&nbsp;<b>outside the corporate network</b><br/>notifications outbound&nbsp;·&nbsp;interaction events arrive on the service-opened channel<br/><b>permitted from Slack: feedback + solution correction only</b>&nbsp;·&nbsp;no approve / deprecate / delete&nbsp;·&nbsp;no direct DB access"]
+      direction LR
+      CH["<b>#review-build-failure-fixes</b><br/>one message per failed stage (threaded)<br/>+ <b>deep link to Dashboard</b>"]:::notify
+      DM["<b>Developer DM</b><br/>fix + provenance (SME-approved / AI · served N×)<br/>+ <b>deep link to Dashboard</b><br/>+ 👍/👎 feedback buttons"]:::notify
+      FBK["<b>Interaction events</b><br/>👍 / 👎 feedback&nbsp;·&nbsp;✏ correct solution<br/><i>Slack accepts NO approve / deprecate / delete</i>"]:::notify
+      DEV["<b>DevOps channel</b><br/>infra-class errors · 'unable to analyze'<br/>silent-failure alerts"]:::notify
+    end
+
+    SME(["<b>DevOps SME</b> — human-in-the-loop"]):::human
+
+    GL ==>|"ALL events: success + failed"| WH
+    JK ==>|"ALL events: success + failed"| WH
+
+    SUC ==>|"record"| STA
+    A1 -.->|"embed"| OLL
+    C1 -->|"lookup"| RED
+    V1 -->|"search"| CHR
+    V1 -->|"metadata"| MTA
+    A2 -->|"judge"| BED
+    A3 -->|"generate"| BED
+    A4 -->|"upsert fix + revision"| MTA
+    A4 -->|"upsert vector"| CHR
+    A4 -->|"cache"| RED
+    A4 ==>|"record decision"| STA
+    A4 -.->|"undelivered"| DLQ
+    A4 --> MAIL
+    A4 ==>|"notify (outbound HTTPS)"| CH
+    A4 ==>|"notify"| DM
+    A4 ==>|"notify"| DEV
+
+    KBAPI -->|"read / write"| MTA
+    KBAPI -->|"vector upsert / delete"| CHR
+    KBAPI -->|"invalidate"| RED
+    STAPI -->|"<b>JOIN metadata + statistics</b>"| STA
+    STAPI --> MTA
+
+    DM ==>|"click"| FBK
+    FBK ==>|"events travel down the<br/>service-opened connection"| CONN
+    CONN ==>|"feedback"| STA
+    CONN ==>|"correction → fixes + fix_revisions"| MTA
+    CONN -.->|"invalidate cached fix"| RED
+    CH -.->|"deep link"| SME
+    DM -.->|"deep link"| SME
+    SME ==>|"<b>approve · edit · deprecate</b> — ALL KB writes"| UIB
+    SME -->|"monitor"| UIK
+
+    style CI fill:#ffffff,stroke:#333,stroke-width:2px
+    style CORP fill:#e1d5e7,stroke:#9673a6,stroke-width:3px
+    style SVC fill:#d5e8d4,stroke:#2d6a2d,stroke-width:3px
+    style L1 fill:#eef7ee,stroke:#82b366,stroke-width:2px
+    style L2 fill:#eef7ee,stroke:#82b366,stroke-width:2px
+    style L3 fill:#eef7ee,stroke:#82b366,stroke-width:2px
+    style L4 fill:#eaf1fb,stroke:#6c8ebf,stroke-width:2px
+    style ST3 fill:#fff7e6,stroke:#d79b00,stroke-width:3px
+    style SLK fill:#f8cecc,stroke:#b85450,stroke-width:3px,stroke-dasharray:8 4

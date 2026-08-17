@@ -1,0 +1,35 @@
+flowchart LR
+    classDef notify fill:#f8cecc,stroke:#b85450,stroke-width:2px
+    classDef ui fill:#dae8fc,stroke:#6c8ebf,stroke-width:2px
+    classDef svc fill:#d5e8d4,stroke:#2d6a2d,stroke-width:2px
+    classDef store fill:#ffe6cc,stroke:#d79b00,stroke-width:2px
+    classDef human fill:#fff2cc,stroke:#d6b656,stroke-width:2px
+    classDef gone fill:#f5f5f5,stroke:#999,stroke-width:2px,stroke-dasharray:6 4,color:#999
+
+    subgraph OLD["MVP-1 — approval inside Slack&nbsp;&nbsp;(REMOVED in MVP-2)"]
+        direction LR
+        O1["Slack message<br/>Approve / Edit / Discard buttons"]:::gone
+        O2["/slack/actions&nbsp;·&nbsp;/slack/events<br/>Flask reviewer process"]:::gone
+        O3[("2nd process writes<br/>Chroma + Redis")]:::gone
+        O1 --> O2 --> O3
+    end
+
+    subgraph NEW["MVP-2 — Slack may report and correct; only the service writes"]
+        direction LR
+        N0(["<b>DevOps SME</b>"]):::human
+        N1["<b>Slack notification</b> (outside corp)<br/>+ deep link · 👍/👎 · ✏ correct"]:::notify
+        NF["<b>Slack connector</b><br/>service-opened outbound channel<br/>feedback + correction only"]:::svc
+        N2["<b>Dashboard UI</b><br/>Needs-Attention queue"]:::ui
+        N3["<b>KB REST API</b><br/>PUT edit · DELETE deprecate<br/>POST approve"]:::svc
+        N4[("<b>bfa_kb.db</b> fixes + fix_revisions<br/><b>Chroma</b> vector<br/><b>Redis</b> cache")]:::store
+        N1 -.->|"click deep link"| N0
+        N1 ==>|"feedback / correction"| NF
+        NF ==>|"same KB API, same audit"| N3
+        N0 ==>|"review"| N2
+        N2 ==>|"approve / edit / deprecate"| N3
+        N3 ==>|"single writer, one process<br/>atomic across all stores"| N4
+    end
+
+    OLD ~~~ NEW
+    style OLD fill:#fafafa,stroke:#bbb,stroke-width:2px,stroke-dasharray:8 4
+    style NEW fill:#eef7ee,stroke:#2d6a2d,stroke-width:3px
