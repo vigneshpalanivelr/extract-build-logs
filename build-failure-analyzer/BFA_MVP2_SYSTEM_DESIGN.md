@@ -85,7 +85,7 @@ revision to remove jargon.
 | **`outcome`** | A2's decision about the candidate set: `REUSED` (one applies as-is), `ADAPTED` (one is nearly right, delivered with a diff), or `NO_MATCH` (none apply → A3). `GENERATED` is recorded when A3 answered. One field, not a probability (§4C.3.1). | — |
 | **Cached (computed once, reused)** | The result of an expensive computation is stored under a key so the computation is not repeated. | "memoised" |
 | **`fusion_score`** | The result of merging the two search lanes **on rank**. It is **not** a percentage and **not** a similarity — it means *"the lanes collectively ranked this one highly"*. Its only use is an admission floor keeping weak candidates out of A2's prompt. See §4C.3.4 | — |
-| **top-K** | How many candidates the fused keyword + vector search returns before re-ranking. Configurable — see §1.2. | — |
+| **`CANDIDATE_K`** | How many candidates the merged search hands to A2. There is no re-ranking step after it — A2 reads the set and decides. Configurable; see §1.2. | "top-K" |
 
 ---
 
@@ -105,7 +105,7 @@ exists in some form, and the agent layer does not exist at all.
 | N6 | **Agent A1 — Error Summarizer** | Classifies the error, normalises the text, computes the fingerprint, builds the envelope | **No** | No normaliser, no fingerprint function, no `agents/` package |
 | N7 | Dedup Check | Suppresses the same error already being analysed in this run | **No** | Nothing exists |
 | N8 | **Fix Cache** | One lookup that answers "have we already solved this exact error?" | **Partial** | Two separate keys exist (`analyzer_service.py:73-74`) but they are keyed by a SHA-256 of **raw** text, so they effectively never hit |
-| N10 | **Agent A2 — Deviation Analyzer** | Finds similar past errors and decides whether a stored fix applies | **Partial** | `lookup_existing_fix` (`vector_db.py:159`) exists, but the collection has **no `hnsw:space` setting** (so it is L2, not cosine) and there is no context scoring |
+| N10 | **Search + Agent A2 — Deviation Analyzer** | Runs the signature and keyword lanes, merges them on rank, and lets A2 judge the shortlist | **Partial** | `lookup_existing_fix` (`vector_db.py:159`) exists but is a bare vector query — no signature lane, no FTS5 index, no rank merging, and A2 sees one candidate rather than a set |
 | N11 | **Agent A3 — Solution Synthesizer** | Asks the LLM for a fresh fix when nothing stored applies | **Partial** | `resolve` (`resolver_agent.py:64`), `call_llm` (`llm_openwebui_client.py:118`). No JSON schema, no confidence, no structured failure |
 | N12 | **Agent A4 — Reporter** | Routes, formats, and delivers the answer | **Partial** | `send_error_message` (`slack_helper.py:229`), `send_dev_dm_fix` (`analyzer_service.py:1339`). No stage grouping, team routing, provenance, or guardrail |
 | — | KB REST API | Add, search, edit, deprecate fixes — the only write path | **Partial** | `add_manual_fix` (`:726`), `bulk_manual_fix` (`:764`). No list, search, edit, or deprecate |
@@ -144,7 +144,7 @@ written when the measurement actually exists.
 | 8 | Dedup | already in flight for this run | reply in the existing message thread instead of sending a new one | — | **No** | end |
 | 9 | **Fix cache** | hit | reuse the stored answer; skip the vector search and the LLM entirely | — | Partial — keys exist but never hit | 14 |
 | 10 | Match result cache | hit | reuse A2's earlier decision; skip the embedding call and the vector query | — | **No** | 12 |
-| 11 | **A2** | miss | embed → nearest-neighbour search → re-rank by context → decide | **`request_telemetry` INSERT** | Partial — wrong distance metric, no context scoring | 12 |
+| 11 | **Search + A2** | miss | signature lookup + keyword search → merge on rank → shortlist → **A2 judges the whole set** | **`request_telemetry` INSERT** | Partial — `lookup_existing_fix` exists; no signature lane, no FTS5, no rank merging | 12 |
 | 12 | A2 judgement | `outcome` ∈ `REUSED` / `ADAPTED` | use the stored fix, adapted if needed | — | No | 14 |
 | 13 | **A3** | below threshold, or `no_match` | ask the LLM for a fresh fix | `request_telemetry` UPDATE (cost, latency) | Partial — unstructured | 14 |
 | 13a | **A3** | LLM failed | reply "unable to analyze", alert DevOps, write a dead-letter file | telemetry marked `unable` | No | end |
@@ -272,7 +272,7 @@ flowchart TD
 
     A2 --> THRESH{"combined ≥ 0.90<br/>and not no_match?"}
     THRESH -->|"yes"| GATES
-    THRESH -->|"no"| A3["N11 · Agent A3 — Solution Synthesizer<br/>domain RAG + LLM"]
+    THRESH -->|"no"| A3["N11 · Agent A3 — Solution Synthesizer<br/>raw error + static infra guidance + LLM"]
     A3 --> GATES
     A3 -.->|"LLM failed"| UNABLE["unable to analyze<br/>alert DevOps · dead-letter"]
 
@@ -282,7 +282,7 @@ flowchart TD
 
     A2 -->|"LLM"| BED["AWS Bedrock — Claude"]
     A3 -->|"LLM"| BED
-    A1 -.->|"embed"| OLL["Ollama · granite-embedding"]
+    A1 -.->|"phase 3 only"| OLL["Ollama · granite-embedding<br/>(not deployed at launch)"]
     A2 -.->|"embed + query"| OLL
 
     A4 ==>|"outbound notify"| SLACK["Slack Cloud<br/>outside corporate network"]
@@ -296,7 +296,7 @@ flowchart TD
 | Store | Role | Holds | Authority |
 |---|---|---|---|
 | **Redis** | cache only | `fix:<fp>[:<repo>]` (merged SME + AI, scope-keyed), `run_dedup`, `thread_map` | never a source of truth |
-| **Chroma** | vectors only | `id = fix-<fingerprint>`, embedding of `error_key`, `document = fix_text`, context labels in metadata | rebuildable from SQLite |
+| **Chroma** | **phase 3 — not deployed at launch** | `id = fix-<fingerprint>`, embedding of `error_key` | rebuildable from SQLite (§4.3) |
 | **SQLite** | system of record | `fixes`, `fix_revisions` (metadata) + `pipeline_events`, `request_telemetry`, `delivery_records`, `feedback_events`, `sme_audit_log` (statistics), joined on `request_id` / `fingerprint` / `fix_id` | **authoritative** |
 
 ### 1.5 Boundaries and Trust
@@ -305,7 +305,7 @@ flowchart TD
 |---|---|---|---|
 | GitLab / Jenkins → BFA | inbound | **none** — network isolation only (§6.1) | reachable only from the corporate network |
 | BFA → GitLab / Jenkins API | outbound | CI token | log retrieval |
-| BFA → Ollama, Chroma | local | none — loopback | single writer for Chroma |
+| BFA → Ollama, Chroma | local | none — loopback | **phase 3 only** — not deployed at launch (§4C.4.3) |
 | BFA → AWS Bedrock | outbound | egress path | called by **A2 and A3** |
 | BFA → Slack Web API | outbound | bot token | notifications |
 | Slack → BFA | inbound over a **service-opened** channel | app-level token; request signature if a published URL is used instead | feedback and correction only — never approve, deprecate, or delete |
@@ -327,7 +327,7 @@ the flow debuggable — if a value is wrong, only one node could have written it
 | 2 | `pipeline_info` | `dict` | Everything the webhook told us: repo, project id, branch, commit, pipeline id, `job_names`, triggering user and email, stage list. | **N2** | A1 (classification, product, normalisation), A3 (prompt), A4 (routing and the DM) |
 | 3 | `error_key` | `str` | The error text after normalisation — timestamps, repo and branch names, paths, and versions removed. **This is what gets embedded.** | **N6 · A1** | A2 (embedding), A3 (prompt) |
 | 4 | `fingerprint` | `str` | SHA-256 of `error_key` — the error's identity. Exact-or-nothing; never a similarity (§4C.1.3). | **N6 · A1** | N7 dedup, N8 cache key, N9 scope probe, A4 |
-| 5 | `context_block` | `ContextBlock` | Three labels: `product_team`, `stage_type`, `error_category`. | **N6 · A1** | A2 (context scoring), A3 (prompt), A4 (routing), all telemetry |
+| 5 | `context_block` | `ContextBlock` | Three labels: `product_team`, `stage_type`, `error_category`. **Used for routing, grouping and reporting only — never in ranking** (§4C.3.4). | **N6 · A1** | A3 (prompt), A4 (routing), all telemetry |
 | 6 | `is_infra` | `bool` | True when the category is `infrastructure`. Decides whether the developer is contacted at all. | **N6 · A1** | A4 |
 | 7 | `fix_text` | `str \| None` | The remediation to deliver. Empty until something supplies it. | **N8**, **N9**, **A2**, or **A3** — whichever resolves first | A4 |
 | 8 | `fix_source` | `str` | Where `fix_text` came from: `sme_cache`, `ai_cache`, `search`, `llm_generated`, or `no_match`. The single most useful field in the KPI page. | same node that set `fix_text` | A4, telemetry |
@@ -369,7 +369,8 @@ why the move exists.
 | **Match cache** | miss | **A2** | Never searched for this error in this context. Do the full search. |
 | **A2** | `outcome` ∈ `REUSED` / `ADAPTED` | **A4** | A2 read the candidate set and judged that one applies. Serve it — adapted, with a diff, if the fix needed a change (§4C.3.1). |
 | **A2** | score below threshold, or `no_match` | **A3** | Either nothing was similar enough, or something looked similar but A2 judged it inapplicable. Generate instead. |
-| **A2** | Chroma or the embedding service is unavailable | **A3** | A dependency outage must not stop the request. Search is skipped, the result is treated as `no_match`, a health alert is raised, and the LLM answers. Quality drops; availability does not. |
+| **A2** | SQLite is unavailable | **fatal** | SQLite is the system of record — both search lanes and the fix table live in it. Nothing can proceed. |
+| **A2** | The LLM is unavailable | **"unable to analyze"** | Exact answer-cache hits still deliver; anything needing judgement cannot be answered, and is not guessed. |
 | **A2** | top two candidates score almost identically | **A4** → held | The system cannot tell which of two fixes applies, so it shows both to an SME and pauses rather than guessing. *(Candidate for removal — see §13.19.)* |
 | **A3** | LLM returned a fix | **A4** | Normal generation path. |
 | **A3** | LLM failed after retries | **stop** — "unable to analyze" | The developer is told plainly that no answer could be produced, DevOps is alerted, and the event is written to the dead-letter directory so it can be replayed later. It is never silently dropped. |
@@ -500,19 +501,19 @@ and a name with a count of zero is dead — it is declared but nothing ever matc
 | **Log Fetcher** | N3 | `pipeline_info` (from Envelope): `project_id`, `pipeline_id` | Call `fetch_pipeline_jobs(project_id, pipeline_id)` → list of jobs; for each failed job call `fetch_job_log_tail(project_id, job_id)`; apply `should_save_job_log()` filter; collect `job_names` list | `all_logs: List[{job_id, job_name, details, log_text}]` (one entry per failed job); add `job_names` list to `pipeline_info` in Envelope | N4 (iterates over list) | Retry up to `RETRY_ATTEMPTS` with exponential backoff; on exhaustion → dead-letter + DevOps alert |
 | **Secret Redactor** | N4 | `all_logs` list (from N3); iterates over each entry | For each entry: regex-strip `PRIVATE-TOKEN:`, `password=`, credential URLs, JWT strings, API keys from `log_text` | `all_logs_redacted: List[{job_id, job_name, details, log_text_redacted}]` — same structure, `log_text` replaced | N5 | Log warning per entry with line count redacted; never raise — redaction failure replaces `log_text` with empty string, not drop |
 | **Log Error Extractor** | N5 | `all_logs_redacted` list (from N4); iterates over each entry | For each entry: pattern-match `log_text_redacted` against `error_patterns.json`; adaptive context windows (≤50 matches: 50b/10a, ≤150: 10b/5a, >150: 5b/2a); deduplicate overlapping windows; concatenate all entries into flat list | `error_sections: List[str]` (all error windows across all jobs, flat) | N6 | Empty result for all jobs → log "no errors found" + skip to monitoring update |
-| **Agent A1 — Error Summarizer** | N6 | `error_sections: List[str]` (from N5); `pipeline_info` dict (from N2, including `job_names`) | ① `error_category` from `error_patterns.json` labels (majority across sections); ② `stage_type` from `job_names[0]` substring match (build/test/package/deploy); ③ `product_team = pipeline_info.get("repo", "unknown")` — repo name used directly, no lookup file; ④ clean concatenated error text (strip timestamps / line-numbers / paths / versions / trace IDs); ⑤ SHA-256 `fingerprint`; ⑥ INSERT partial `pipeline_events` row → get `request_id`; ⑦ assemble Analysis Envelope | Populated `AnalysisEnvelope` (`request_id`, `pipeline_info`, `fingerprint`, `error_key`, `context_block`, `is_infra`, `request_id`; `fix_text`/`match_result`/`ranked_candidates` all `None`) | N7 | Pattern file missing at runtime → alert + use generic category; partial DB write failure → log + continue with `request_id=None` |
+| **Agent A1 — Error Summarizer** | N6 | `error_sections: List[str]` (from N5); `pipeline_info` dict (from N2, including `job_names`) | ① `error_category` from `error_patterns.json` labels (majority across sections); ② `stage_type` from `job_names[0]` substring match (build/test/package/deploy); ③ `product_team` from the **namespace**, not the repo name (§10.1.2); ④ **conservative** normalisation → `error_key` — strip run identity only (timestamps, ANSI codes, `Line N:` prefixes, pipeline/build/job IDs, runner name, repo/branch, workspace path **prefix**). **Versions, artifact names, in-repo paths, line numbers and error codes are KEPT** (§4C.1.2); ⑤ SHA-256 `fingerprint`; ⑥ build `signature` from the matched pattern's `category\|sub_category\|label` plus optional `subject_regex` (§4C.1.4); ⑦ UPDATE `fixes.times_seen + 1` for this fingerprint if a row exists (§4C.2.4); ⑧ INSERT partial `pipeline_events` row → get `request_id`; ⑨ assemble Analysis Envelope | Populated `AnalysisEnvelope` (`request_id`, `pipeline_info`, `fingerprint`, `error_key`, `signature`, `context_block`, `is_infra`; `fix_text`/`outcome`/`ranked_candidates` all `None`) | N7 | Pattern file missing at runtime → alert + use generic category; partial DB write failure → log + continue with `request_id=None` |
 | **Dedup Check** | N7 | Envelope: `fingerprint`, `pipeline_info.pipeline_id` (as `pipeline_run_id`) | Redis GET `run_dedup:<pipeline_run_id>:<fingerprint>` (1h TTL); value is `slack_message_ts` of first delivery | Hit → set `envelope.slack_message_ts = cached_ts`, route to THREADREPLY; miss → continue | THREADREPLY (hit) or N8 (miss) | Redis unavailable → treat as miss; never block on cache failure |
 | **Thread Reply** | THREADREPLY | Envelope: `slack_message_ts`, `pipeline_info` (stage name), `error_key` | Post thread reply to existing Slack message at `slack_message_ts`; UPDATE `bfa_stats.db.pipeline_events` SET `failed_jobs = failed_jobs+1` if `request_id` exists; INSERT `delivery_records` with `slack_message_ts` reference | Thread reply posted; `pipeline_events` row updated (partial phase-2 — no `final_status` write since event is still in-flight) | Terminal | SlackApiError → log and skip; DB update failure → log and skip |
 | **Answer Cache Check** | N8 | Envelope: `fingerprint`, `repo` | Redis GET `fix:<fingerprint>` then `fix:<fingerprint>:<repo>` → JSON `{fix_text, source, approved_by, fix_id, scope}`. One lookup covers both SME-approved and AI-generated fixes; `source` says which. TTL 30 d (`sme`) / 7 d (`ai`) | Envelope updated: `fix_text`, `fix_source` (`sme_cache` or `ai_cache`), `approved_by` when `source=sme` | N12a on hit; N9 on miss | Redis unavailable → skip to N9 |
 | **Fingerprint Scope Probe** | N9 | Envelope: `fingerprint`, `repo` | SELECT from `fixes` WHERE `fingerprint` matches — **any scope, any status, `pending` included**. An exact fingerprint match is the strongest evidence available; the question A2 is being asked is environmental applicability, not whether it is the same error (§4C.3.1 step 0b) | Envelope: `ranked_candidates` **seeded** with the out-of-scope fix, labelled with its `scope`, `status` and provenance | N10 (always — the probe never delivers on its own) | SQLite unavailable → fatal |
 | **Search + Agent A2 — Deviation Analyzer** | N10 | Envelope (`error_key`, `signature`, `context_lines`, `fingerprint`, seeded `ranked_candidates`); `SIG_WEIGHT`, `LEXICAL_WEIGHT`, `RRF_K`, `MIN_FUSION_SCORE`, `CANDIDATE_K` | ① **Signature lane** — indexed lookup on `fixes.signature`; ② **Keyword lane** — FTS5 `MATCH` over `fixes_fts` (hierarchical tokens); ③ **Merge on rank** by Reciprocal Rank Fusion → `fusion_score` (§4C.3.4); ④ **Filter** — `status='active'` and `fusion_score ≥ MIN_FUSION_SCORE`, nothing else; ⑤ Take top `CANDIDATE_K` as a **set**; ⑥ A2 judges the whole set → `outcome ∈ REUSED\|ADAPTED\|NO_MATCH`; on `REUSED` from another repo, **promote `scope` to `global`**; ⑦ INSERT rejected candidates into `match_rejections`; ⑧ INSERT `request_telemetry` | Envelope updated with `outcome`, `ranked_candidates`, `top_candidate`, `fix_text`, `adapted_diff` | N12a (`REUSED`/`ADAPTED`); N11 (`NO_MATCH`) | SQLite unavailable → fatal; LLM unavailable → "unable to analyze" |
-| **Agent A3 — Solution Synthesizer** | N11 | Envelope (`error_key`, `context_block`, `pipeline_info`) | ① Domain RAG: embed error text, query `domain_rag` Chroma collection, retrieve top snippet; ② Assemble LLM prompt (error text + context_block + repo + branch + infra overview + RAG snippet); ③ Call LLM (OpenWebUI); ④ Redis SET `fix:<fingerprint>` `source=ai` 30d (never overwrites an `sme` entry) | Envelope updated with `fix_text`, `fix_source="llm_generated"` | N12a | LLM fail → send "unable to analyze" + email + Slack to DevOps + write dead-letter; never silently discard |
+| **Agent A3 — Solution Synthesizer** | N11 | Envelope (`error_raw`, `context_block`, `pipeline_info`) | ① Assemble LLM prompt — **`error_raw`, not `error_key`** (A3 needs the exact version and path to reason about a fix, §4C.1.7) + context lines + repo + branch + static infra guidance from `infra_overview.md`; ② Call LLM (OpenWebUI); ③ INSERT `fixes` `status='pending'`, `scope='repo'`; ④ Redis SET `fix:<fingerprint>:<repo>` `source=ai` **7 d**, labelled unreviewed (never overwrites an `sme` entry) | Envelope updated with `fix_text`, `fix_source="llm_generated"` | N12a | LLM fail → send "unable to analyze" + email + Slack to DevOps + write dead-letter; never silently discard |
 | **Forbidden Text Gate** | N12a | Envelope (`fix_text`) | Check `fix_text` against `FORBIDDEN_TEXT_PATTERNS` env var list | Pass or match | N12b (pass); A4 SME warning route (match) | Config missing → log warning, treat as empty list (never block delivery) |
 | **Infrastructure Gate** | N12b | Envelope (`is_infra`) | Check `is_infra` flag | Pass or infrastructure | N12 (pass); A4 DevOps route (infra) | — |
 | **Agent A4 — Reporter** | N12 | Full Envelope (`fix_text`, `fix_source`, `approved_by`, `context_block`, `pipeline_info`, `is_infra`, `fingerprint`, `request_id`) | ① READ `bfa_kb.db.fixes` WHERE `fingerprint`: get `hit_count`, `last_seen`, `jira_key`; ② Developer lookup by email (`triggered_by_email`); ③ Build DM (`fix_text` + provenance using `approved_by` or `fix_source` + `hit_count` + `last_seen` + `repo` + feedback buttons + dashboard deep link); ④ Developer not found → fallback to email via `triggered_by_email` (SMTP); ⑤ UPDATE `pipeline_events` (`final_status`, `total_duration_ms`); ⑥ INSERT `delivery_records`; ⑦ UPDATE `bfa_kb.db.fixes` SET `hit_count+1`, `last_seen=now()`; ⑧ Redis SET `run_dedup:<pipeline_id>:<fp>` = `slack_message_ts` (1h TTL); ⑨ Set `envelope.slack_message_ts` | Slack DM (or email fallback) delivered; `pipeline_events` updated; `delivery_records` inserted; `run_dedup` Redis key written | Feedback loop (async, via the Slack connector); Jira creation is a dashboard action | SlackApiError → fallback to email; developer not found → send fix via SMTP to `triggered_by_email`; `request_id` None → skip `pipeline_events` UPDATE, still INSERT `delivery_records` |
 | **KB REST API** | N14 | RS256 JWT (Slack service) or session token (dashboard) + action payload | Validate token (RS256 for Slack service; session token lookup in Redis for dashboard); route to approve/edit/discard/feedback handler. **On approve:** SQLite INSERT/UPDATE (`status='active'`) + `fix_revisions` INSERT + **FTS5 index write** (hierarchical tokens, §4C.2.5) + Redis SET `fix:<fp>` `source=sme` + `sme_audit_log` INSERT. Single writer, one transaction boundary. | `{status: ok, fix_id, revision}` | Terminal | SQLite WAL mode |
 | **Dashboard API** | N15 | Session token + query params | Validate session token (Redis lookup); query `bfa_kb.db` and `bfa_stats.db`; support pagination, free-text search, label filtering; return Resolved / Needs-Attention / Stats views | Paginated JSON | Terminal | Invalid/expired session → HTTP 401; read-only; no lock contention |
-| **Health Check** | N16 | None | Ping Redis; query Chroma HTTP; call Ollama embed endpoint; call LLM health; check Slack token; check domain RAG Chroma | `{status, redis, chroma, ollama_embed, llm, slack, domain_rag}` | Terminal | Each check independent; partial failure → `"degraded"` |
+| **Health Check** | N16 | None | Check SQLite (fatal if down); ping Redis; call LLM health; check GitLab and Jenkins reachability; check Slack token | `{status, sqlite, redis, llm, gitlab, jenkins, slack}` | Terminal | Each check independent; only SQLite or the LLM makes the service unable to work — see §8.3 |
 | **Metrics endpoint** | N17 | None | Aggregate counters from `request_telemetry` and `pipeline_events` | JSON (§8.4), rendered as a table in the dashboard Metrics tab | Terminal | Always available; never blocks the request path |
 | **Slack Actions Handler** | N18 | HTTP POST `/bfa/slack/actions` (Slack platform) | Validate Slack HMAC-SHA256 signature; parse `action_id` (e.g. `feedback_positive_<fp>`, `feedback_negative_<fp>`, `create_jira_<fp>`); route to feedback handler or Jira handler; call `POST /api/kb/{fix_id}/feedback` internally | Feedback recorded in `bfa_stats.db.sme_audit_log`; 3-thumbs-down → route to SME channel | Terminal | Invalid signature → HTTP 403; unknown action_id → log + HTTP 200 (Slack requires 200 for all actions) |
 
@@ -541,7 +542,7 @@ as though it were curated.
 
 | Column | Type | Meaning | Set by |
 |---|---|---|---|
-| `id` | INTEGER PK | Row number. Referenced by `fix_revisions` and by Chroma metadata. | database |
+| `id` | INTEGER PK | Row number. Referenced by `fix_revisions` and by the keyword index. | database |
 | `fingerprint` | TEXT unique | The error's identity — SHA-256 of the normalised text (§10.1.1). One row per distinct error. | A1 |
 | `error_key` | TEXT | Conservatively normalised error text — run identity removed, versions and paths kept (§10.1.1). Embedded **and** indexed for keyword search. | A1 |
 | `fix_text` | TEXT | The remediation shown to the developer. Changes when an SME edits it. | A3 or SME |
@@ -764,7 +765,6 @@ CREATE TABLE IF NOT EXISTS request_telemetry (
     -- ── Cost / latency ──────────────────────────────────────────────────────
     llm_cost_estimate   REAL,
     request_latency_ms  INTEGER,
-    domain_rag_used     INTEGER DEFAULT 0,  -- NEW: 1 if domain RAG snippet included in A3 prompt
     -- ── Classification labels ───────────────────────────────────────────────
     product_team        TEXT,
     error_category      TEXT,
@@ -1011,12 +1011,12 @@ Redis
 ```
 1. INSERT/UPDATE bfa_kb.db fixes (SQLite WAL — crash-safe)
 2. INSERT fix_revisions (same transaction)
-3. Upsert Chroma vector via HttpClient
+3. Write the keyword index row (hierarchical tokens)
 4. Redis SET fix:<fp> with source=sme (30d TTL)
 5. INSERT bfa_stats.db sme_audit_log
 ```
 
-If step 3 or 4 fails, `bfa_kb.db` is authoritative. Chroma can be rebuilt with `rebuild_chroma.py`. Redis TTL expiry is self-healing (cache miss → re-query bfa_kb.db on next event).
+If step 3 or 4 fails, `bfa_kb.db` is authoritative. The keyword index is fully rebuildable from `fixes`, and Redis TTL expiry is self-healing (cache miss → re-query `bfa_kb.db` on the next event).
 
 ---
 
@@ -1073,7 +1073,6 @@ Candidates whose `status` is not `active` are excluded before scoring.
 
 | Store | R/W | Fields in | Fields out | On failure |
 |---|---|---|---|---|
-| Chroma `domain_rag` | R | query vector of `error_key` | top domain snippet | skip the snippet; continue with prompt only |
 | Redis `fix:<fp>` | W | `{fix_text, source:"ai"}`, TTL 30d — **only** when the slot is empty or already `source=ai` | — | log and continue |
 | SQLite `request_telemetry` | W | `request_id`, `llm_calls`, `est_cost_usd`, `confidence`, `latency_ms` | — | log and continue |
 | Dead-letter file | W | full envelope + failure reason | — | raise operational alert — silent loss is not permitted |
@@ -1097,21 +1096,21 @@ whether raised from the dashboard or from the Slack connector.
 |---|---|---|---|---|
 | **Approve** | SQLite `fixes` | W | `fingerprint`, `error_key`, `fix_text`, `approved_by`, context labels, `status='active'` | `fix_id`, `revision` |
 | | SQLite `fix_revisions` | W | `fix_id`, `revision`, `actor`, `action='approved'`, `old_text`, `new_text`, `at` | — |
-| | Chroma | W | upsert `id=fix-<fp>`, embedding of `error_key`, `document=fix_text`, metadata labels | — |
+| | SQLite `fixes_fts` | W | insert hierarchical tokens of `error_key` — **the moment the fix becomes findable** | — |
 | | Redis | W | `fix:<fp>` `source=sme`, TTL 30 d | — |
 | | SQLite `sme_audit_log` | W | `fix_id`, `actor`, `action`, `at` | — |
 | **Edit / correct** | SQLite `fixes` | W | `fix_id` → new `fix_text` | `revision` |
 | | SQLite `fix_revisions` | W | actor, before/after text | — |
-| | Chroma | W | refresh `document` only — **no re-embedding**, because the vector derives from `error_key`, not `fix_text` | — |
+| | SQLite `fixes_fts` | W | **no write** unless `error_key` changed — the index is built from the error, not the fix text | — |
 | | Redis | W | overwrite `fix:<fp>`, TTL reset | — |
 | **Deprecate / discard** | SQLite `fixes` | W | `fix_id` → `status='discarded'` | — |
-| | Chroma | W | delete `id=fix-<fp>` | — |
+| | SQLite `fixes_fts` | W | delete the index row | — |
 | | Redis | W | delete `fix:<fp>` (all scope variants) | — |
 | **Feedback** | SQLite `feedback_events` | W | `fix_id`, `request_id`, `actor`, `response` (`helpful`\|`unhelpful`) | — |
 | | SQLite `fixes` | W | `helpful_count` / `unhelpful_count` increment; at 3 unhelpful set `needs_review` | — |
 
-**Write order and authority.** SQLite first, then Chroma, then Redis. `bfa_kb.db` is
-authoritative: Chroma is rebuildable with `rebuild_chroma.py`, and Redis is self-healing on
+**Write order and authority.** SQLite `fixes` first, then the keyword index, then Redis.
+`bfa_kb.db` is authoritative: the index is rebuildable from it, and Redis is self-healing on
 TTL expiry. Deleting `fix:<fp>` on discard is the only explicit invalidation needed.
 
 ### Phase 8 — Maintenance
@@ -1119,7 +1118,7 @@ TTL expiry. Deleting `fix:<fp>` on discard is the only explicit invalidation nee
 | Store | R/W | Fields in | Fields out | Trigger |
 |---|---|---|---|---|
 | SQLite `fixes` | R | `status`, `hit_count`, `created_at` | pruning candidates | weekly job, surfaced in the dashboard first |
-| SQLite / Chroma | W | archive then delete | — | operator-confirmed action only |
+| SQLite `fixes` + `fixes_fts` | W | archive then delete | — | operator-confirmed action only |
 | all three | R | — | backup artefacts via the SQLite `.backup` API | daily |
 
 ---
@@ -1145,8 +1144,6 @@ The same accesses viewed per store, as a cross-check that nothing is orphaned.
 
 | Op | Phase | Detail |
 |---|---|---|
-| query | 4 | cosine top-K over the embedding of `error_key` |
-| query | 5 | `domain_rag` collection for the prompt snippet |
 | upsert | 7 | on approve — id, embedding, document, metadata labels |
 | document refresh | 7 | on edit — **no re-embedding** |
 | delete | 7 | on discard |
@@ -1826,9 +1823,9 @@ only place a search lane may be added, removed, or re-weighted.
 | POST | `/api/auth/login` | Username + password | 10/min | Create session — returns session token (8h TTL in Redis) | Dashboard, Auth |
 | POST | `/api/auth/logout` | Session token | — | Invalidate session token | Dashboard, Auth |
 | POST | `/api/analyze` | `ANALYZE_API_KEY` header | 60/min | Direct error submission (bypasses extractor) | A1→A4 |
-| POST | `/api/vector/manual-fix` | Session token | 60/min | Insert single error+fix pair into KB | KB API, Chroma |
-| POST | `/api/vector/manual-fix/bulk` | Session token | 10/hr | Bulk insert from CSV/JSON/XLSX | KB API, Chroma |
-| POST | `/api/kb/approve` | RS256 JWT (Slack service) or session token (dashboard) | — | Approve fix → write KB + trigger Chroma upsert | N14 (KB API), Slack service, Dashboard |
+| POST | `/api/vector/manual-fix` | Session token | 60/min | Insert single error+fix pair into KB | KB API, keyword index |
+| POST | `/api/vector/manual-fix/bulk` | Session token | 10/hr | Bulk insert from CSV/JSON/XLSX | KB API, keyword index |
+| POST | `/api/kb/approve` | RS256 JWT (Slack service) or session token (dashboard) | — | Approve fix → write KB + keyword index | N14 (KB API), Slack service, Dashboard |
 | PATCH | `/api/kb/{id}` | RS256 JWT (Slack service) or session token (dashboard) | — | Edit fix text or context labels | N14 (KB API), Slack service, Dashboard |
 | DELETE | `/api/kb/{id}/discard` | RS256 JWT (Slack service) or session token (dashboard) | — | Discard fix | N14 (KB API), Slack service, Dashboard |
 | POST | `/api/kb/{id}/feedback` | RS256 JWT (Slack service) or session token (dashboard) | — | Record 👍/👎 | N14 (KB API), N18 (Slack actions), Dashboard |
@@ -1847,7 +1844,7 @@ only place a search lane may be added, removed, or re-weighted.
 | POST | `/api/dashboard/pruning/{run_id}/resolve` | Session token | — | Operator action on flagged fix: keep / deprecate / delete | Dashboard (Pruning view) |
 | POST | `/bfa/slack/events` | Slack HMAC-SHA256 | — | Slack message events (edit thread) | N18 (Slack actions handler) |
 | POST | `/bfa/slack/actions` | Slack HMAC-SHA256 | — | Slack button interactions (👍👎, Jira, approve) | N18 (Slack actions handler) |
-| GET | `/healthz` | None | — | Service health (Redis, Chroma, Ollama, LLM, Slack) | Ops, monitoring |
+| GET | `/healthz` | None | — | Service health (SQLite, Redis, LLM, GitLab, Jenkins, Slack) | Ops, monitoring |
 | GET | `/api/metrics` | Session token (disabled in dev) | — | JSON counters (§8.4) | Dashboard Metrics tab |
 | GET | `/api/test/alert` | Session token (disabled in prod) | — | Test alert notification | Ops (dev only) |
 
@@ -2059,8 +2056,8 @@ rather than new development.
 | Service down | Behavior | Alert fired? |
 |---|---|---|
 | Redis | Skip all cache tiers; go direct to A2 | Yes — health alert |
-| Ollama (embedding) | Skip A2 vector search; go direct to A3 (LLM) | Yes |
-| Chroma HTTP server | Skip A2 vector search; go direct to A3 (LLM) | Yes |
+| Ollama (embedding) | **Phase 3 only.** Not deployed at launch, so not a degradation mode. If added, its loss removes one search lane and the others continue (§4C.3.6) | Yes |
+| Chroma HTTP server | **Phase 3 only** — not deployed at launch. If added, its loss removes one search lane; the others continue | Yes |
 | LLM (OpenWebUI) | Return structured "unable to analyze"; save to dead-letter; notify DevOps email + Slack | Yes |
 | Slack API | Log error; do not crash; RateLimitErrorRetryHandler handles rate limits | No (Slack retries) |
 | SQLite (write) | Log error; return HTTP 500 to Slack service caller; do not silently discard | Yes |
@@ -2334,8 +2331,8 @@ quality — the ladder in §7).
 | Process | uptime, version, PID | — | — |
 | `bfa_kb.db` | `SELECT 1` + write-probe to a scratch table | **Yes** | no fixes can be read or written |
 | `bfa_stats.db` | `SELECT 1` | No | statistics are lost; analysis continues |
-| Chroma | collection heartbeat | No | skip retrieval, go to A3 |
-| Ollama | `/api/tags` | No | no embeddings, so skip retrieval, go to A3 |
+| Chroma | collection heartbeat | No | **phase 3 only** — if present, its loss drops one lane |
+| Ollama | `/api/tags` | No | **phase 3 only** — if present, its loss drops one search lane; signature and keyword lanes continue |
 | LLM endpoint | cheap model-list call | No | A3 unavailable → "unable to analyze" |
 | Redis | `PING` | No | caching skipped, everything recomputed |
 | GitLab API | `/version` with the configured token | No | logs cannot be fetched for GitLab pipelines |
@@ -2857,15 +2854,15 @@ The coverage report directly produces the list of nodes that need logging added.
 |---|---|---|
 | BFA-TEST-1000 | Unit tests | A1 normalizer golden cases; orchestrator state-machine branches; mocked A2/A3; A4 message formatting; Analysis Envelope field propagation |
 | BFA-TEST-1010 | Unit test | `POST /api/auth/login` rejects wrong password with HTTP 401; valid login returns session token; `POST /api/auth/logout` invalidates token; expired token returns HTTP 401 |
-| BFA-TEST-1020 | Component test (real Chroma + real embeddings) | 0% false-match rate on known-tricky pairs; similarity threshold calibration; deterministic `fix-<fingerprint>` ID round-trip; cosine hnsw:space setup |
+| BFA-TEST-1020 | Component test (real SQLite) | 0% false-match rate on known-tricky pairs; **hierarchical token expansion** — an exact compound name outranks a partial one (§4C.2.5); signature lookup returns only exact matches; `MIN_FUSION_SCORE` calibration |
 | BFA-TEST-1030 | Contract test | Shared `AnalyzePayload` Pydantic model validated in both extractor and analyzer test suites; Analysis Envelope fields match across service boundary |
-| BFA-TEST-1040 | End-to-end (docker-compose) | Simulated GitLab; record/replay mock LLM; mock Slack; real Redis; real Chroma; covers: approve → FTS index write → SME cache write, degradation chaos (kill Redis, then SQLite), scope promotion on cross-repo reuse, infrastructure routing, dead-letter replay, two-phase pipeline_events write |
+| BFA-TEST-1040 | End-to-end (docker-compose) | Simulated GitLab; record/replay mock LLM; mock Slack; real Redis; real SQLite; covers: approve → FTS index write → SME cache write, degradation chaos (kill Redis, then SQLite), scope promotion on cross-repo reuse, infrastructure routing, dead-letter replay, two-phase pipeline_events write |
 | BFA-TEST-1050 | Evaluation harness | Routing accuracy ≥ 95%; false-match rate 0%; recall ≥ 90%; cost/latency vs forecast; CI mode (mock LLM, every PR) + nightly mode (real LLM) |
-| BFA-TEST-1060 | Component test | Context-matched fixes score higher than non-matching for same fingerprint; swapping labels inverts ranking; 100% pass required |
-| BFA-TEST-1070 | Regression corpus | Curated tricky pairs: MVP-1 production incident, path-noise, version-bump, cross-product confusion, context-ranking inversion, match result cache invalidation |
+| BFA-TEST-1060 | Component test | **Metadata never affects ranking** — swapping `product_team`, `stage_type` or `error_category` on a candidate leaves the shortlist and its order unchanged. A good fix from another team must still win on merit (§4C.3.4); 100% pass required |
+| BFA-TEST-1070 | Regression corpus | Curated tricky pairs: MVP-1 production incident, path-noise, **version-bump (must NOT collapse — §4C.1.2)**, cross-product confusion, cross-repo scope promotion, answer-cache eviction on 👎 |
 | BFA-TEST-1080 | Regression & replay harness (`replay.py`) | See §9.1 below for full spec |
-| BFA-TEST-1090 | **Retrieval benchmark** (`benchmark.py`) | Per-lane Recall@1/5/10 and MRR across six arms and six strata; false-positive rate 0% on the novel stratum. **The only place a lane may be added, removed, or reweighted** — see §9.2 |
-| BFA-PP-1210 | Component test (real vectors) | Detects bugs in cosine setup, threshold calibration, ID generation, cache-key behavior — no mocks |
+| BFA-TEST-1090 | **Retrieval benchmark** (`benchmark.py`) | Per-lane Recall@1/5/10 and MRR across five arms and seven strata; false-positive rate 0% on the novel stratum. **The only place a lane may be added, removed, or reweighted** — see §9.2 |
+| BFA-PP-1210 | Component test (real stores, no mocks) | Detects bugs in **scope-keyed cache-key construction** (`fix:<fp>` vs `fix:<fp>:<repo>`), FTS5 index maintenance on approve/discard, and `times_seen` increment |
 
 ---
 
@@ -2936,7 +2933,7 @@ Successfully replayed files are removed from the dead-letter directory. Still-fa
 | `DEADLETTER` | LLM failed, saved to dead-letter |
 
 **Behaviour:**
-- Each scenario runs through the full pipeline — A1 classifies, A2 queries real Chroma, A3 calls real LLM (reads are real so A2 genuinely scores against the KB)
+- Each scenario runs through the full pipeline — A1 classifies, A2 runs both search lanes against the real SQLite KB, A3 calls the real LLM (reads are real, so A2 genuinely judges against stored fixes)
 - All writes are intercepted by `ReplayCapture` — nothing touches `bfa_stats.db`, `bfa_kb.db`, Redis, Slack, Jira, or SMTP
 - Each scenario is fully isolated — Redis keys written by scenario N do not affect scenario N+1
 
@@ -2968,7 +2965,7 @@ else:
     db.execute(...)   # real write
 ```
 
-Reads are never intercepted — real Redis, real Chroma. The envelope already carries all context through the pipeline, so `replay_capture` travels naturally alongside it.
+Reads are never intercepted — real Redis, real SQLite. The envelope already carries all context through the pipeline, so `replay_capture` travels naturally alongside it.
 
 **Pass/fail per scenario:** Compare `replay_capture` against `expected` field by field. First diverging node is the failure point. On FAIL, the in-memory log trace (`replay_capture.log_events`) is printed below the failure line to show exactly what each node logged — making it immediately visible whether the node ran, what it classified, and where the divergence occurred.
 
@@ -3407,7 +3404,11 @@ and `adapted_diff` when adapted.
 
 **Processing steps (in order):**
 
-1. **Domain RAG lookup.** Embed `error_key` and query the `domain_rag` Chroma collection (a separate collection loaded by `init_domain_rag_if_needed()` on startup). Retrieve the top snippet (≤ 500 tokens) most relevant to the error. If domain RAG is unavailable → skip snippet, continue.
+1. **Assemble infra guidance.** Include the relevant section of `infra_overview.md` as static
+   prompt text. There is **no domain RAG collection** — with roughly 72 entries, a second
+   vector collection plus an indexing job plus a query on every A3 call bought nothing that
+   static text does not, and it sat in the hot path during exactly the phase where A3 answers
+   everything (§13.25).
 
 2. **Build LLM prompt.**
    ```
@@ -3563,7 +3564,7 @@ N14: KB REST API handler
                               fix_text_after=new_text, changed_by, action='edited')
      COMMIT
   4. Re-embed error_key (fetch from fixes.error_key) → vector
-  5. Chroma upsert (same id="fix-{fingerprint}", updated document=new_text)
+  5. Keyword index: rewrite only if error_key changed (it did not)
   6. Redis SET fix:<fingerprint> with source=sme
      value = {fix_text: new_text, approved_by: edited_by, fix_id}
      TTL   = 30 days (reset)
@@ -3608,7 +3609,7 @@ N14: KB REST API feedback handler
      Return {status: "ok", negative_count: count, routed_to_sme: false}
 ```
 
-**Re-approval after re-review:** SME reviews the fix, makes edits, and clicks Approve again. This calls `POST /api/kb/approve` with the updated `fix_text`. The approve flow (§11.1) runs fully: Chroma is updated, Redis SME cache is updated with new text. Future deliveries use the corrected fix.
+**Re-approval after re-review:** SME reviews the fix, makes edits, and clicks Approve again. This calls `POST /api/kb/approve` with the updated `fix_text`. The approve flow (§11.1) runs fully. Note that **correcting the wording of a fix needs no index write at all** — the keyword index is built from `error_key`, not from `fix_text`. Only the Redis entry is refreshed, and future deliveries use the corrected fix.
 
 ---
 
@@ -3628,7 +3629,7 @@ N14: KB REST API discard handler
      ├─ UPDATE fixes SET status='discarded', updated_at=now()
      └─ INSERT fix_revisions (action='discarded')
      COMMIT
-  3. Chroma HttpClient delete: id="fix-{fingerprint}"
+  3. Delete the keyword index row for this fix
   4. Redis DELETE fix:<fingerprint>
   6. INSERT bfa_stats.db.sme_audit_log (action='discarded')
   7. Return {status: "ok"}
@@ -3758,13 +3759,13 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | 3 | Log Fetcher | N3 | `pipeline_info.project_id`, `pipeline_info.pipeline_id` | `fetch_pipeline_jobs(project_id, pipeline_id)`; `fetch_job_log_tail(project_id, job_id)` per failed job; populate `job_names` | `all_logs: List[{job_id, job_name, details, log_text}]`; updates `pipeline_info.job_names` | N4 |
 | 4 | Secret Redactor | N4 | `all_logs` list | Per-entry regex strip (PRIVATE-TOKEN, password=, URLs, JWTs) | `all_logs_redacted: List[{job_id, job_name, details, log_text_redacted}]` | N5 |
 | 5 | Log Error Extractor | N5 | `all_logs_redacted` list | Per-entry pattern match against `error_patterns.json`; adaptive windows; dedup; flatten | `error_sections: List[str]` | N6 |
-| 6 | Agent A1 | N6 | `error_sections`, `pipeline_info` (with `job_names`) | Classify; infer stage_type from `job_names[0]`; set `product_team = pipeline_info.repo`; clean text; SHA-256 fingerprint; INSERT `pipeline_events` phase-1 | Envelope populated: `fingerprint`, `error_key`, `context_block{product_team, stage_type, error_category}`, `is_infra`, `request_id` | N7 |
+| 6 | Agent A1 | N6 | `error_sections`, `pipeline_info` (with `job_names`) | Classify; infer stage_type from `job_names[0]`; derive `product_team` from the namespace (§10.1.2); **conservative** normalisation → `error_key` (run identity only — versions and in-repo paths kept, §4C.1.2); SHA-256 fingerprint; build `signature`; increment `times_seen`; INSERT `pipeline_events` phase-1 | Envelope populated: `fingerprint`, `error_key`, `signature`, `context_block{product_team, stage_type, error_category}`, `is_infra`, `request_id` | N7 |
 | 7 | Dedup Check | N7 | Envelope: `fingerprint`, `pipeline_info.pipeline_id` | Redis GET `run_dedup:<pipeline_id>:<fp>` | **Hit:** `envelope.slack_message_ts = cached_ts` → THREADREPLY; **Miss:** → N8 | THREADREPLY or N8 |
 | 7a | Thread Reply | THREADREPLY | Envelope: `slack_message_ts`, `error_key`, `pipeline_info.stage name` | Post thread reply to existing Slack message; UPDATE `pipeline_events.failed_jobs+1`; INSERT `delivery_records` | Thread reply posted; DB partial update | Terminal |
 | 8 | Fix Cache Check | N8 | Envelope: `fingerprint` | Redis GET `fix:<fp>` → `{fix_text, source, approved_by, fix_id}` | **Hit:** envelope: `fix_text`, `fix_source` per `source`, `approved_by` → N12a; **Miss:** → N9 | N12a (hit) or N9 (miss) |
 | 9 | Fingerprint Scope Probe | N9 | Envelope: `fingerprint`, `repo` | SELECT from `fixes` WHERE `fingerprint` matches — any scope, any status | Envelope: `ranked_candidates` seeded with the out-of-scope fix, labelled with `scope`/`status` | N10 (always) |
 | 10 | Search + Agent A2 | N10 | Envelope: `error_key`, `signature`, `context_lines`, `fingerprint`, seeded `ranked_candidates`; config: `SIG_WEIGHT`, `LEXICAL_WEIGHT`, `RRF_K`, `MIN_FUSION_SCORE`, `CANDIDATE_K` | Signature lane + keyword lane; merge on rank by RRF → `fusion_score`; filter to `status='active'` and `≥ MIN_FUSION_SCORE`; take top `CANDIDATE_K` as a **set**; A2 judges the set → `outcome`; promote `scope` on cross-repo `REUSED`; INSERT `match_rejections`; INSERT `request_telemetry` | Envelope: `outcome`, `ranked_candidates`, `top_candidate`, `fix_text`, `adapted_diff`, `fix_source="search"` | N12a (`REUSED`/`ADAPTED`) or N11 (`NO_MATCH`) |
-| 11 | Agent A3 | N11 | Envelope: `error_key`, `context_block`, `pipeline_info` | Domain RAG lookup; build LLM prompt; call LLM; Redis SET `fix:<fp>` `source=ai` 30d; **clear `ranked_candidates=None`** | Envelope: `fix_text`, `fix_source="llm_generated"`, `ranked_candidates=None` | N12a (success) or dead-letter (LLM fail) |
+| 11 | Agent A3 | N11 | Envelope: **`error_raw`**, `context_block`, `pipeline_info` | Build LLM prompt from the **raw** error plus static infra guidance; call LLM; INSERT `fixes` `status='pending'`, `scope='repo'`; Redis SET `fix:<fp>:<repo>` `source=ai` **7 d**; clear `ranked_candidates=None` | Envelope: `fix_text`, `fix_source="llm_generated"`, `ranked_candidates=None` | N12a (success) or dead-letter (LLM fail) |
 | 11f | LLM Failure | DEADLETTER | Envelope + failure reason | Send "unable to analyze" to team channel; email DevOps; Slack #devops-alerts; write dead-letter file; INSERT `request_telemetry(fix_source="no_match")` | Dead-letter JSON on disk | Terminal (replay via `replay_failed.py`) |
 
 ### 12.2 Delivery Gates and A4 (all paths)
@@ -3798,8 +3799,8 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | `bfa_kb.db` | `fixes` (`hit_count+1`, `last_seen`) | N12 (A4) | After each delivery from KB |
 | `bfa_kb.db` | `fixes` (`status='discarded'`) | N14 (KB API) — discard | On discard |
 | `bfa_kb.db` | `fix_revisions` | N14 (KB API) — approve, edit, discard | On every KB mutation |
-| Chroma | `fix_embeddings` (upsert) | N14 (KB API) — approve, edit | On approve or edit |
-| Chroma | `fix_embeddings` (delete) | N14 (KB API) — discard | On discard |
+| SQLite | `fixes_fts` INSERT | N14 (KB API) — approve | The moment a fix becomes findable |
+| SQLite | `fixes_fts` DELETE | N14 (KB API) — discard | On discard |
 | Redis | `fix:<fp>` SET `source=sme` (30d) | N14 (KB API) — approve, edit | On approve or edit |
 | Redis | `fix:<fp>` DELETE | N14 (KB API) — discard | On discard |
 | Redis | `fix:<fp>` SET `source=ai` (30d) | N11 (A3) | After the LLM generates a fix, only if no SME entry exists |
@@ -3812,7 +3813,6 @@ This table traces **every node** in the pipeline as a strict IN → PROCESS → 
 | `bfa_kb.db` | `fixes` UPDATE `status='deprecated'` | Dashboard pruning resolve (deprecate) | On operator deprecate action |
 | `bfa_kb.db` | `fixes` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 | `bfa_kb.db` | `fix_revisions` INSERT `action='deleted'` | Dashboard pruning resolve (delete) | Audit trail for hard deletes |
-| Chroma | `fix_embeddings` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 | Redis | `fix:<fp>` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 | SQLite | `fixes_fts` DELETE | Dashboard pruning resolve (delete) | On operator delete action |
 
@@ -3840,7 +3840,7 @@ The `category` field drives routing: if any error section is `infrastructure`, A
 | First-match precedence becomes ambiguous | The flat list has a clear rule: patterns checked in order, first match wins. With nesting it's no longer obvious whether a parent match takes priority over a child match, or whether all levels are scanned and merged. |
 | Startup error messages harder to pinpoint | A bad flat entry produces: *"pattern 'make: ***' is missing 'category' field"*. Nested produces: *"patterns[2].sub_patterns[0] missing 'label'"* — harder to find and fix during an incident. |
 | Category inheritance is unclear | If a sub-pattern exists under an `infrastructure` parent, does it inherit that category or override it? Either answer works but must be explicitly defined and validated — otherwise A1's `is_infra` flag becomes unreliable. |
-| A2 context scoring assumes a flat `error_category` value | The combined score formula uses `error_category` as one of three labels stored in Chroma metadata. If nesting introduces sub-categories, it's unclear what value gets stored — a mismatch between what A1 classifies and what A2 compares breaks context scoring. |
+| A flat `error_category` keeps routing unambiguous | A4 routes infrastructure failures to DevOps on this one value. If nesting introduced sub-categories it would be unclear which level drives routing, and a mismatch between what A1 classifies and what A4 reads would misroute notifications. |
 | Harder to edit under pressure | Operations engineers adding patterns at 2am during an incident need to edit this safely. A flat list with three fields per entry is much safer than a nested tree. |
 
 ### 13.2 `error_patterns.json` — Fields as string or list; separation from stats collection
@@ -3972,7 +3972,7 @@ WHERE rt.product_team = 'PacketLogic'
 
 #### Decision 3 — Reads are real, writes are intercepted
 
-In `--mode test`, reads stay real (real Redis, real Chroma) so A2 genuinely scores against the KB and results reflect actual system behaviour. Only writes are intercepted by `ReplayCapture` so production data is never polluted and scenarios are fully isolated from each other.
+In `--mode test`, reads stay real (real Redis, real SQLite) so A2 genuinely judges against the KB and results reflect actual system behaviour. Only writes are intercepted by `ReplayCapture` so production data is never polluted and scenarios are fully isolated from each other.
 
 **Toggle mechanism:** `envelope.replay_capture = ReplayCapture()` is set before the pipeline runs. Every write call checks:
 
@@ -3995,7 +3995,7 @@ No separate env var. No thread-local. The envelope already carries all context �
 
 ### 13.4 Metadata — Current vs Improved; storage, retrieval, and dashboard use
 
-**Decision (agreed 2026-08-10):** Add 13 new fields across 4 stores. All additions are purely additive — no existing columns change, no data is lost. Fields are grouped by purpose: context scoring labels, classification labels, usage stats, delivery tracking.
+**Decision (agreed 2026-08-10):** Add new fields across the stores. All additions are purely additive — no existing columns change, no data is lost. Fields are grouped by purpose: classification labels, usage stats, search provenance, delivery tracking.
 
 ---
 
@@ -4009,9 +4009,9 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 4 | `bfa_kb.db` | `fixes` | `fix_text` | TEXT | Existing | KB API | Latest approved fix | KB, Retrieval |
 | 5 | `bfa_kb.db` | `fixes` | `revision` | INTEGER | Existing | KB API | Incremented on every edit | KB |
 | 6 | `bfa_kb.db` | `fixes` | `status` | TEXT | Existing | KB API | `active/deprecated/discarded` | KB |
-| 7 | `bfa_kb.db` | `fixes` | `product_team` | TEXT | Existing | A1 | Repo name — A2 context scoring label 1 | Retrieval, KPI, KB |
-| 8 | `bfa_kb.db` | `fixes` | `stage_type` | TEXT | Existing | A1 | `build/test/package/deploy` — A2 context scoring label 2 | Retrieval, KPI, KB |
-| 9 | `bfa_kb.db` | `fixes` | `error_category` | TEXT | Existing | A1 | `code/infrastructure/dependency/configuration` — A2 context scoring label 3 | Retrieval, KPI, KB |
+| 7 | `bfa_kb.db` | `fixes` | `product_team` | TEXT | Existing | A1 | From the namespace (§10.1.2). **Never used in ranking** — grouping and reporting only | KPI, KB |
+| 8 | `bfa_kb.db` | `fixes` | `stage_type` | TEXT | Existing | A1 | `build/test/package/deploy`. **Never used in ranking** — grouping and reporting only | KPI, KB |
+| 9 | `bfa_kb.db` | `fixes` | `error_category` | TEXT | Existing | A1 | `code/infrastructure/dependency/configuration`. Drives **A4 routing** on the query's value; **never filters or ranks candidates** (§4C.3.4) | Routing, KPI, KB |
 | 10 | `bfa_kb.db` | `fixes` | `sub_category` | TEXT | **New** | A1 | Finer grouping e.g. `docker` under `infrastructure`, `npm` under `dependency` | Retrieval, KPI, KB |
 | 11 | `bfa_kb.db` | `fixes` | `labels` | TEXT (JSON array) | **New** | A1 | All labels from matching `error_patterns.json` e.g. `["npm_error","dependency_install"]` | Retrieval, KPI, KB |
 | 12 | `bfa_kb.db` | `fixes` | `source_ci` | TEXT | **New** | A1 | `gitlab` or `jenkins` | KPI, KB |
@@ -4060,7 +4060,6 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 52 | `bfa_stats.db` | `request_telemetry` | `candidate_count` | INTEGER | **New** | A2 | Size of the candidate set handed to A2; 0 means a KB hole, not a ranking problem | KPI, §8.5 |
 | 52a | `bfa_stats.db` | `request_telemetry` | `signature`, `signature_level`, `signature_rank`, `lexical_rank`, `dense_rank`, `fused_rank`, `candidate_sources`, `lane_latency_ms` | TEXT/INTEGER | **New** | N10 retrieval | Retrieval provenance — each lane's rank for the selected candidate, including lanes that missed it | §8.5 per-lane recall and unique contribution |
 | 52b | `bfa_stats.db` | `request_telemetry` | `a2_selected_fix_id`, `a2_resolution_mode`, `a2_confidence`, `a2_rejected_count` | INTEGER/TEXT/REAL | **New** | A2 | A2's decision, declared explicitly | §8.5 drift and threshold calibration |
-| 53 | `bfa_stats.db` | `request_telemetry` | `domain_rag_used` | INTEGER | **New** | A3 | 1 if domain RAG snippet included in LLM prompt | KPI |
 | 54 | `bfa_stats.db` | `sme_audit_log` | `action` | TEXT | Existing | KB API | `approved/edited/discarded/feedback_positive/feedback_negative` | KB |
 | 55 | `bfa_stats.db` | `sme_audit_log` | `feedback_count_positive/negative` | INTEGER | Existing | KB API | Running total per fix | KPI, KB |
 | 56 | `bfa_stats.db` | `delivery_records` | `delivered_to_slack_user` | TEXT | Existing | A4 | Developer Slack user ID | KPI |
@@ -4071,11 +4070,9 @@ No separate env var. No thread-local. The envelope already carries all context �
 | 61 | `bfa_stats.db` | `delivery_records` | `resolution_time_ms` | INTEGER | **New** | A4 | Time from `pipeline_events.created_at` to delivery — end-to-end resolution speed | KPI |
 | 62 | `bfa_stats.db` | `delivery_records` | `developer_responded` | INTEGER | **New** | N18 | 1 if developer clicked 👍 or 👎; 0 if ignored | KPI |
 | 63 | `bfa_stats.db` | `delivery_records` | `delivery_method` | TEXT | **New** | A4 | `slack_dm` or `email_fallback` | KPI |
-| 64 | Chroma | `fix_embeddings` | `metadata.product_team` | string | Existing | KB API | A2 context scoring label 1 | Retrieval |
-| 65 | Chroma | `fix_embeddings` | `metadata.stage_type` | string | Existing | KB API | A2 context scoring label 2 | Retrieval |
-| 66 | Chroma | `fix_embeddings` | `metadata.error_category` | string | Existing | KB API | A2 context scoring label 3 | Retrieval |
-| 67 | Chroma | `fix_embeddings` | `metadata.sub_category` | string | **New** | KB API | Pre-filter before vector search — narrows candidates to same sub-category, improves A2 precision | Retrieval |
-| 68 | Chroma | `fix_embeddings` | `metadata.labels` | string (JSON) | **New** | KB API | Pre-filter by error label before vector search | Retrieval |
+| 64 | SQLite | `fixes_fts` | `error_tokens` | TEXT | **New** | KB API | `error_key` after hierarchical expansion (§4C.2.5) — the keyword lane | Retrieval |
+| 65 | SQLite | `match_rejections` | `query_signature`, `fix_id`, `reason` | TEXT/INTEGER | **New** | A2 | Negative evidence, keyed by the **pair** (§4C.3.4). Stored, not yet acted on | Benchmark |
+| 66 | Chroma | `fix_embeddings` | `metadata.fingerprint`, `metadata.fix_id` | string/int | **Phase 3** | KB API | The only metadata carried. Product, stage and category are deliberately absent — they are not used to filter or rank anywhere (§4.3) | Phase 3 only |
 
 ---
 
@@ -4085,9 +4082,9 @@ No separate env var. No thread-local. The envelope already carries all context �
 |---|---|---|
 | `bfa_kb.db.fixes` | `sub_category`, `labels`, `source_ci`, `first_seen`, `fix_confidence`, `sme_review_count` | 6 |
 | `bfa_stats.db.pipeline_events` | `source_ci` | 1 |
-| `bfa_stats.db.request_telemetry` | `labels`, `sub_category`, `source_ci`, `cache_tier_hit`, `candidate_count`, `domain_rag_used`, plus the retrieval-provenance block (`signature`, `signature_level`, `signature_rank`, `lexical_rank`, `dense_rank`, `fused_rank`, `candidate_sources`, `lane_latency_ms`, `a2_selected_fix_id`, `a2_resolution_mode`, `a2_confidence`, `a2_rejected_count`) | 18 |
+| `bfa_stats.db.request_telemetry` | `labels`, `sub_category`, `source_ci`, `cache_tier_hit`, `candidate_count`, plus the search-provenance block (`signature`, `signature_rank`, `lexical_rank`, `fused_rank`, `candidate_sources`, `lane_latency_ms`, `scope`, `a2_selected_fix_id`, `outcome`, `a2_confidence`, `a2_rejected_count`) | 16 |
 | `bfa_stats.db.delivery_records` | `resolution_time_ms`, `developer_responded`, `delivery_method` | 3 |
-| Chroma `fix_embeddings` | `metadata.sub_category`, `metadata.labels` | 2 |
+| SQLite `fixes_fts`, `match_rejections` | new tables — the keyword lane and negative evidence | 2 |
 
 ---
 
@@ -4204,7 +4201,7 @@ PRODUCT_OWNER_DEFAULT=devops@example.com
 | Frequency | Weekly (every Monday 00:00) — monthly was too infrequent to catch accumulating stale fixes |
 | No auto-delete | Every deletion requires explicit operator confirmation — prevents accidental loss of KB data |
 | `pruning_runs` table | Records each run's flagged fix_ids so the dashboard can show exactly which fixes need action and track resolution progress |
-| Hard delete path | Deletes from `bfa_kb.db`, Chroma, and Redis atomically — `fix_revisions` row with `action='deleted'` preserved for audit trail |
+| Hard delete path | Deletes from `bfa_kb.db`, the keyword index, and Redis atomically — `fix_revisions` row with `action='deleted'` preserved for audit trail |
 | Banner dismissal | Banner clears automatically when `resolved_count = flagged_count` — no manual dismiss needed |
 | Separate from `pending` view | Previously mixed into `GET /api/dashboard/pending`. Now has its own endpoint (`/api/dashboard/pruning/latest`) and dedicated UI view — clearer operator intent |
 
